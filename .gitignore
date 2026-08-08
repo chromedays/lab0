@@ -1,0 +1,25 @@
+# Build outputs
+*.exe
+*.out
+*.o
+*.obj
+*.dll
+*.so
+*.dylib
+
+# Editor / OS junk
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local build artifacts
+bin/
+build/
+out/
+obj/
+
+# Odin-specific
+*.tmp
+*.log
