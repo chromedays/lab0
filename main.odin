@@ -8,6 +8,7 @@ import "core:mem"
 import "core:strings"
 import "core:unicode/utf8"
 import rl "vendor:raylib"
+import rgl "vendor:raylib/rlgl"
 import mu "vendor:microui"
 // import cgltf "vendor:cgltf"
 
@@ -17,7 +18,7 @@ Vertex :: struct {
 }
 
 FS_PATH :: "shaders/custom.fs"
-GLB_PATH :: "assets/Meshy_AI_lowpoly_man_rigged_biped_Meshy_AI_Meshy_Merged_Animations.glb"
+GLB_PATH :: "assets/Meshy_AI_lowpoly_man_rigged_biped_Character_output.glb"
 
 // inspect_glb :: proc(path: string) -> bool {
 //     options := cgltf.options{}
@@ -176,6 +177,7 @@ main :: proc() {
     rl.SetConfigFlags({.WINDOW_TOPMOST});
     rl.InitWindow(800, 600, "Lab0");
     defer rl.CloseWindow();
+	rgl.SetClipPlanes(0.001, 1000.0)
 
     rl.SetTargetFPS(60);
 
@@ -288,8 +290,8 @@ main :: proc() {
             rl.EndShaderMode();
 
 			rl.BeginMode3D(camera);
-				// rl.DrawModel(model, rl.Vector3{0, 0, 0}, 1.0, rl.WHITE);
-				rl.DrawModelWires(model, rl.Vector3{0, 0, 0}, 1.0, rl.YELLOW);
+				rl.DrawModel(model, rl.Vector3{0, 0, 0}, 1.0, rl.WHITE);
+				// rl.DrawModelWires(model, rl.Vector3{0, 0, 0}, 1.0, rl.YELLOW);
 			rl.EndMode3D()
 
             render_microui(muctx, atlas_texture)
