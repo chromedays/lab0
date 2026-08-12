@@ -6,6 +6,7 @@ import "core:log"
 import "core:math"
 import "core:slice"
 import "core:strings"
+import "core:c"
 import rl "vendor:raylib"
 import rgl "vendor:raylib/rlgl"
 // import cgltf "vendor:cgltf"
@@ -28,6 +29,8 @@ PIXEL_SCALE :: 10
 LENS_WIDTH  :: 400
 LENS_HEIGHT :: 400
 DEFAULT_COLOR_CLUSTER_THRESHOLD :: 0.10
+MAX_CEL_BAND_COUNT :: 8
+MIN_CEL_BAND_RANGE :: 0.01
 
 MAGNIFIER_SAMPLE_SIZE  :: 16
 MAGNIFIER_DISPLAY_SCALE :: 8
@@ -45,6 +48,17 @@ Lens_Mode :: enum {
     PIXELATED,
     BLENDED,
     COVERAGE_MASK,
+}
+
+Cel_Shading_Settings :: struct {
+    band_count: c.int,
+    thresholds: [MAX_CEL_BAND_COUNT - 1]f32,
+    active_threshold: c.int,
+}
+
+Cel_Shader_Uniforms :: struct {
+    band_count: c.int,
+    thresholds: c.int,
 }
 
 Model_Source_Kind :: enum {
@@ -108,8 +122,6 @@ Model_Assets :: struct {
 //     return true;
 // }
 
-import "core:c"
-
 Animation_Playback :: struct {
     animations:      [^]rl.ModelAnimation,
     animation_count: c.int,
@@ -158,6 +170,63 @@ load_shader_with_includes :: proc(vertex_path, fragment_path: string) -> (
     fragment_cstr := strings.clone_to_cstring(source.fragment.code, context.temp_allocator)
     shader = rl.LoadShaderFromMemory(vertex_cstr, fragment_cstr)
     return shader, source, rl.IsShaderValid(shader)
+}
+
+make_default_cel_shading_settings :: proc() -> Cel_Shading_Settings {
+    settings := Cel_Shading_Settings{band_count = 3, active_threshold = -1}
+    settings.thresholds[0] = 0.25
+    settings.thresholds[1] = 0.65
+    return settings
+}
+
+evenly_space_cel_band_ranges :: proc(settings: ^Cel_Shading_Settings) {
+    settings.band_count = clamp(settings.band_count, 1, MAX_CEL_BAND_COUNT)
+    for threshold_index := 0;
+        threshold_index < int(settings.band_count) - 1;
+        threshold_index += 1 {
+        settings.thresholds[threshold_index] =
+            f32(threshold_index + 1) / f32(settings.band_count)
+    }
+    settings.active_threshold = -1
+}
+
+get_cel_shader_uniforms :: proc(shader: rl.Shader) -> Cel_Shader_Uniforms {
+    return {
+        band_count = rl.GetShaderLocation(shader, "u_cel_band_count"),
+        thresholds = rl.GetShaderLocation(shader, "u_cel_band_thresholds[0]"),
+    }
+}
+
+apply_cel_shading_settings :: proc(
+    shader: rl.Shader,
+    uniforms: Cel_Shader_Uniforms,
+    settings: ^Cel_Shading_Settings,
+) {
+    if uniforms.band_count >= 0 {
+        rl.SetShaderValue(
+            shader,
+            uniforms.band_count,
+            &settings.band_count,
+            .INT,
+        )
+    }
+    if uniforms.thresholds >= 0 {
+        rl.SetShaderValueV(
+            shader,
+            uniforms.thresholds,
+            &settings.thresholds[0],
+            .FLOAT,
+            MAX_CEL_BAND_COUNT - 1,
+        )
+    }
+}
+
+cel_band_brightness_for_preview :: proc(band_index, band_count: int) -> f32 {
+    if band_count <= 1 {
+        return 1
+    }
+    band_position := f32(band_index) / f32(band_count - 1)
+    return 0.32 + 0.68 * math.pow(band_position, f32(1.18))
 }
 
 reload_fragment_shader_with_includes :: proc(
@@ -1132,6 +1201,185 @@ draw_camera_controls :: proc(
     )
 }
 
+draw_cel_shading_controls :: proc(
+    bounds: rl.Rectangle,
+    settings: ^Cel_Shading_Settings,
+) {
+    rl.GuiPanel(bounds, "CEL SHADING BANDS")
+
+    controls_y := bounds.y + 28
+    rl.GuiLabel({bounds.x + 12, controls_y + 3, 44, 18}, "Bands")
+    previous_band_count := settings.band_count
+    rl.GuiSpinner(
+        {bounds.x + 56, controls_y, 76, 22},
+        nil,
+        &settings.band_count,
+        1,
+        MAX_CEL_BAND_COUNT,
+        false,
+    )
+    settings.band_count = clamp(settings.band_count, 1, MAX_CEL_BAND_COUNT)
+    if settings.band_count != previous_band_count {
+        evenly_space_cel_band_ranges(settings)
+    }
+
+    if rl.GuiButton(
+        {bounds.x + 142, controls_y, 116, 22},
+        "EVEN RANGES",
+    ) {
+        evenly_space_cel_band_ranges(settings)
+    }
+    if rl.GuiButton(
+        {bounds.x + 268, controls_y, 124, 22},
+        "RESET 3-BAND",
+    ) {
+        settings^ = make_default_cel_shading_settings()
+    }
+    rl.GuiLabel(
+        {bounds.x + 402, controls_y + 3, bounds.width - 414, 18},
+        "Drag N.L edges",
+    )
+
+    range_bar := rl.Rectangle{
+        bounds.x + 14,
+        bounds.y + 66,
+        bounds.width - 28,
+        28,
+    }
+    band_count := int(settings.band_count)
+
+    range_start: f32 = 0
+    for band_index := 0; band_index < band_count; band_index += 1 {
+        range_end: f32 = 1
+        if band_index < band_count - 1 {
+            range_end = settings.thresholds[band_index]
+        }
+        intensity := u8(math.round(
+            cel_band_brightness_for_preview(band_index, band_count) * 255,
+        ))
+        segment := rl.Rectangle{
+            range_bar.x + range_start * range_bar.width,
+            range_bar.y,
+            (range_end - range_start) * range_bar.width,
+            range_bar.height,
+        }
+        rl.DrawRectangleRec(segment, {intensity, intensity, intensity, 255})
+        range_start = range_end
+    }
+    rl.DrawRectangleLinesEx(range_bar, 1, rl.RAYWHITE)
+
+    mouse_position := rl.GetMousePosition()
+    active_threshold_count := band_count - 1
+    if int(settings.active_threshold) >= active_threshold_count {
+        settings.active_threshold = -1
+    }
+
+    if rl.IsMouseButtonPressed(.LEFT) {
+        nearest_threshold: c.int = -1
+        nearest_distance: f32 = 1000000
+        for threshold_index := 0;
+            threshold_index < active_threshold_count;
+            threshold_index += 1 {
+            handle_x := range_bar.x +
+                        settings.thresholds[threshold_index] * range_bar.width
+            handle_bounds := rl.Rectangle{
+                handle_x - 9,
+                range_bar.y - 8,
+                18,
+                range_bar.height + 16,
+            }
+            if rl.CheckCollisionPointRec(mouse_position, handle_bounds) {
+                distance := math.abs(mouse_position.x - handle_x)
+                if distance < nearest_distance {
+                    nearest_threshold = c.int(threshold_index)
+                    nearest_distance = distance
+                }
+            }
+        }
+        if nearest_threshold >= 0 {
+            settings.active_threshold = nearest_threshold
+        }
+    }
+
+    if settings.active_threshold >= 0 && rl.IsMouseButtonDown(.LEFT) {
+        threshold_index := int(settings.active_threshold)
+        lower_bound: f32 = 0
+        upper_bound: f32 = 1
+        if threshold_index > 0 {
+            lower_bound = settings.thresholds[threshold_index - 1]
+        }
+        if threshold_index + 1 < active_threshold_count {
+            upper_bound = settings.thresholds[threshold_index + 1]
+        }
+        dragged_value := (mouse_position.x - range_bar.x) / range_bar.width
+        settings.thresholds[threshold_index] = clamp(
+            dragged_value,
+            lower_bound + MIN_CEL_BAND_RANGE,
+            upper_bound - MIN_CEL_BAND_RANGE,
+        )
+    }
+    if rl.IsMouseButtonReleased(.LEFT) {
+        settings.active_threshold = -1
+    }
+
+    for threshold_index := 0;
+        threshold_index < active_threshold_count;
+        threshold_index += 1 {
+        handle_x := range_bar.x +
+                    settings.thresholds[threshold_index] * range_bar.width
+        handle_color := rl.SKYBLUE
+        if settings.active_threshold == c.int(threshold_index) {
+            handle_color = rl.YELLOW
+        }
+        rl.DrawLineEx(
+            {handle_x, range_bar.y - 4},
+            {handle_x, range_bar.y + range_bar.height + 4},
+            2,
+            handle_color,
+        )
+        rl.DrawCircleV({handle_x, range_bar.y - 3}, 4, handle_color)
+        rl.GuiLabel(
+            {
+                handle_x - 20,
+                range_bar.y + range_bar.height + 5,
+                40,
+                16,
+            },
+            rl.TextFormat("%.2f", settings.thresholds[threshold_index]),
+        )
+    }
+    if active_threshold_count > 0 {
+        rl.GuiLabel(
+            {
+                range_bar.x,
+                range_bar.y + range_bar.height + 5,
+                40,
+                16,
+            },
+            "0.00",
+        )
+        rl.GuiLabel(
+            {
+                range_bar.x + range_bar.width - 40,
+                range_bar.y + range_bar.height + 5,
+                40,
+                16,
+            },
+            "1.00",
+        )
+    } else {
+        rl.GuiLabel(
+            {
+                range_bar.x,
+                range_bar.y + range_bar.height + 5,
+                range_bar.width,
+                16,
+            },
+            "Single band covers the full N.L range (0.00 - 1.00)",
+        )
+    }
+}
+
 draw_background_controls :: proc(
     bounds: rl.Rectangle,
     picker_bounds: rl.Rectangle,
@@ -1658,6 +1906,10 @@ main :: proc() {
     defer rl.UnloadMaterial(cel_band_material)
     cel_band_material.shader = cel_band_shader
 
+    cel_shading_settings := make_default_cel_shading_settings()
+    scene_cel_uniforms := get_cel_shader_uniforms(shader)
+    band_id_cel_uniforms := get_cel_shader_uniforms(cel_band_shader)
+
     mask_downscale_shader, mask_downscale_source, mask_downscale_ok :=
         load_fragment_shader_with_includes(MASK_DOWNSCALE_FS_PATH)
     defer rl.UnloadShader(mask_downscale_shader)
@@ -1783,6 +2035,7 @@ main :: proc() {
         212,
     }
     animation_controls_bounds := rl.Rectangle{10, 190, 280, 190}
+    cel_shading_controls_bounds := rl.Rectangle{300, 10, 530, 126}
     magnifier_bounds := rl.Rectangle{10, f32(screen_height) - 194, 148, 184}
     coverage_alpha: f32 = -1
     next_export_index := 1
@@ -1822,13 +2075,18 @@ main :: proc() {
             ui_mouse_position,
             animation_controls_bounds,
         )
+        mouse_over_cel_shading_controls := rl.CheckCollisionPointRec(
+            ui_mouse_position,
+            cel_shading_controls_bounds,
+        )
         if window_focused &&
            !background_picker_open &&
            !animation_playback.dropdown_open &&
            !mouse_over_model_browser &&
            !mouse_over_camera_controls &&
            !mouse_over_background_controls &&
-           !mouse_over_animation_controls {
+           !mouse_over_animation_controls &&
+           !mouse_over_cel_shading_controls {
             update_camera_controls(&control_camera, max_size, model_center)
         }
         camera = control_camera
@@ -1869,12 +2127,14 @@ main :: proc() {
 
         update_animation_playback(&animation_playback, model)
 
-        _ = reload_shader_with_includes(
+        if reload_shader_with_includes(
             VS_PATH,
             FS_PATH,
             &shader,
             &shader_source,
-        )
+        ) {
+            scene_cel_uniforms = get_cel_shader_uniforms(shader)
+        }
 
         if reload_shader_with_includes(
             VS_PATH,
@@ -1883,6 +2143,7 @@ main :: proc() {
             &cel_band_source,
         ) {
             cel_band_material.shader = cel_band_shader
+            band_id_cel_uniforms = get_cel_shader_uniforms(cel_band_shader)
         }
 
         if reload_fragment_shader_with_includes(
@@ -1936,6 +2197,16 @@ main :: proc() {
             mask_downscale_target_resolution_loc,
             &target_resolution,
             .VEC2,
+        )
+        apply_cel_shading_settings(
+            shader,
+            scene_cel_uniforms,
+            &cel_shading_settings,
+        )
+        apply_cel_shading_settings(
+            cel_band_shader,
+            band_id_cel_uniforms,
+            &cel_shading_settings,
         )
 
         rl.BeginTextureMode(scene_target)
@@ -2116,6 +2387,10 @@ main :: proc() {
             draw_animation_controls(
                 animation_controls_bounds,
                 &animation_playback,
+            )
+            draw_cel_shading_controls(
+                cel_shading_controls_bounds,
+                &cel_shading_settings,
             )
             draw_camera_controls(
                 camera_controls_bounds,
