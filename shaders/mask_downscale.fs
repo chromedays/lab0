@@ -15,9 +15,11 @@ out vec4 finalColor;
 void main() {
     float coverage = sample_downscaled_texture(
         texture0,
+        texture0,
         fragTexCoord,
         u_source_resolution,
-        u_target_resolution
+        u_target_resolution,
+        false
     ).a;
     // Store coverage in both grayscale and alpha. Grayscale makes the mask
     // directly inspectable; alpha keeps the numeric coverage available.

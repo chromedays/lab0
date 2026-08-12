@@ -25,7 +25,7 @@ ASSETS_PATH         :: "assets"
 DEFAULT_MODEL_PATH  :: "assets/CesiumMan.glb"
 
 PIXEL_SCALE :: 10
-LENS_WIDTH  :: 200
+LENS_WIDTH  :: 400
 LENS_HEIGHT :: 400
 
 MAGNIFIER_SAMPLE_SIZE  :: 16
@@ -401,7 +401,7 @@ frame_camera_to_model :: proc(
 }
 
 draw_scene :: proc(shader: rl.Shader, model: rl.Model, camera: rl.Camera3D) {
-    rl.ClearBackground(rl.GRAY)
+    rl.ClearBackground(rl.BLANK)
 
     rl.BeginMode3D(camera)
         if is_model_loaded(model) {
@@ -1002,7 +1002,7 @@ main :: proc() {
     // inspect_glb(DEFAULT_MODEL_PATH);
 
     rl.SetConfigFlags({.WINDOW_TOPMOST});
-    rl.InitWindow(800, 600, "Lab0");
+    rl.InitWindow(1280, 720, "Lab0");
     defer rl.CloseWindow();
 	rgl.SetClipPlanes(0.001, 1000.0)
 
@@ -1112,6 +1112,7 @@ main :: proc() {
     downscale_source_resolution_loc := rl.GetShaderLocation(downscale_shader, "u_source_resolution")
     downscale_target_resolution_loc := rl.GetShaderLocation(downscale_shader, "u_target_resolution")
     downscale_time_loc := rl.GetShaderLocation(downscale_shader, "u_time")
+    downscale_mask_texture_loc := rl.GetShaderLocation(downscale_shader, "u_mask_texture")
     mask_downscale_source_resolution_loc := rl.GetShaderLocation(
         mask_downscale_shader,
         "u_source_resolution",
@@ -1200,6 +1201,7 @@ main :: proc() {
             downscale_source_resolution_loc = rl.GetShaderLocation(downscale_shader, "u_source_resolution")
             downscale_target_resolution_loc = rl.GetShaderLocation(downscale_shader, "u_target_resolution")
             downscale_time_loc = rl.GetShaderLocation(downscale_shader, "u_time")
+            downscale_mask_texture_loc = rl.GetShaderLocation(downscale_shader, "u_mask_texture")
         }
 
         if reload_fragment_shader_with_includes(
@@ -1250,6 +1252,11 @@ main :: proc() {
         rl.BeginTextureMode(pixel_target)
             rl.ClearBackground(rl.BLANK)
             rl.BeginShaderMode(downscale_shader)
+                rl.SetShaderValueTexture(
+                    downscale_shader,
+                    downscale_mask_texture_loc,
+                    mask_scene_target.texture,
+                )
                 rl.DrawTexturePro(
                     scene_target.texture,
                     scene_source,

@@ -4,6 +4,7 @@ in vec2 fragTexCoord;
 in vec4 fragColor;
 
 uniform sampler2D texture0;
+uniform sampler2D u_mask_texture;
 uniform vec4 colDiffuse;
 
 // Full-resolution scene texture size, currently 800x600.
@@ -20,12 +21,14 @@ out vec4 finalColor;
 #include "downsample_common.glsl"
 
 void main() {
-    // Every model and every scene pixel follows this same downscale path.
+    // Only scene samples covered by solid mask geometry contribute color.
     vec4 color = sample_downscaled_texture(
         texture0,
+        u_mask_texture,
         fragTexCoord,
         u_source_resolution,
-        u_target_resolution
+        u_target_resolution,
+        true
     );
 
     // Customize the downscale pass here. For example:
