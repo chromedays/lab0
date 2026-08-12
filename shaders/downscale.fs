@@ -4,37 +4,141 @@ in vec2 fragTexCoord;
 in vec4 fragColor;
 
 uniform sampler2D texture0;
-uniform sampler2D u_mask_texture;
+uniform sampler2D u_cel_band_texture;
 uniform vec4 colDiffuse;
-
-// Full-resolution scene texture size, currently 800x600.
 uniform vec2 u_source_resolution;
-
-// Downscaled render-target size, currently 80x60.
 uniform vec2 u_target_resolution;
-
-// Seconds since startup. Available for animated custom effects.
-uniform float u_time;
+uniform float u_color_cluster_threshold;
 
 out vec4 finalColor;
 
 #include "downsample_common.glsl"
 
+float color_distance_squared(vec3 a, vec3 b) {
+    vec3 delta = a - b;
+    return dot(delta * delta, vec3(0.299, 0.587, 0.114));
+}
+
 void main() {
-    // Only scene samples covered by solid mask geometry contribute color.
-    vec4 color = sample_downscaled_texture(
-        texture0,
-        u_mask_texture,
-        fragTexCoord,
-        u_source_resolution,
-        u_target_resolution,
-        true
-    );
+    vec2 sample_uvs[DOWNSAMPLE_SAMPLE_COUNT];
+    int sample_bands[DOWNSAMPLE_SAMPLE_COUNT];
 
-    // Customize the downscale pass here. For example:
-    // color.rgb = floor(color.rgb * 8.0) / 8.0;  // Color quantization
-    // color.rgb *= 0.9 + 0.1 * sin(u_time * 3.0); // Animated brightness
-    // color.rgb = vec3(dot(color.rgb, vec3(0.299, 0.587, 0.114))); // Grayscale
+    for (int sample_index = 0;
+         sample_index < DOWNSAMPLE_SAMPLE_COUNT;
+         sample_index++) {
+        vec2 sample_uv = downsample_sample_uv(
+            fragTexCoord,
+            u_source_resolution,
+            u_target_resolution,
+            sample_index
+        );
+        sample_uvs[sample_index] = sample_uv;
+        sample_bands[sample_index] = decode_cel_band(
+            texture(u_cel_band_texture, sample_uv)
+        );
+    }
 
+    // First choose the cel-shading band with the greatest source coverage.
+    int winning_band = -1;
+    int winning_band_votes = -1;
+    float winning_band_center_distance = 2.0;
+    for (int candidate_index = 0;
+         candidate_index < DOWNSAMPLE_SAMPLE_COUNT;
+         candidate_index++) {
+        int candidate_band = sample_bands[candidate_index];
+        if (candidate_band < 0) {
+            continue;
+        }
+
+        int votes = 0;
+        float nearest_center_distance = 2.0;
+        for (int sample_index = 0;
+             sample_index < DOWNSAMPLE_SAMPLE_COUNT;
+             sample_index++) {
+            if (sample_bands[sample_index] == candidate_band) {
+                votes++;
+                vec2 grid_position = downsample_grid_position(sample_index);
+                nearest_center_distance = min(
+                    nearest_center_distance,
+                    dot(grid_position, grid_position)
+                );
+            }
+        }
+
+        bool wins_by_count = votes > winning_band_votes;
+        bool wins_count_tie =
+            votes == winning_band_votes &&
+            nearest_center_distance < winning_band_center_distance;
+        bool wins_stable_tie =
+            votes == winning_band_votes &&
+            nearest_center_distance == winning_band_center_distance &&
+            (winning_band < 0 || candidate_band < winning_band);
+        if (wins_by_count || wins_count_tie || wins_stable_tie) {
+            winning_band = candidate_band;
+            winning_band_votes = votes;
+            winning_band_center_distance = nearest_center_distance;
+        }
+    }
+
+    if (winning_band < 0) {
+        finalColor = vec4(0.0);
+        return;
+    }
+
+    // Within the dominant band, find the actual source color with the densest
+    // neighborhood. Returning an existing sample avoids inventing a blended
+    // color at hard albedo boundaries.
+    vec3 sample_colors[DOWNSAMPLE_SAMPLE_COUNT];
+    for (int sample_index = 0;
+         sample_index < DOWNSAMPLE_SAMPLE_COUNT;
+         sample_index++) {
+        if (sample_bands[sample_index] == winning_band) {
+            sample_colors[sample_index] = texture(
+                texture0,
+                sample_uvs[sample_index]
+            ).rgb;
+        } else {
+            sample_colors[sample_index] = vec3(0.0);
+        }
+    }
+
+    float threshold = max(u_color_cluster_threshold, 0.0);
+    float threshold_squared = threshold * threshold;
+    int winning_sample_index = -1;
+    int winning_color_votes = -1;
+    float winning_color_center_distance = 2.0;
+
+    for (int candidate_index = 0;
+         candidate_index < DOWNSAMPLE_SAMPLE_COUNT;
+         candidate_index++) {
+        if (sample_bands[candidate_index] != winning_band) {
+            continue;
+        }
+
+        int votes = 0;
+        for (int sample_index = 0;
+             sample_index < DOWNSAMPLE_SAMPLE_COUNT;
+             sample_index++) {
+            if (sample_bands[sample_index] == winning_band &&
+                color_distance_squared(
+                    sample_colors[candidate_index],
+                    sample_colors[sample_index]
+                ) <= threshold_squared) {
+                votes++;
+            }
+        }
+
+        vec2 grid_position = downsample_grid_position(candidate_index);
+        float center_distance = dot(grid_position, grid_position);
+        if (votes > winning_color_votes ||
+            (votes == winning_color_votes &&
+             center_distance < winning_color_center_distance)) {
+            winning_sample_index = candidate_index;
+            winning_color_votes = votes;
+            winning_color_center_distance = center_distance;
+        }
+    }
+
+    vec4 color = vec4(sample_colors[winning_sample_index], 1.0);
     finalColor = color * fragColor * colDiffuse;
 }

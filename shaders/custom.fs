@@ -9,19 +9,10 @@ out vec4 finalColor;
 uniform sampler2D texture0;
 uniform vec4 colDiffuse;
 
+#include "cel_shading_common.glsl"
+
 void main() {
     vec4 albedo = texture(texture0, fragTexCoord) * colDiffuse * fragColor;
-
-    // Three discrete Lambert bands produce a simple cel-shaded look.
-    vec3 lightDirection = normalize(vec3(0.35, 0.80, 0.55));
-    float diffuse = max(dot(normalize(fragNormal), lightDirection), 0.0);
-
-    float lightBand = 0.32;
-    if (diffuse > 0.65) {
-        lightBand = 1.0;
-    } else if (diffuse > 0.25) {
-        lightBand = 0.62;
-    }
-
-    finalColor = vec4(albedo.rgb * lightBand, albedo.a);
+    int band_id = cel_band_id(fragNormal);
+    finalColor = vec4(albedo.rgb * cel_band_brightness(band_id), albedo.a);
 }

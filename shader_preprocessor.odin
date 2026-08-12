@@ -17,6 +17,11 @@ Preprocessed_Shader_Source :: struct {
 	dependencies: [dynamic]Shader_Source_Dependency,
 }
 
+Preprocessed_Shader_Program_Source :: struct {
+	vertex:   Preprocessed_Shader_Source,
+	fragment: Preprocessed_Shader_Source,
+}
+
 destroy_preprocessed_shader_source :: proc(source: ^Preprocessed_Shader_Source) {
 	delete(source.code)
 	for dependency in source.dependencies {
@@ -24,6 +29,13 @@ destroy_preprocessed_shader_source :: proc(source: ^Preprocessed_Shader_Source) 
 	}
 	delete(source.dependencies)
 	source^ = {}
+}
+
+destroy_preprocessed_shader_program_source :: proc(
+	source: ^Preprocessed_Shader_Program_Source,
+) {
+	destroy_preprocessed_shader_source(&source.vertex)
+	destroy_preprocessed_shader_source(&source.fragment)
 }
 
 shader_source_dependencies_changed :: proc(source: ^Preprocessed_Shader_Source) -> bool {
@@ -38,6 +50,13 @@ shader_source_dependencies_changed :: proc(source: ^Preprocessed_Shader_Source) 
 		}
 	}
 	return false
+}
+
+shader_program_source_dependencies_changed :: proc(
+	source: ^Preprocessed_Shader_Program_Source,
+) -> bool {
+	return shader_source_dependencies_changed(&source.vertex) ||
+	       shader_source_dependencies_changed(&source.fragment)
 }
 
 track_shader_dependency :: proc(
@@ -193,4 +212,14 @@ preprocess_shader_file :: proc(path: string) -> (
 		source.code = strings.clone(strings.to_string(builder))
 	}
 	return source, ok
+}
+
+preprocess_shader_program :: proc(vertex_path, fragment_path: string) -> (
+	source: Preprocessed_Shader_Program_Source,
+	ok: bool,
+) {
+	vertex_ok, fragment_ok: bool
+	source.vertex, vertex_ok = preprocess_shader_file(vertex_path)
+	source.fragment, fragment_ok = preprocess_shader_file(fragment_path)
+	return source, vertex_ok && fragment_ok
 }

@@ -2,7 +2,6 @@ package main
 
 import "core:fmt"
 import "core:os"
-import "core:time"
 import "core:log"
 import "core:math"
 import "core:slice"
@@ -19,14 +18,16 @@ Vertex :: struct {
 VS_PATH             :: "shaders/custom.vs"
 FS_PATH             :: "shaders/custom.fs"
 DOWNSCALE_FS_PATH   :: "shaders/downscale.fs"
-MASK_FS_PATH        :: "shaders/mask.fs"
+CEL_BAND_FS_PATH    :: "shaders/cel_band.fs"
 MASK_DOWNSCALE_FS_PATH :: "shaders/mask_downscale.fs"
 ASSETS_PATH         :: "assets"
 DEFAULT_MODEL_PATH  :: "assets/CesiumMan.glb"
+ANIMATION_SAMPLE_FPS :: 60.0
 
 PIXEL_SCALE :: 10
 LENS_WIDTH  :: 400
 LENS_HEIGHT :: 400
+DEFAULT_COLOR_CLUSTER_THRESHOLD :: 0.10
 
 MAGNIFIER_SAMPLE_SIZE  :: 16
 MAGNIFIER_DISPLAY_SCALE :: 8
@@ -109,13 +110,21 @@ Model_Assets :: struct {
 
 import "core:c"
 
-get_file_mod_time :: proc(filepath: string) -> (mod_time: time.Time, ok: bool) {
-    info, err := os.stat(filepath, context.temp_allocator);
-    if err != nil {
-        log.error("Error occurred while fetching file info for %s: %v", filepath, err);
-        return {}, false;
-    }
-    return info.modification_time, true;
+Animation_Playback :: struct {
+    animations:      [^]rl.ModelAnimation,
+    animation_count: c.int,
+    valid_indices:   [dynamic]c.int,
+    clip_options:    cstring,
+    active_index:    c.int,
+    current_frame:   f32,
+    applied_frame:   f32,
+    speed:           f32,
+    is_playing:      bool,
+    loop:            bool,
+    sampled_playback: bool,
+    sample_count:    c.int,
+    dropdown_open:   bool,
+    pose_dirty:      bool,
 }
 
 load_fragment_shader_with_includes :: proc(path: string) -> (
@@ -131,6 +140,23 @@ load_fragment_shader_with_includes :: proc(path: string) -> (
 
     source_cstr := strings.clone_to_cstring(source.code, context.temp_allocator)
     shader = rl.LoadShaderFromMemory(nil, source_cstr)
+    return shader, source, rl.IsShaderValid(shader)
+}
+
+load_shader_with_includes :: proc(vertex_path, fragment_path: string) -> (
+    shader: rl.Shader,
+    source: Preprocessed_Shader_Program_Source,
+    ok: bool,
+) {
+    preprocess_ok: bool
+    source, preprocess_ok = preprocess_shader_program(vertex_path, fragment_path)
+    if !preprocess_ok {
+        return {}, source, false
+    }
+
+    vertex_cstr := strings.clone_to_cstring(source.vertex.code, context.temp_allocator)
+    fragment_cstr := strings.clone_to_cstring(source.fragment.code, context.temp_allocator)
+    shader = rl.LoadShaderFromMemory(vertex_cstr, fragment_cstr)
     return shader, source, rl.IsShaderValid(shader)
 }
 
@@ -150,6 +176,40 @@ reload_fragment_shader_with_includes :: proc(
 
     if !loaded {
         log.error("Failed to reload %s. Keeping the old shader.", path)
+        if rl.IsShaderValid(new_shader) {
+            rl.UnloadShader(new_shader)
+        }
+        return false
+    }
+
+    rl.UnloadShader(shader^)
+    shader^ = new_shader
+    return true
+}
+
+reload_shader_with_includes :: proc(
+    vertex_path, fragment_path: string,
+    shader: ^rl.Shader,
+    source: ^Preprocessed_Shader_Program_Source,
+) -> bool {
+    if !shader_program_source_dependencies_changed(source) {
+        return false
+    }
+
+    log.info(
+        "Shader dependency changed; reloading %s and %s",
+        vertex_path,
+        fragment_path,
+    )
+    new_shader, new_source, loaded := load_shader_with_includes(
+        vertex_path,
+        fragment_path,
+    )
+    destroy_preprocessed_shader_program_source(source)
+    source^ = new_source
+
+    if !loaded {
+        log.error("Failed to reload %s. Keeping the old shader.", fragment_path)
         if rl.IsShaderValid(new_shader) {
             rl.UnloadShader(new_shader)
         }
@@ -243,6 +303,242 @@ is_model_loaded :: proc(model: rl.Model) -> bool {
     // IsModelValid() also fails when an otherwise usable model has a missing
     // or unsupported material texture. The browser only needs drawable meshes.
     return model.meshCount > 0 && model.meshes != nil
+}
+
+has_playable_animations :: proc(playback: ^Animation_Playback) -> bool {
+    return playback.animations != nil && len(playback.valid_indices) > 0
+}
+
+get_active_animation :: proc(
+    playback: ^Animation_Playback,
+) -> (animation: rl.ModelAnimation, ok: bool) {
+    if !has_playable_animations(playback) ||
+       playback.active_index < 0 ||
+       int(playback.active_index) >= len(playback.valid_indices) {
+        return {}, false
+    }
+
+    animation_index := int(playback.valid_indices[playback.active_index])
+    if animation_index < 0 || animation_index >= int(playback.animation_count) {
+        return {}, false
+    }
+    return playback.animations[animation_index], true
+}
+
+destroy_animation_playback :: proc(playback: ^Animation_Playback) {
+    if playback.animations != nil {
+        rl.UnloadModelAnimations(playback.animations, playback.animation_count)
+    }
+    delete(playback.valid_indices)
+    if playback.clip_options != nil {
+        delete(playback.clip_options)
+    }
+    playback^ = {}
+}
+
+load_animation_playback :: proc(
+    model: rl.Model,
+    path: string,
+    kind: Model_Source_Kind,
+) -> Animation_Playback {
+    if kind != .ASSET {
+        return {}
+    }
+
+    playback := Animation_Playback{
+        speed = 1.0,
+        loop = true,
+        sample_count = 4,
+    }
+    path_cstr := strings.clone_to_cstring(path, context.temp_allocator)
+    playback.animations = rl.LoadModelAnimations(
+        path_cstr,
+        &playback.animation_count,
+    )
+    if playback.animations == nil || playback.animation_count <= 0 {
+        return playback
+    }
+
+    options_builder := strings.builder_make()
+    defer strings.builder_destroy(&options_builder)
+
+    for animation_index := 0;
+        animation_index < int(playback.animation_count);
+        animation_index += 1 {
+        animation := playback.animations[animation_index]
+        if animation.keyframeCount <= 0 {
+            log.warnf(
+                "Ignoring animation %d in %s because it has no keyframes",
+                animation_index,
+                path,
+            )
+            continue
+        }
+        if !rl.IsModelAnimationValid(model, animation) {
+            log.warnf(
+                "Ignoring animation %d in %s because its skeleton is incompatible",
+                animation_index,
+                path,
+            )
+            continue
+        }
+
+        if len(playback.valid_indices) > 0 {
+            strings.write_byte(&options_builder, ';')
+        }
+        append(&playback.valid_indices, c.int(animation_index))
+
+        animation_name := string(cstring(&animation.name[0]))
+        if len(animation_name) > 0 {
+            strings.write_string(&options_builder, animation_name)
+        } else {
+            strings.write_string(
+                &options_builder,
+                fmt.tprintf("Animation %d", animation_index + 1),
+            )
+        }
+    }
+
+    if len(playback.valid_indices) == 0 {
+        destroy_animation_playback(&playback)
+        return {}
+    }
+
+    playback.clip_options = strings.clone_to_cstring(
+        strings.to_string(options_builder),
+    )
+    playback.active_index = 0
+    playback.current_frame = 0
+    playback.applied_frame = 0
+    playback.pose_dirty = true
+
+    animation, animation_ok := get_active_animation(&playback)
+    if animation_ok {
+        rl.UpdateModelAnimation(model, animation, playback.current_frame)
+        playback.pose_dirty = false
+    }
+
+    log.infof(
+        "Loaded %d playable animation(s) from %s",
+        len(playback.valid_indices),
+        path,
+    )
+    return playback
+}
+
+get_max_sample_count :: proc(animation: rl.ModelAnimation) -> c.int {
+    // The terminal keyframe marks the end of the loop, so a 120-frame cycle
+    // exposes the distinct frames 0...119 for sampled playback.
+    return max(animation.keyframeCount - 1, 1)
+}
+
+get_sampled_frame_at_index :: proc(
+    animation: rl.ModelAnimation,
+    sample_count, sample_index: c.int,
+) -> f32 {
+    last_frame := f32(max(animation.keyframeCount - 1, 0))
+    if last_frame <= 0 {
+        return 0
+    }
+
+    clamped_count := clamp(sample_count, 1, get_max_sample_count(animation))
+    clamped_index := clamp(sample_index, 0, clamped_count - 1)
+    return f32(c.int(
+        f32(clamped_index) * last_frame / f32(clamped_count),
+    ))
+}
+
+get_sample_index_for_frame :: proc(
+    animation: rl.ModelAnimation,
+    sample_count: c.int,
+    frame: f32,
+) -> c.int {
+    last_frame := f32(max(animation.keyframeCount - 1, 0))
+    if last_frame <= 0 {
+        return 0
+    }
+
+    clamped_count := clamp(sample_count, 1, get_max_sample_count(animation))
+    clamped_frame := clamp(frame, 0, last_frame)
+    sample_index := c.int(clamped_frame / last_frame * f32(clamped_count))
+    return clamp(sample_index, 0, clamped_count - 1)
+}
+
+get_animation_pose_frame :: proc(
+    playback: ^Animation_Playback,
+    animation: rl.ModelAnimation,
+) -> f32 {
+    last_frame := f32(max(animation.keyframeCount - 1, 0))
+    if !playback.sampled_playback {
+        return clamp(playback.current_frame, 0, last_frame)
+    }
+
+    sample_index := get_sample_index_for_frame(
+        animation,
+        playback.sample_count,
+        playback.current_frame,
+    )
+    return get_sampled_frame_at_index(
+        animation,
+        playback.sample_count,
+        sample_index,
+    )
+}
+
+update_animation_playback :: proc(
+    playback: ^Animation_Playback,
+    model: rl.Model,
+) {
+    animation, ok := get_active_animation(playback)
+    if !ok {
+        return
+    }
+
+    last_frame := f32(max(animation.keyframeCount - 1, 0))
+    playback.sample_count = clamp(
+        playback.sample_count,
+        1,
+        get_max_sample_count(animation),
+    )
+    if playback.is_playing {
+        if last_frame <= 0 {
+            playback.current_frame = 0
+            playback.is_playing = false
+        } else {
+            playback.current_frame += rl.GetFrameTime() *
+                                      f32(ANIMATION_SAMPLE_FPS) *
+                                      playback.speed
+            if playback.sampled_playback && !playback.loop {
+                final_sample_frame := get_sampled_frame_at_index(
+                    animation,
+                    playback.sample_count,
+                    playback.sample_count - 1,
+                )
+                if playback.current_frame >= final_sample_frame {
+                    playback.current_frame = final_sample_frame
+                    playback.is_playing = false
+                }
+            } else if playback.loop {
+                if playback.current_frame >= last_frame {
+                    playback.current_frame = math.mod(
+                        playback.current_frame,
+                        last_frame,
+                    )
+                }
+            } else if playback.current_frame >= last_frame {
+                playback.current_frame = last_frame
+                playback.is_playing = false
+            }
+        }
+    }
+
+    playback.current_frame = clamp(playback.current_frame, 0, last_frame)
+    pose_frame := get_animation_pose_frame(playback, animation)
+    if playback.pose_dirty || pose_frame != playback.applied_frame {
+        rl.UpdateModelAnimation(model, animation, pose_frame)
+        playback.applied_frame = pose_frame
+        playback.pose_dirty = false
+    }
 }
 
 get_model_center :: proc(model: rl.Model) -> rl.Vector3 {
@@ -425,8 +721,8 @@ draw_scene :: proc(shader: rl.Shader, model: rl.Model, camera: rl.Camera3D) {
     rl.EndMode3D()
 }
 
-draw_model_mask :: proc(
-    mask_material: rl.Material,
+draw_model_cel_bands :: proc(
+    cel_band_material: rl.Material,
     model: rl.Model,
     camera: rl.Camera3D,
 ) {
@@ -436,7 +732,7 @@ draw_model_mask :: proc(
             for mesh_index := 0; mesh_index < int(model.meshCount); mesh_index += 1 {
                 rl.DrawMesh(
                     model.meshes[mesh_index],
-                    mask_material,
+                    cel_band_material,
                     model.transform,
                 )
             }
@@ -558,6 +854,195 @@ draw_model_browser :: proc(
     }
 }
 
+draw_animation_controls :: proc(
+    bounds: rl.Rectangle,
+    playback: ^Animation_Playback,
+) {
+    animation, ok := get_active_animation(playback)
+    if !ok {
+        return
+    }
+
+    rl.GuiPanel(bounds, "MODEL ANIMATION")
+
+    x := bounds.x + 12
+    width := bounds.width - 24
+    clip_bounds := rl.Rectangle{x + 42, bounds.y + 28, width - 42, 24}
+    rl.GuiLabel({x, bounds.y + 31, 38, 18}, "Clip")
+
+    if playback.dropdown_open {
+        rl.GuiLock()
+    }
+
+    transport_y := bounds.y + 58
+    button_gap: f32 = 4
+    reset_width: f32 = 44
+    step_width: f32 = 40
+    play_width := width - reset_width - step_width * 2 - button_gap * 3
+
+    if rl.GuiButton({x, transport_y, reset_width, 24}, "|<") {
+        playback.current_frame = 0
+        playback.is_playing = false
+        playback.pose_dirty = true
+    }
+    previous_x := x + reset_width + button_gap
+    if rl.GuiButton({previous_x, transport_y, step_width, 24}, "<") {
+        if playback.sampled_playback {
+            sample_index := get_sample_index_for_frame(
+                animation,
+                playback.sample_count,
+                playback.current_frame,
+            )
+            playback.current_frame = get_sampled_frame_at_index(
+                animation,
+                playback.sample_count,
+                sample_index - 1,
+            )
+        } else {
+            playback.current_frame = max(playback.current_frame - 1, 0)
+        }
+        playback.is_playing = false
+        playback.pose_dirty = true
+    }
+
+    play_x := previous_x + step_width + button_gap
+    play_label: cstring = "Play [Space]"
+    if playback.is_playing {
+        play_label = "Pause [Space]"
+    }
+    if rl.GuiButton({play_x, transport_y, play_width, 24}, play_label) {
+        playback.is_playing = !playback.is_playing
+    }
+
+    next_x := play_x + play_width + button_gap
+    last_frame := f32(max(animation.keyframeCount - 1, 0))
+    if rl.GuiButton({next_x, transport_y, step_width, 24}, ">") {
+        if playback.sampled_playback {
+            sample_index := get_sample_index_for_frame(
+                animation,
+                playback.sample_count,
+                playback.current_frame,
+            )
+            playback.current_frame = get_sampled_frame_at_index(
+                animation,
+                playback.sample_count,
+                sample_index + 1,
+            )
+        } else {
+            playback.current_frame = min(playback.current_frame + 1, last_frame)
+        }
+        playback.is_playing = false
+        playback.pose_dirty = true
+    }
+
+    timeline_label_y := bounds.y + 88
+    display_frame := get_animation_pose_frame(playback, animation)
+    rl.GuiLabel(
+        {x, timeline_label_y, width, 18},
+        rl.TextFormat(
+            "Frame %d / %d",
+            c.int(math.round(display_frame)),
+            animation.keyframeCount - 1,
+        ),
+    )
+    previous_frame := playback.current_frame
+    rl.GuiSliderBar(
+        {x, bounds.y + 108, width, 18},
+        nil,
+        nil,
+        &playback.current_frame,
+        0,
+        last_frame,
+    )
+    if playback.current_frame != previous_frame {
+        if playback.sampled_playback {
+            playback.current_frame = get_animation_pose_frame(
+                playback,
+                animation,
+            )
+        }
+        playback.is_playing = false
+        playback.pose_dirty = true
+    }
+
+    options_y := bounds.y + 136
+    rl.GuiLabel({x, options_y, 40, 18}, "Speed")
+    rl.GuiSliderBar(
+        {x + 42, options_y, 105, 18},
+        nil,
+        nil,
+        &playback.speed,
+        0.25,
+        2.0,
+    )
+    rl.GuiLabel(
+        {x + 152, options_y, 48, 18},
+        rl.TextFormat("%.2fx", playback.speed),
+    )
+    rl.GuiCheckBox({x + 202, options_y + 1, 16, 16}, nil, &playback.loop)
+    rl.GuiLabel({x + 222, options_y, 36, 18}, "Loop")
+
+    sample_options_y := bounds.y + 162
+    previous_sampled_playback := playback.sampled_playback
+    rl.GuiCheckBox(
+        {x, sample_options_y + 1, 16, 16},
+        nil,
+        &playback.sampled_playback,
+    )
+    rl.GuiLabel({x + 20, sample_options_y, 66, 18}, "Sampled")
+    rl.GuiLabel({x + 91, sample_options_y, 42, 18}, "Count")
+    previous_sample_count := playback.sample_count
+    rl.GuiSpinner(
+        {x + 136, sample_options_y - 2, width - 136, 22},
+        nil,
+        &playback.sample_count,
+        1,
+        get_max_sample_count(animation),
+        false,
+    )
+    if playback.sampled_playback != previous_sampled_playback ||
+       playback.sample_count != previous_sample_count {
+        playback.sample_count = clamp(
+            playback.sample_count,
+            1,
+            get_max_sample_count(animation),
+        )
+        if playback.sampled_playback {
+            playback.current_frame = get_animation_pose_frame(
+                playback,
+                animation,
+            )
+        }
+        playback.pose_dirty = true
+    }
+
+    if playback.dropdown_open {
+        rl.GuiUnlock()
+    }
+
+    if len(playback.valid_indices) == 1 {
+        rl.GuiLabel(clip_bounds, playback.clip_options)
+    } else {
+        previous_active_index := playback.active_index
+        if rl.GuiDropdownBox(
+            clip_bounds,
+            playback.clip_options,
+            &playback.active_index,
+            playback.dropdown_open,
+        ) {
+            playback.dropdown_open = !playback.dropdown_open
+        }
+        if playback.active_index != previous_active_index {
+            playback.current_frame = 0
+            playback.pose_dirty = true
+            log.infof(
+                "Selected animation clip %d",
+                playback.active_index + 1,
+            )
+        }
+    }
+}
+
 draw_camera_controls :: proc(
     bounds: rl.Rectangle,
     camera: ^rl.Camera3D,
@@ -570,7 +1055,7 @@ draw_camera_controls :: proc(
     x := bounds.x + 12
     y := bounds.y + 28
     width := bounds.width - 24
-    line_height: f32 = 20
+    line_height: f32 = 18
 
     rl.GuiLabel({x, y, width, 18}, "Reset axis view (from positive axis)")
     y += 22
@@ -613,7 +1098,19 @@ draw_camera_controls :: proc(
         )
         log.info("Camera reset to +Z axis view")
     }
-    y += 32
+    y += 28
+
+    if rl.GuiButton({x, y, width, 24}, "Isometric") {
+        reset_camera_to_axis_view(
+            camera,
+            model_center,
+            rl.Vector3Normalize({1, 1, 1}),
+            {0, 1, 0},
+            scene_size,
+        )
+        log.info("Camera reset to isometric view")
+    }
+    y += 26
 
     rl.GuiLabel({x, y, width, 18}, "LMB drag       Orbit around target")
     y += line_height
@@ -628,11 +1125,75 @@ draw_camera_controls :: proc(
     rl.GuiLabel({x, y, width, 18}, "Shift          Faster keyboard")
     y += line_height
     rl.GuiLabel({x, y, width, 18}, "1 / 2 / 3      Pixel / blend / mask")
-    y += line_height + 4
+    y += line_height
     rl.GuiLabel(
         {x, y, width, 18},
         rl.TextFormat("Pan + zoom snap: %d x %d", pixel_width, pixel_height),
     )
+}
+
+draw_background_controls :: proc(
+    bounds: rl.Rectangle,
+    picker_bounds: rl.Rectangle,
+    background_color: ^rl.Color,
+    picker_open: ^bool,
+) {
+    rl.GuiPanel(bounds, "SCENE BACKGROUND")
+
+    swatch_bounds := rl.Rectangle{
+        bounds.x + 12,
+        bounds.y + 30,
+        54,
+        54,
+    }
+    rl.DrawRectangleRec(swatch_bounds, background_color^)
+    rl.DrawRectangleLinesEx(swatch_bounds, 2, rl.RAYWHITE)
+
+    button_x := swatch_bounds.x + swatch_bounds.width + 12
+    button_width := bounds.x + bounds.width - button_x - 12
+    picker_button_text: cstring = "Open color picker"
+    if picker_open^ {
+        picker_button_text = "Close color picker"
+    }
+    if rl.GuiButton(
+        {button_x, bounds.y + 30, button_width, 25},
+        picker_button_text,
+    ) {
+        picker_open^ = !picker_open^
+    }
+    if rl.GuiButton(
+        {button_x, bounds.y + 59, button_width, 25},
+        "Reset to black",
+    ) {
+        background_color^ = rl.BLACK
+    }
+
+    rl.GuiLabel(
+        {bounds.x + 12, bounds.y + 88, bounds.width - 24, 18},
+        rl.TextFormat(
+            "RGB: %d, %d, %d",
+            c.int(background_color.r),
+            c.int(background_color.g),
+            c.int(background_color.b),
+        ),
+    )
+
+    if picker_open^ {
+        if rl.GuiWindowBox(picker_bounds, "BACKGROUND COLOR") != 0 {
+            picker_open^ = false
+            return
+        }
+        rl.GuiColorPicker(
+            {
+                picker_bounds.x + 12,
+                picker_bounds.y + 34,
+                165,
+                165,
+            },
+            nil,
+            background_color,
+        )
+    }
 }
 
 draw_mouse_magnifier :: proc(
@@ -711,6 +1272,73 @@ draw_mouse_magnifier :: proc(
         },
         rl.TextFormat("Cursor: %d, %d", mouse_x, mouse_y),
     )
+}
+
+export_lens_downsample_png :: proc(
+    source_texture: rl.Texture2D,
+    lens_bounds: rl.Rectangle,
+    pixel_scale: i32,
+    next_export_index: ^int,
+) -> (path: string, ok: bool) {
+    if pixel_scale <= 0 {
+        return "", false
+    }
+
+    image := rl.LoadImageFromTexture(source_texture)
+    if image.data == nil {
+        return "", false
+    }
+    defer rl.UnloadImage(image)
+
+    // RenderTexture readback is vertically inverted. Crop in readback space,
+    // then flip the cropped image so the exported PNG matches the lens view.
+    crop_x := c.int(math.round(lens_bounds.x / f32(pixel_scale)))
+    logical_crop_y := c.int(math.round(lens_bounds.y / f32(pixel_scale)))
+    crop_width := c.int(math.round(lens_bounds.width / f32(pixel_scale)))
+    crop_height := c.int(math.round(lens_bounds.height / f32(pixel_scale)))
+    crop_y := image.height - logical_crop_y - crop_height
+
+    if crop_x < 0 || crop_y < 0 || crop_width <= 0 || crop_height <= 0 ||
+       crop_x + crop_width > image.width || crop_y + crop_height > image.height {
+        log.errorf(
+            "Lens export crop is outside the downsample target: crop(%d, %d, %d, %d), target(%d, %d)",
+            crop_x,
+            crop_y,
+            crop_width,
+            crop_height,
+            image.width,
+            image.height,
+        )
+        return "", false
+    }
+
+    rl.ImageCrop(
+        &image,
+        {
+            f32(crop_x),
+            f32(crop_y),
+            f32(crop_width),
+            f32(crop_height),
+        },
+    )
+    rl.ImageFlipVertical(&image)
+    rl.ImageFormat(&image, .UNCOMPRESSED_R8G8B8A8)
+
+    // Never overwrite a previous export. Continue from the next available
+    // sequence number even when files already exist from an earlier run.
+    for {
+        candidate := fmt.tprintf("lens_downsample_%03d.png", next_export_index^)
+        next_export_index^ += 1
+        candidate_cstr := strings.clone_to_cstring(candidate, context.temp_allocator)
+        if !rl.FileExists(candidate_cstr) {
+            path = strings.clone(candidate)
+            break
+        }
+    }
+
+    path_cstr := strings.clone_to_cstring(path, context.temp_allocator)
+    ok = rl.ExportImage(image, path_cstr)
+    return
 }
 
 update_camera_controls :: proc(
@@ -1008,12 +1636,10 @@ main :: proc() {
 
     rl.SetTargetFPS(60);
 
-    fs_last_time, ok := get_file_mod_time(FS_PATH);
-    shader := rl.LoadShader(VS_PATH, FS_PATH);
-    defer rl.UnloadShader(shader);
-    assert(ok);
-    assert(rl.IsShaderValid(shader))
-    log.info("Initial fragment shader modification time: %s", fs_last_time);
+    shader, shader_source, shader_ok := load_shader_with_includes(VS_PATH, FS_PATH)
+    defer rl.UnloadShader(shader)
+    defer destroy_preprocessed_shader_program_source(&shader_source)
+    assert(shader_ok)
 
     downscale_shader, downscale_source, downscale_ok := load_fragment_shader_with_includes(
         DOWNSCALE_FS_PATH,
@@ -1022,11 +1648,15 @@ main :: proc() {
     defer destroy_preprocessed_shader_source(&downscale_source)
     assert(downscale_ok)
 
-    mask_shader := rl.LoadShader(nil, MASK_FS_PATH)
-    assert(rl.IsShaderValid(mask_shader))
-    mask_material := rl.LoadMaterialDefault()
-    defer rl.UnloadMaterial(mask_material)
-    mask_material.shader = mask_shader
+    cel_band_shader, cel_band_source, cel_band_ok := load_shader_with_includes(
+        VS_PATH,
+        CEL_BAND_FS_PATH,
+    )
+    defer destroy_preprocessed_shader_program_source(&cel_band_source)
+    assert(cel_band_ok)
+    cel_band_material := rl.LoadMaterialDefault()
+    defer rl.UnloadMaterial(cel_band_material)
+    cel_band_material.shader = cel_band_shader
 
     mask_downscale_shader, mask_downscale_source, mask_downscale_ok :=
         load_fragment_shader_with_includes(MASK_DOWNSCALE_FS_PATH)
@@ -1035,7 +1665,9 @@ main :: proc() {
     assert(mask_downscale_ok)
 
     model: rl.Model
+    animation_playback: Animation_Playback
     defer {
+        destroy_animation_playback(&animation_playback)
         if is_model_loaded(model) {
             rl.UnloadModel(model)
         }
@@ -1068,6 +1700,11 @@ main :: proc() {
         initial_model := load_model_source(&model_assets, initial_index)
         if is_model_loaded(initial_model) {
             model = initial_model
+            animation_playback = load_animation_playback(
+                model,
+                model_assets.paths[initial_index],
+                model_assets.kinds[initial_index],
+            )
             model_center = get_model_center(model)
             loaded_model_index = c.int(initial_index)
             model_active_index = loaded_model_index
@@ -1092,8 +1729,10 @@ main :: proc() {
     screen_height := rl.GetScreenHeight()
     scene_target := rl.LoadRenderTexture(screen_width, screen_height)
     defer rl.UnloadRenderTexture(scene_target)
-    mask_scene_target := rl.LoadRenderTexture(screen_width, screen_height)
-    defer rl.UnloadRenderTexture(mask_scene_target)
+    cel_band_scene_target := rl.LoadRenderTexture(screen_width, screen_height)
+    defer rl.UnloadRenderTexture(cel_band_scene_target)
+    rl.SetTextureFilter(cel_band_scene_target.texture, .POINT)
+    rl.SetTextureWrap(cel_band_scene_target.texture, .CLAMP)
 
     pixel_width := screen_width / PIXEL_SCALE
     pixel_height := screen_height / PIXEL_SCALE
@@ -1111,8 +1750,11 @@ main :: proc() {
     target_resolution := [2]f32{f32(pixel_width), f32(pixel_height)}
     downscale_source_resolution_loc := rl.GetShaderLocation(downscale_shader, "u_source_resolution")
     downscale_target_resolution_loc := rl.GetShaderLocation(downscale_shader, "u_target_resolution")
-    downscale_time_loc := rl.GetShaderLocation(downscale_shader, "u_time")
-    downscale_mask_texture_loc := rl.GetShaderLocation(downscale_shader, "u_mask_texture")
+    downscale_cel_band_texture_loc := rl.GetShaderLocation(downscale_shader, "u_cel_band_texture")
+    downscale_color_cluster_threshold_loc := rl.GetShaderLocation(
+        downscale_shader,
+        "u_color_cluster_threshold",
+    )
     mask_downscale_source_resolution_loc := rl.GetShaderLocation(
         mask_downscale_shader,
         "u_source_resolution",
@@ -1121,12 +1763,37 @@ main :: proc() {
         mask_downscale_shader,
         "u_target_resolution",
     )
+    color_cluster_threshold := f32(DEFAULT_COLOR_CLUSTER_THRESHOLD)
 
     lens_mode := Lens_Mode.PIXELATED
+    scene_background_color := rl.BLACK
+    background_picker_open := false
     model_browser_bounds := rl.Rectangle{f32(screen_width) - 280, 10, 270, 310}
     camera_controls_bounds := rl.Rectangle{f32(screen_width) - 280, 330, 270, 250}
+    background_controls_bounds := rl.Rectangle{
+        f32(screen_width) - 280,
+        590,
+        270,
+        120,
+    }
+    background_picker_bounds := rl.Rectangle{
+        f32(screen_width) - 510,
+        360,
+        220,
+        212,
+    }
+    animation_controls_bounds := rl.Rectangle{10, 190, 280, 190}
     magnifier_bounds := rl.Rectangle{10, f32(screen_height) - 194, 148, 184}
     coverage_alpha: f32 = -1
+    next_export_index := 1
+    last_export_path: string
+    defer {
+        if len(last_export_path) > 0 {
+            delete(last_export_path)
+        }
+    }
+    last_export_succeeded := false
+    last_export_time: f64 = -10
 
     for !rl.WindowShouldClose() {
         window_focused := rl.IsWindowFocused()
@@ -1145,9 +1812,23 @@ main :: proc() {
             ui_mouse_position,
             camera_controls_bounds,
         )
+        mouse_over_background_controls := rl.CheckCollisionPointRec(
+            ui_mouse_position,
+            background_controls_bounds,
+        )
+        mouse_over_animation_controls := has_playable_animations(
+            &animation_playback,
+        ) && rl.CheckCollisionPointRec(
+            ui_mouse_position,
+            animation_controls_bounds,
+        )
         if window_focused &&
+           !background_picker_open &&
+           !animation_playback.dropdown_open &&
            !mouse_over_model_browser &&
-           !mouse_over_camera_controls {
+           !mouse_over_camera_controls &&
+           !mouse_over_background_controls &&
+           !mouse_over_animation_controls {
             update_camera_controls(&control_camera, max_size, model_center)
         }
         camera = control_camera
@@ -1162,6 +1843,7 @@ main :: proc() {
             pixel_height,
         )
 
+        export_requested := false
         if window_focused {
             if rl.IsKeyPressed(.ONE) || rl.IsKeyPressed(.KP_1) {
                 lens_mode = .PIXELATED
@@ -1175,22 +1857,32 @@ main :: proc() {
                 lens_mode = .COVERAGE_MASK
                 log.info("Lens mode: 16-sample coverage mask")
             }
+            if rl.IsKeyPressed(.P) {
+                export_requested = true
+            }
+            if has_playable_animations(&animation_playback) &&
+               !animation_playback.dropdown_open &&
+               rl.IsKeyPressed(.SPACE) {
+                animation_playback.is_playing = !animation_playback.is_playing
+            }
         }
 
-        fs_curr_time, ok := get_file_mod_time(FS_PATH);
-        assert(ok);
-        if fs_curr_time != fs_last_time {
-            log.info("Fragment shader modified at: %s", fs_curr_time);
-            fs_last_time = fs_curr_time;
+        update_animation_playback(&animation_playback, model)
 
-            new_shader := rl.LoadShader(VS_PATH, FS_PATH);
-            if rl.IsShaderValid(new_shader) {
-                rl.UnloadShader(shader);
-                shader = new_shader;
-            } else {
-                log.error("Failed to reload shader. Keeping the old shader.");
-                rl.UnloadShader(new_shader);
-            }
+        _ = reload_shader_with_includes(
+            VS_PATH,
+            FS_PATH,
+            &shader,
+            &shader_source,
+        )
+
+        if reload_shader_with_includes(
+            VS_PATH,
+            CEL_BAND_FS_PATH,
+            &cel_band_shader,
+            &cel_band_source,
+        ) {
+            cel_band_material.shader = cel_band_shader
         }
 
         if reload_fragment_shader_with_includes(
@@ -1200,8 +1892,14 @@ main :: proc() {
         ) {
             downscale_source_resolution_loc = rl.GetShaderLocation(downscale_shader, "u_source_resolution")
             downscale_target_resolution_loc = rl.GetShaderLocation(downscale_shader, "u_target_resolution")
-            downscale_time_loc = rl.GetShaderLocation(downscale_shader, "u_time")
-            downscale_mask_texture_loc = rl.GetShaderLocation(downscale_shader, "u_mask_texture")
+            downscale_cel_band_texture_loc = rl.GetShaderLocation(
+                downscale_shader,
+                "u_cel_band_texture",
+            )
+            downscale_color_cluster_threshold_loc = rl.GetShaderLocation(
+                downscale_shader,
+                "u_color_cluster_threshold",
+            )
         }
 
         if reload_fragment_shader_with_includes(
@@ -1219,10 +1917,14 @@ main :: proc() {
             )
         }
 
-        time_val := f32(rl.GetTime());
         rl.SetShaderValue(downscale_shader, downscale_source_resolution_loc, &source_resolution, .VEC2)
         rl.SetShaderValue(downscale_shader, downscale_target_resolution_loc, &target_resolution, .VEC2)
-        rl.SetShaderValue(downscale_shader, downscale_time_loc, &time_val, .FLOAT)
+        rl.SetShaderValue(
+            downscale_shader,
+            downscale_color_cluster_threshold_loc,
+            &color_cluster_threshold,
+            .FLOAT,
+        )
         rl.SetShaderValue(
             mask_downscale_shader,
             mask_downscale_source_resolution_loc,
@@ -1240,8 +1942,8 @@ main :: proc() {
             draw_scene(shader, model, camera)
         rl.EndTextureMode()
 
-        rl.BeginTextureMode(mask_scene_target)
-            draw_model_mask(mask_material, model, camera)
+        rl.BeginTextureMode(cel_band_scene_target)
+            draw_model_cel_bands(cel_band_material, model, camera)
         rl.EndTextureMode()
 
         scene_source := rl.Rectangle{
@@ -1254,8 +1956,8 @@ main :: proc() {
             rl.BeginShaderMode(downscale_shader)
                 rl.SetShaderValueTexture(
                     downscale_shader,
-                    downscale_mask_texture_loc,
-                    mask_scene_target.texture,
+                    downscale_cel_band_texture_loc,
+                    cel_band_scene_target.texture,
                 )
                 rl.DrawTexturePro(
                     scene_target.texture,
@@ -1273,7 +1975,7 @@ main :: proc() {
             rl.BeginBlendMode(.ALPHA_PREMULTIPLY)
             rl.BeginShaderMode(mask_downscale_shader)
                 rl.DrawTexturePro(
-                    mask_scene_target.texture,
+                    cel_band_scene_target.texture,
                     scene_source,
                     {0, 0, f32(pixel_width), f32(pixel_height)},
                     {},
@@ -1285,7 +1987,7 @@ main :: proc() {
         rl.EndTextureMode()
 
         rl.BeginTextureMode(composite_target)
-            rl.ClearBackground(rl.BLACK)
+            rl.ClearBackground(scene_background_color)
             rl.DrawTexturePro(
                 scene_target.texture,
                 scene_source,
@@ -1335,7 +2037,7 @@ main :: proc() {
                 lens_texture = mask_pixel_target.texture
             }
             if lens_mode == .COVERAGE_MASK {
-                rl.DrawRectangleRec(centered_rect, rl.BLACK)
+                rl.DrawRectangleRec(centered_rect, scene_background_color)
                 rl.BeginBlendMode(.ALPHA_PREMULTIPLY)
                     rl.DrawTexturePro(
                         lens_texture,
@@ -1366,6 +2068,42 @@ main :: proc() {
                 coverage_alpha,
             )
             rl.DrawRectangleLinesEx(centered_rect, 2, rl.WHITE)
+
+            export_button_bounds := rl.Rectangle{
+                centered_rect.x + (centered_rect.width - 300) / 2,
+                centered_rect.y + centered_rect.height + 10,
+                300,
+                28,
+            }
+            if rl.GuiButton(
+                export_button_bounds,
+                rl.TextFormat(
+                    "EXPORT %d x %d TRANSPARENT PNG [P]",
+                    c.int(LENS_WIDTH / PIXEL_SCALE),
+                    c.int(LENS_HEIGHT / PIXEL_SCALE),
+                ),
+            ) {
+                export_requested = true
+            }
+            if rl.GetTime() - last_export_time < 5.0 {
+                export_status: cstring = "PNG export failed"
+                if last_export_succeeded {
+                    last_export_path_cstr := strings.clone_to_cstring(
+                        last_export_path,
+                        context.temp_allocator,
+                    )
+                    export_status = rl.TextFormat("Saved: %s", last_export_path_cstr)
+                }
+                rl.GuiLabel(
+                    {
+                        centered_rect.x,
+                        export_button_bounds.y + export_button_bounds.height + 2,
+                        centered_rect.width,
+                        18,
+                    },
+                    export_status,
+                )
+            }
             draw_model_browser(
                 model_browser_bounds,
                 &model_assets,
@@ -1375,6 +2113,10 @@ main :: proc() {
                 loaded_model_index,
                 model_load_failed,
             )
+            draw_animation_controls(
+                animation_controls_bounds,
+                &animation_playback,
+            )
             draw_camera_controls(
                 camera_controls_bounds,
                 &control_camera,
@@ -1383,10 +2125,35 @@ main :: proc() {
                 pixel_width,
                 pixel_height,
             )
+            draw_background_controls(
+                background_controls_bounds,
+                background_picker_bounds,
+                &scene_background_color,
+                &background_picker_open,
+            )
         rl.EndTextureMode()
 
+        if export_requested {
+            if len(last_export_path) > 0 {
+                delete(last_export_path)
+                last_export_path = ""
+            }
+            last_export_path, last_export_succeeded = export_lens_downsample_png(
+                pixel_target.texture,
+                centered_rect,
+                PIXEL_SCALE,
+                &next_export_index,
+            )
+            last_export_time = rl.GetTime()
+            if last_export_succeeded {
+                log.infof("Exported transparent lens PNG: %s", last_export_path)
+            } else {
+                log.error("Failed to export transparent lens PNG")
+            }
+        }
+
         rl.BeginDrawing()
-            rl.ClearBackground(rl.BLACK)
+            rl.ClearBackground(scene_background_color)
             rl.DrawTexturePro(
                 composite_target.texture,
                 scene_source,
@@ -1411,10 +2178,17 @@ main :: proc() {
             requested_label := model_assets.labels[requested_index]
             new_model := load_model_source(&model_assets, requested_index)
             if is_model_loaded(new_model) {
+                new_animation_playback := load_animation_playback(
+                    new_model,
+                    model_assets.paths[requested_index],
+                    model_assets.kinds[requested_index],
+                )
+                destroy_animation_playback(&animation_playback)
                 if is_model_loaded(model) {
                     rl.UnloadModel(model)
                 }
                 model = new_model
+                animation_playback = new_animation_playback
                 model_center = get_model_center(model)
                 loaded_model_index = model_active_index
                 max_size = frame_camera_to_model(

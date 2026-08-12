@@ -13,14 +13,12 @@ out vec4 finalColor;
 #include "downsample_common.glsl"
 
 void main() {
-    float coverage = sample_downscaled_texture(
-        texture0,
+    float coverage = sample_downscaled_alpha(
         texture0,
         fragTexCoord,
         u_source_resolution,
-        u_target_resolution,
-        false
-    ).a;
+        u_target_resolution
+    );
     // Store coverage in both grayscale and alpha. Grayscale makes the mask
     // directly inspectable; alpha keeps the numeric coverage available.
     finalColor = vec4(vec3(coverage), coverage);
