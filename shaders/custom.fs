@@ -2,15 +2,26 @@
 
 in vec2 fragTexCoord;
 in vec4 fragColor;
+in vec3 fragNormal;
 
 out vec4 finalColor;
 
-uniform float u_time;
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
 
 void main() {
-    float red = 0.5 + 0.5 * sin(u_time);
-    float green = 0.5 + 0.5 * cos(u_time);
-    float blue = 0.5 + 0.5 * sin(u_time * 0.5);
-    // finalColor = vec4(red, green, blue, 1.0);
-    finalColor = vec4(1.0, 0.0, 0.0, 1.0); // Solid red color
+    vec4 albedo = texture(texture0, fragTexCoord) * colDiffuse * fragColor;
+
+    // Three discrete Lambert bands produce a simple cel-shaded look.
+    vec3 lightDirection = normalize(vec3(0.35, 0.80, 0.55));
+    float diffuse = max(dot(normalize(fragNormal), lightDirection), 0.0);
+
+    float lightBand = 0.32;
+    if (diffuse > 0.65) {
+        lightBand = 1.0;
+    } else if (diffuse > 0.25) {
+        lightBand = 0.62;
+    }
+
+    finalColor = vec4(albedo.rgb * lightBand, albedo.a);
 }
