@@ -269,7 +269,7 @@ scan_model_assets :: proc(assets_root: string) -> Model_Assets {
     for asset_entry in os.walker_walk(&directory_walker) {
         if failed_path, walk_error := os.walker_error(&directory_walker);
            walk_error != nil {
-            log.error("Failed to scan model asset %s: %v", failed_path, walk_error)
+            log.errorf("Failed to scan model asset %s: %v", failed_path, walk_error)
             continue
         }
         if asset_entry.type != .Regular ||
@@ -309,7 +309,7 @@ scan_model_assets :: proc(assets_root: string) -> Model_Assets {
         append(&assets.kinds, builtin_source.kind)
     }
 
-    log.info(
+    log.infof(
         "Found %d model assets under %s and added 3 built-in models",
         len(assets.paths) - 3,
         assets_root,
@@ -1982,10 +1982,27 @@ draw_orthographic_snap_debug :: proc(
     }
 }
 
-main :: proc() {
+run_application :: proc() -> int {
     console_logger := log.create_console_logger()
     defer log.destroy_console_logger(console_logger)
     context.logger = console_logger
+
+    capture_parse_result := parse_capture_options(os.args[1:])
+    defer destroy_capture_options(&capture_parse_result.options)
+    if capture_parse_result.options.help_requested {
+        print_capture_usage()
+        return 0
+    }
+    if capture_parse_result.error != .NONE {
+        log.errorf(
+            "%s: %s",
+            capture_parse_error_message(capture_parse_result.error),
+            capture_parse_result.error_argument,
+        )
+        print_capture_usage()
+        return 2
+    }
+    capture_options := &capture_parse_result.options
 
     model_assets := scan_model_assets(ASSETS_PATH)
     defer destroy_model_assets(&model_assets)
@@ -1993,9 +2010,22 @@ main :: proc() {
     rl.SetTraceLogLevel(.WARNING);
     // inspect_glb(DEFAULT_MODEL_PATH);
 
-    rl.SetConfigFlags({.WINDOW_TOPMOST});
-    rl.InitWindow(1280, 720, "Lab0");
+    if capture_options.enabled {
+        if capture_options.hide_window {
+            rl.SetConfigFlags({.WINDOW_ALWAYS_RUN, .WINDOW_HIDDEN})
+        } else {
+            rl.SetConfigFlags({.WINDOW_ALWAYS_RUN})
+        }
+    } else {
+        rl.SetConfigFlags({.WINDOW_TOPMOST})
+    }
+    rl.InitWindow(1280, 720, "Lab0")
     defer rl.CloseWindow();
+	if capture_options.enabled {
+		// Keep raygui hover and the coverage probe independent of the desktop's
+		// shared cursor while a deterministic capture is running.
+		rl.SetMouseOffset(-100000, -100000)
+	}
 	rgl.SetClipPlanes(0.001, 1000.0)
 
     rl.SetTargetFPS(60);
@@ -2058,11 +2088,27 @@ main :: proc() {
 
     if len(model_assets.paths) > 0 {
         initial_model_index := 0
-        for model_path, model_index in model_assets.paths {
-            if model_path == DEFAULT_MODEL_PATH ||
-               strings.has_suffix(model_path, "/" + DEFAULT_MODEL_PATH) {
-                initial_model_index = model_index
-                break
+        if capture_options.enabled && len(capture_options.model_source) > 0 {
+            requested_model_index, requested_model_found :=
+                find_capture_model_source(
+                    &model_assets,
+                    capture_options.model_source,
+                )
+            if !requested_model_found {
+                log.errorf(
+                    "Capture model source was not found: %s",
+                    capture_options.model_source,
+                )
+                return 2
+            }
+            initial_model_index = requested_model_index
+        } else {
+            for model_path, model_index in model_assets.paths {
+                if model_path == DEFAULT_MODEL_PATH ||
+                   strings.has_suffix(model_path, "/" + DEFAULT_MODEL_PATH) {
+                    initial_model_index = model_index
+                    break
+                }
             }
         }
 
@@ -2086,17 +2132,78 @@ main :: proc() {
                 model_assets.kinds[initial_model_index],
                 &render_camera,
             )
-            log.info(
+            if capture_options.enabled {
+                apply_capture_view(
+                    capture_options.view,
+                    &render_camera,
+                    model_center,
+                    scene_size,
+                )
+                animation_playback.is_playing = false
+                if capture_options.animation_frame_set ||
+                   capture_options.frame_range_set {
+                    capture_animation, capture_animation_found :=
+                        get_active_animation(&animation_playback)
+                    if !capture_animation_found {
+                        if capture_options.frame_range_set {
+                            log.errorf(
+                                "Capture frame range %d:%d:%d was requested, but %s has no playable animation",
+                                capture_options.frame_range_start,
+                                capture_options.frame_range_end,
+                                capture_options.frame_range_step,
+                                model_assets.paths[initial_model_index],
+                            )
+                        } else {
+                            log.errorf(
+                                "Capture frame %.3f was requested, but %s has no playable animation",
+                                capture_options.animation_frame,
+                                model_assets.paths[initial_model_index],
+                            )
+                        }
+                        return 2
+                    }
+                    capture_last_frame := f32(max(
+                        capture_animation.keyframeCount - 1,
+                        0,
+                    ))
+                    requested_last_frame := capture_options.animation_frame
+                    if capture_options.frame_range_set {
+                        requested_last_frame = f32(capture_options.frame_range_end)
+                    }
+                    if requested_last_frame > capture_last_frame {
+                        log.errorf(
+                            "Capture frame %.3f exceeds the animation's last frame %.3f",
+                            requested_last_frame,
+                            capture_last_frame,
+                        )
+                        return 2
+                    }
+                    requested_first_frame := capture_options.animation_frame
+                    if capture_options.frame_range_set {
+                        requested_first_frame = f32(capture_options.frame_range_start)
+                    }
+                    animation_playback.current_frame = requested_first_frame
+                    animation_playback.pose_dirty = true
+                    update_animation_playback(
+                        &animation_playback,
+                        active_model,
+                    )
+                }
+            }
+            log.infof(
                 "Loaded initial model: %s",
                 model_assets.paths[initial_model_index],
             )
         } else {
             rl.UnloadModel(initial_model)
             model_load_failed = true
-            log.error(
+            log.errorf(
                 "Failed to load initial model: %s",
                 model_assets.paths[initial_model_index],
             )
+            if capture_options.enabled {
+                return 1
+            }
         }
     }
     // Keep continuous input state separate from the quantized render camera.
@@ -2163,6 +2270,9 @@ main :: proc() {
     color_cluster_threshold := f32(DEFAULT_COLOR_CLUSTER_THRESHOLD)
 
     lens_mode := Lens_Mode.PIXELATED
+    if capture_options.enabled {
+        lens_mode = capture_options.lens_mode
+    }
     scene_background_color := rl.BLACK
     background_picker_open := false
     model_browser_bounds := rl.Rectangle{f32(screen_width) - 280, 10, 270, 310}
@@ -2191,13 +2301,24 @@ main :: proc() {
     }
     last_export_succeeded := false
     last_export_time: f64 = -10
+    capture_complete := false
+    capture_succeeded := false
+    rendered_capture_frames := 0
+    capture_sequence_frame := capture_options.frame_range_start
+    captured_sequence_frames := 0
 
-    for !rl.WindowShouldClose() {
+    for !rl.WindowShouldClose() && !capture_complete {
         window_focused := rl.IsWindowFocused()
-        if window_focused {
-            rl.SetWindowOpacity(1.0)
+        if capture_options.enabled {
+            // A capture never consumes live desktop input, even when its
+            // window is shown for debugging.
+            window_focused = false
         } else {
-            rl.SetWindowOpacity(0.5)
+            if window_focused {
+                rl.SetWindowOpacity(1.0)
+            } else {
+                rl.SetWindowOpacity(0.5)
+            }
         }
 
         search_shortcut_modifier := rl.IsKeyDown(.LEFT_CONTROL) ||
@@ -2277,58 +2398,60 @@ main :: proc() {
 
         update_animation_playback(&animation_playback, active_model)
 
-        _ = reload_shader_with_includes(
-            VS_PATH,
-            FS_PATH,
-            &scene_shader,
-            &scene_shader_source,
-        )
+        if !capture_options.enabled {
+            _ = reload_shader_with_includes(
+                VS_PATH,
+                FS_PATH,
+                &scene_shader,
+                &scene_shader_source,
+            )
 
-        if reload_shader_with_includes(
-            VS_PATH,
-            CEL_BAND_FS_PATH,
-            &cel_band_shader,
-            &cel_band_shader_source,
-        ) {
-            cel_band_material.shader = cel_band_shader
-        }
+            if reload_shader_with_includes(
+                VS_PATH,
+                CEL_BAND_FS_PATH,
+                &cel_band_shader,
+                &cel_band_shader_source,
+            ) {
+                cel_band_material.shader = cel_band_shader
+            }
 
-        if reload_fragment_shader_with_includes(
-            DOWNSCALE_FS_PATH,
-            &downscale_shader,
-            &downscale_shader_source,
-        ) {
-            downscale_source_resolution_location = rl.GetShaderLocation(
-                downscale_shader,
-                "u_source_resolution",
-            )
-            downscale_target_resolution_location = rl.GetShaderLocation(
-                downscale_shader,
-                "u_target_resolution",
-            )
-            downscale_cel_band_texture_location = rl.GetShaderLocation(
-                downscale_shader,
-                "u_cel_band_texture",
-            )
-            downscale_color_cluster_threshold_location = rl.GetShaderLocation(
-                downscale_shader,
-                "u_color_cluster_threshold",
-            )
-        }
+            if reload_fragment_shader_with_includes(
+                DOWNSCALE_FS_PATH,
+                &downscale_shader,
+                &downscale_shader_source,
+            ) {
+                downscale_source_resolution_location = rl.GetShaderLocation(
+                    downscale_shader,
+                    "u_source_resolution",
+                )
+                downscale_target_resolution_location = rl.GetShaderLocation(
+                    downscale_shader,
+                    "u_target_resolution",
+                )
+                downscale_cel_band_texture_location = rl.GetShaderLocation(
+                    downscale_shader,
+                    "u_cel_band_texture",
+                )
+                downscale_color_cluster_threshold_location = rl.GetShaderLocation(
+                    downscale_shader,
+                    "u_color_cluster_threshold",
+                )
+            }
 
-        if reload_fragment_shader_with_includes(
-            MASK_DOWNSCALE_FS_PATH,
-            &mask_downscale_shader,
-            &mask_downscale_shader_source,
-        ) {
-            mask_downscale_source_resolution_location = rl.GetShaderLocation(
-                mask_downscale_shader,
-                "u_source_resolution",
-            )
-            mask_downscale_target_resolution_location = rl.GetShaderLocation(
-                mask_downscale_shader,
-                "u_target_resolution",
-            )
+            if reload_fragment_shader_with_includes(
+                MASK_DOWNSCALE_FS_PATH,
+                &mask_downscale_shader,
+                &mask_downscale_shader_source,
+            ) {
+                mask_downscale_source_resolution_location = rl.GetShaderLocation(
+                    mask_downscale_shader,
+                    "u_source_resolution",
+                )
+                mask_downscale_target_resolution_location = rl.GetShaderLocation(
+                    mask_downscale_shader,
+                    "u_target_resolution",
+                )
+            }
         }
 
         rl.SetShaderValue(
@@ -2603,6 +2726,76 @@ main :: proc() {
             )
         rl.EndDrawing()
 
+        if capture_options.enabled {
+            rendered_capture_frames += 1
+            if rendered_capture_frames >= capture_options.warmup_frames {
+                capture_output_path := capture_options.output_path
+                capture_output_path_owned := false
+                if capture_options.frame_range_set {
+                    capture_output_path = format_capture_sequence_output_path(
+                        capture_options.output_path,
+                        capture_options.output_template,
+                        capture_sequence_frame,
+                    )
+                    capture_output_path_owned = true
+                }
+                capture_succeeded = export_capture_target(
+                    capture_options,
+                    capture_output_path,
+                    composite_render_target,
+                    scene_render_target,
+                    downsample_render_target,
+                    coverage_mask_render_target,
+                    lens_bounds,
+                )
+                if capture_succeeded {
+                    if capture_options.frame_range_set {
+                        captured_sequence_frames += 1
+                        log.infof(
+                            "Captured case %s frame %d to %s",
+                            capture_options.case_name,
+                            capture_sequence_frame,
+                            capture_output_path,
+                        )
+                    } else {
+                        log.infof(
+                            "Captured case %s to %s",
+                            capture_options.case_name,
+                            capture_output_path,
+                        )
+                    }
+                } else {
+                    log.errorf(
+                        "Failed to capture case %s to %s",
+                        capture_options.case_name,
+                        capture_output_path,
+                    )
+                }
+                if capture_output_path_owned {
+                    delete(capture_output_path)
+                }
+
+                if !capture_succeeded || !capture_options.frame_range_set {
+                    capture_complete = true
+                } else if capture_options.frame_range_step <=
+                          capture_options.frame_range_end &&
+                          capture_sequence_frame <=
+                          capture_options.frame_range_end -
+                          capture_options.frame_range_step {
+                    capture_sequence_frame += capture_options.frame_range_step
+                    animation_playback.current_frame = f32(capture_sequence_frame)
+                    animation_playback.pose_dirty = true
+                } else {
+                    capture_complete = true
+                    log.infof(
+                        "Captured sequence case %s with %d frame(s)",
+                        capture_options.case_name,
+                        captured_sequence_frames,
+                    )
+                }
+            }
+        }
+
         if model_active_index != loaded_model_index &&
            model_active_index >= 0 &&
             int(model_active_index) < len(model_assets.paths) {
@@ -2637,7 +2830,7 @@ main :: proc() {
                 )
                 control_camera = render_camera
                 model_load_failed = false
-                log.info("Loaded model: %s", requested_model_label)
+                log.infof("Loaded model: %s", requested_model_label)
             } else {
                 rl.UnloadModel(requested_model)
                 model_active_index = loaded_model_index
@@ -2646,8 +2839,20 @@ main :: proc() {
                     loaded_model_index,
                 )
                 model_load_failed = true
-                log.error("Failed to load model: %s", requested_model_label)
+                log.errorf("Failed to load model: %s", requested_model_label)
             }
         }
+    }
+
+    if capture_options.enabled && (!capture_complete || !capture_succeeded) {
+        return 1
+    }
+    return 0
+}
+
+main :: proc() {
+    exit_code := run_application()
+    if exit_code != 0 {
+        os.exit(exit_code)
     }
 }
