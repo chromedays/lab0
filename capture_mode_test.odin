@@ -2,6 +2,7 @@ package main
 
 import "core:os"
 import "core:path/filepath"
+import "core:strings"
 import "core:testing"
 
 @test
@@ -32,9 +33,9 @@ capture_options_build_a_deterministic_default_output :: proc(t: ^testing.T) {
 @test
 capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
     result := parse_capture_options({
-        "--capture-case", "female-run",
-        "--capture-output", "artifacts/female-run.png",
-        "--capture-model", "assets/Female_Female Poses_OBJ_Female_Running.glb",
+        "--capture-case", "cesium-walk",
+        "--capture-output", "artifacts/cesium-walk.png",
+        "--capture-model", "assets/CesiumMan.glb",
         "--capture-view", "isometric",
         "--capture-mode", "coverage-mask",
         "--capture-target", "lens",
@@ -45,13 +46,25 @@ capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
     defer destroy_capture_options(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.NONE)
-    testing.expect_value(t, result.options.output_path, "artifacts/female-run.png")
+    testing.expect_value(t, result.options.output_path, "artifacts/cesium-walk.png")
     testing.expect_value(t, result.options.view, Capture_View.ISOMETRIC)
     testing.expect_value(t, result.options.lens_mode, Lens_Mode.COVERAGE_MASK)
     testing.expect_value(t, result.options.target, Capture_Target.LENS)
     testing.expect_value(t, result.options.animation_frame, f32(12.5))
     testing.expect_value(t, result.options.warmup_frames, 4)
     testing.expect(t, !result.options.hide_window)
+}
+
+@test
+capture_options_reject_an_empty_model_source :: proc(t: ^testing.T) {
+    result := parse_capture_options({
+        "--capture-case", "smoke",
+        "--capture-model", "",
+    })
+    defer destroy_capture_options(&result.options)
+
+    testing.expect_value(t, result.error, Capture_Parse_Error.INVALID_MODEL)
+    testing.expect(t, !result.options.enabled)
 }
 
 @test
@@ -216,6 +229,45 @@ capture_model_source_accepts_a_relative_asset_path :: proc(t: ^testing.T) {
     )
     testing.expect(t, source_found)
     testing.expect_value(t, source_index, 0)
+}
+
+@test
+bundled_textured_models_use_supported_embedded_pngs :: proc(t: ^testing.T) {
+    model_paths := []string{
+        "assets/CesiumMan.glb",
+        "assets/CesiumMan.gltf",
+        "assets/godotman.glb",
+    }
+    for model_path in model_paths {
+        model_bytes, read_error := os.read_entire_file(
+            model_path,
+            context.allocator,
+        )
+        if !testing.expectf(
+            t,
+            read_error == nil,
+            "failed to read bundled model %s: %v",
+            model_path,
+            read_error,
+        ) {
+            continue
+        }
+
+        model_contents := string(model_bytes)
+        testing.expectf(
+            t,
+            strings.contains(model_contents, "image/png"),
+            "%s must embed its texture as PNG",
+            model_path,
+        )
+        testing.expectf(
+            t,
+            !strings.contains(model_contents, "image/jpeg"),
+            "%s must not embed an unsupported JPEG texture",
+            model_path,
+        )
+        delete(model_bytes)
+    }
 }
 
 @test

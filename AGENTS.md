@@ -49,7 +49,7 @@ Fixed animation pose:
 ```sh
 /tmp/lab0-capture-worker-a \
   --capture-case runner-frame-24 \
-  --capture-model "assets/Female_Female Poses_OBJ_Female_Running.glb" \
+  --capture-model assets/CesiumMan.glb \
   --capture-frame 24 \
   --capture-view isometric \
   --capture-target scene \
@@ -186,19 +186,11 @@ desktop screenshot, mouse event, keyboard event, or System Events automation is
 required. A truly display-independent CI environment would require a separate
 software or offscreen rendering backend.
 
-## Known non-fatal asset warning
+## Asset warnings
 
-`CesiumMan.glb` can emit these raylib warnings while still loading its playable
-animation, geometry, and requested render output successfully:
-
-```text
-IMAGE: Data format not supported
-IMAGE: Failed to load image data
-```
-
-Treat them as known non-fatal warnings only when the model reports a playable
-animation, the capture exits 0, and the output images pass visual and file
-validation. Do not generalize this exception to new warnings or missing output.
+Bundled GLB and GLTF textures use image formats supported by the raylib build.
+Treat `IMAGE` load warnings as validation failures even when geometry, animation,
+and PNG export otherwise succeed: a white fallback texture can hide lost albedo.
 
 ## Local reports and artifacts
 

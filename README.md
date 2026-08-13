@@ -28,7 +28,7 @@ The default output is `captures/<case-name>.png`. Give every concurrent worker a
 ```sh
 odin run . -- \
   --capture-case runner-frame-24 \
-  --capture-model "assets/Female_Female Poses_OBJ_Female_Running.glb" \
+  --capture-model assets/CesiumMan.glb \
   --capture-frame 24 \
   --capture-target lens \
   --capture-output artifacts/worker-2/runner-frame-24.png
@@ -42,12 +42,12 @@ process. The output template must contain exactly one `%d` or zero-padded
 
 ```sh
 odin run . -- \
-  --capture-case female-running \
-  --capture-model "assets/Female_Female Poses_OBJ_Female_Running.glb" \
+  --capture-case cesium-walk \
+  --capture-model assets/CesiumMan.glb \
   --capture-frame-range 0:24:2 \
   --capture-view isometric \
   --capture-target scene \
-  --capture-output "captures/female-running/frame-%04d.png"
+  --capture-output "captures/cesium-walk/frame-%04d.png"
 ```
 
 The range syntax is `start:end[:step]`; `step` defaults to `1`. Warmup frames

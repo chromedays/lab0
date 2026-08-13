@@ -31,6 +31,7 @@ Capture_Parse_Error :: enum {
     UNKNOWN_ARGUMENT,
     MISSING_CASE,
     INVALID_CASE,
+    INVALID_MODEL,
     INVALID_MODE,
     INVALID_VIEW,
     INVALID_TARGET,
@@ -94,6 +95,8 @@ capture_parse_error_message :: proc(parse_error: Capture_Parse_Error) -> string 
         return "capture options require --capture-case <name>"
     case .INVALID_CASE:
         return "capture case names may contain only letters, digits, '-' and '_'"
+    case .INVALID_MODEL:
+        return "capture model must be a non-empty asset path or built-in source"
     case .INVALID_MODE:
         return "capture mode must be pixelated, blended, or coverage-mask"
     case .INVALID_VIEW:
@@ -290,6 +293,11 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
             result.options.output_path = value
 
         case "--capture-model":
+            if len(value) == 0 {
+                result.error = .INVALID_MODEL
+                result.error_argument = value
+                return result
+            }
             result.options.model_source = value
 
         case "--capture-mode":
