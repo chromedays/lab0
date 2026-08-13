@@ -1,0 +1,604 @@
+package main
+
+import "core:fmt"
+import "core:log"
+import "core:math"
+import "core:os"
+import "core:path/filepath"
+import "core:strconv"
+import "core:strings"
+import rl "vendor:raylib"
+
+Capture_Target :: enum {
+    COMPOSITE,
+    LENS,
+    SCENE,
+    DOWNSAMPLE,
+    COVERAGE_MASK,
+}
+
+Capture_View :: enum {
+    DEFAULT,
+    X,
+    Y,
+    Z,
+    ISOMETRIC,
+}
+
+Capture_Parse_Error :: enum {
+    NONE,
+    MISSING_VALUE,
+    UNKNOWN_ARGUMENT,
+    MISSING_CASE,
+    INVALID_CASE,
+    INVALID_MODE,
+    INVALID_VIEW,
+    INVALID_TARGET,
+    INVALID_FRAME,
+    INVALID_FRAME_RANGE,
+    CONFLICTING_FRAME_OPTIONS,
+    INVALID_WARMUP,
+    INVALID_OUTPUT,
+    INVALID_OUTPUT_TEMPLATE,
+}
+
+Capture_Output_Template :: struct {
+    token_start: int,
+    token_end:   int,
+    width:       int,
+}
+
+Capture_Options :: struct {
+    enabled:             bool,
+    help_requested:      bool,
+    case_name:           string,
+    output_path:         string,
+    output_path_owned:   bool,
+    model_source:        string,
+    lens_mode:           Lens_Mode,
+    view:                Capture_View,
+    target:              Capture_Target,
+    animation_frame:     f32,
+    animation_frame_set: bool,
+    frame_range_set:     bool,
+    frame_range_start:   int,
+    frame_range_end:     int,
+    frame_range_step:    int,
+    output_template:     Capture_Output_Template,
+    warmup_frames:       int,
+    hide_window:         bool,
+}
+
+Capture_Parse_Result :: struct {
+    options:        Capture_Options,
+    error:          Capture_Parse_Error,
+    error_argument: string,
+}
+
+destroy_capture_options :: proc(options: ^Capture_Options) {
+    if options.output_path_owned && len(options.output_path) > 0 {
+        delete(options.output_path)
+    }
+    options^ = {}
+}
+
+capture_parse_error_message :: proc(parse_error: Capture_Parse_Error) -> string {
+    switch parse_error {
+    case .NONE:
+        return ""
+    case .MISSING_VALUE:
+        return "capture option requires a value"
+    case .UNKNOWN_ARGUMENT:
+        return "unknown capture option"
+    case .MISSING_CASE:
+        return "capture options require --capture-case <name>"
+    case .INVALID_CASE:
+        return "capture case names may contain only letters, digits, '-' and '_'"
+    case .INVALID_MODE:
+        return "capture mode must be pixelated, blended, or coverage-mask"
+    case .INVALID_VIEW:
+        return "capture view must be default, x, y, z, or isometric"
+    case .INVALID_TARGET:
+        return "capture target must be composite, lens, scene, downsample, or coverage-mask"
+    case .INVALID_FRAME:
+        return "capture frame must be a non-negative number"
+    case .INVALID_FRAME_RANGE:
+        return "capture frame range must be start:end[:step] with non-negative integers, start <= end, and step > 0"
+    case .CONFLICTING_FRAME_OPTIONS:
+        return "capture frame and capture frame range cannot be used together"
+    case .INVALID_WARMUP:
+        return "capture warmup must be an integer from 1 through 600"
+    case .INVALID_OUTPUT:
+        return "capture output must be a non-empty .png path"
+    case .INVALID_OUTPUT_TEMPLATE:
+        return "capture sequence output must contain exactly one %d or %0Nd frame token"
+    }
+    return "invalid capture configuration"
+}
+
+parse_capture_frame_range :: proc(value: string) -> (
+    start, end, step: int,
+    valid: bool,
+) {
+    parts := strings.split(value, ":", context.temp_allocator)
+    if len(parts) != 2 && len(parts) != 3 {
+        return
+    }
+
+    start_valid, end_valid: bool
+    start, start_valid = strconv.parse_int(parts[0])
+    end, end_valid = strconv.parse_int(parts[1])
+    step = 1
+    step_valid := true
+    if len(parts) == 3 {
+        step, step_valid = strconv.parse_int(parts[2])
+    }
+    if !start_valid || !end_valid || !step_valid ||
+       start < 0 || end < start || step <= 0 {
+        return 0, 0, 0, false
+    }
+
+    frame_intervals := (end - start) / step
+    if frame_intervals >= 10000 {
+        return 0, 0, 0, false
+    }
+    return start, end, step, true
+}
+
+parse_capture_output_template :: proc(output_path: string) -> (
+    output_template: Capture_Output_Template,
+    valid: bool,
+) {
+    token_found := false
+    path_index := 0
+    for path_index < len(output_path) {
+        if output_path[path_index] != '%' {
+            path_index += 1
+            continue
+        }
+        if token_found || path_index + 1 >= len(output_path) {
+            return {}, false
+        }
+
+        token_start := path_index
+        path_index += 1
+        token_width := 0
+        if output_path[path_index] == 'd' {
+            path_index += 1
+        } else if output_path[path_index] == '0' {
+            width_start := path_index + 1
+            path_index = width_start
+            for path_index < len(output_path) &&
+                output_path[path_index] >= '0' &&
+                output_path[path_index] <= '9' {
+                path_index += 1
+            }
+            if path_index == width_start ||
+               path_index >= len(output_path) ||
+               output_path[path_index] != 'd' {
+                return {}, false
+            }
+            parsed_width, width_valid := strconv.parse_int(
+                output_path[width_start:path_index],
+            )
+            if !width_valid || parsed_width < 1 || parsed_width > 12 {
+                return {}, false
+            }
+            token_width = parsed_width
+            path_index += 1
+        } else {
+            return {}, false
+        }
+
+        output_template = {
+            token_start = token_start,
+            token_end   = path_index,
+            width       = token_width,
+        }
+        token_found = true
+    }
+    return output_template, token_found
+}
+
+format_capture_sequence_output_path :: proc(
+    output_path: string,
+    output_template: Capture_Output_Template,
+    animation_frame: int,
+) -> string {
+    prefix := output_path[:output_template.token_start]
+    suffix := output_path[output_template.token_end:]
+    if output_template.width > 0 {
+        return fmt.aprintf(
+            "%s%0*d%s",
+            prefix,
+            output_template.width,
+            animation_frame,
+            suffix,
+        )
+    }
+    return fmt.aprintf("%s%d%s", prefix, animation_frame, suffix)
+}
+
+is_capture_case_name_valid :: proc(case_name: string) -> bool {
+    if len(case_name) == 0 {
+        return false
+    }
+    for value in case_name {
+        if (value >= 'a' && value <= 'z') ||
+           (value >= 'A' && value <= 'Z') ||
+           (value >= '0' && value <= '9') ||
+           value == '-' || value == '_' {
+            continue
+        }
+        return false
+    }
+    return true
+}
+
+parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
+    result: Capture_Parse_Result
+    result.options.lens_mode = .PIXELATED
+    result.options.view = .DEFAULT
+    result.options.target = .COMPOSITE
+    result.options.warmup_frames = 2
+    result.options.hide_window = true
+
+    capture_argument_seen := false
+    argument_index := 0
+    for argument_index < len(arguments) {
+        argument := arguments[argument_index]
+        argument_index += 1
+
+        if argument == "--capture-help" {
+            capture_argument_seen = true
+            result.options.help_requested = true
+            continue
+        }
+        if !strings.has_prefix(argument, "--capture-") {
+            continue
+        }
+
+        capture_argument_seen = true
+        if argument == "--capture-show-window" {
+            result.options.hide_window = false
+            continue
+        }
+
+        if argument_index >= len(arguments) {
+            result.error = .MISSING_VALUE
+            result.error_argument = argument
+            return result
+        }
+        value := arguments[argument_index]
+        argument_index += 1
+
+        switch argument {
+        case "--capture-case":
+            if !is_capture_case_name_valid(value) {
+                result.error = .INVALID_CASE
+                result.error_argument = value
+                return result
+            }
+            result.options.case_name = value
+
+        case "--capture-output":
+            if len(value) == 0 || !strings.equal_fold(os.ext(value), ".png") {
+                result.error = .INVALID_OUTPUT
+                result.error_argument = value
+                return result
+            }
+            result.options.output_path = value
+
+        case "--capture-model":
+            result.options.model_source = value
+
+        case "--capture-mode":
+            if value == "pixelated" {
+                result.options.lens_mode = .PIXELATED
+            } else if value == "blended" {
+                result.options.lens_mode = .BLENDED
+            } else if value == "coverage-mask" {
+                result.options.lens_mode = .COVERAGE_MASK
+            } else {
+                result.error = .INVALID_MODE
+                result.error_argument = value
+                return result
+            }
+
+        case "--capture-view":
+            if value == "default" {
+                result.options.view = .DEFAULT
+            } else if value == "x" {
+                result.options.view = .X
+            } else if value == "y" {
+                result.options.view = .Y
+            } else if value == "z" {
+                result.options.view = .Z
+            } else if value == "isometric" {
+                result.options.view = .ISOMETRIC
+            } else {
+                result.error = .INVALID_VIEW
+                result.error_argument = value
+                return result
+            }
+
+        case "--capture-target":
+            if value == "composite" {
+                result.options.target = .COMPOSITE
+            } else if value == "lens" {
+                result.options.target = .LENS
+            } else if value == "scene" {
+                result.options.target = .SCENE
+            } else if value == "downsample" {
+                result.options.target = .DOWNSAMPLE
+            } else if value == "coverage-mask" {
+                result.options.target = .COVERAGE_MASK
+            } else {
+                result.error = .INVALID_TARGET
+                result.error_argument = value
+                return result
+            }
+
+        case "--capture-frame":
+            parsed_frame, parsed_frame_succeeded := strconv.parse_f32(value)
+            if !parsed_frame_succeeded ||
+               math.is_nan(parsed_frame) ||
+               math.is_inf(parsed_frame) ||
+               parsed_frame < 0 {
+                result.error = .INVALID_FRAME
+                result.error_argument = value
+                return result
+            }
+            result.options.animation_frame = parsed_frame
+            result.options.animation_frame_set = true
+
+        case "--capture-frame-range":
+            range_start, range_end, range_step, range_valid :=
+                parse_capture_frame_range(value)
+            if !range_valid {
+                result.error = .INVALID_FRAME_RANGE
+                result.error_argument = value
+                return result
+            }
+            result.options.frame_range_set = true
+            result.options.frame_range_start = range_start
+            result.options.frame_range_end = range_end
+            result.options.frame_range_step = range_step
+
+        case "--capture-warmup":
+            parsed_warmup, parsed_warmup_succeeded := strconv.parse_int(value)
+            if !parsed_warmup_succeeded || parsed_warmup < 1 || parsed_warmup > 600 {
+                result.error = .INVALID_WARMUP
+                result.error_argument = value
+                return result
+            }
+            result.options.warmup_frames = parsed_warmup
+
+        case:
+            result.error = .UNKNOWN_ARGUMENT
+            result.error_argument = argument
+            return result
+        }
+    }
+
+    if result.options.help_requested {
+        return result
+    }
+    if capture_argument_seen && len(result.options.case_name) == 0 {
+        result.error = .MISSING_CASE
+        return result
+    }
+    if len(result.options.case_name) == 0 {
+        return result
+    }
+    if result.options.animation_frame_set && result.options.frame_range_set {
+        result.error = .CONFLICTING_FRAME_OPTIONS
+        return result
+    }
+
+    result.options.enabled = true
+    if len(result.options.output_path) == 0 {
+        if result.options.frame_range_set {
+            result.options.output_path = fmt.aprintf(
+                "captures/%s-%%04d.png",
+                result.options.case_name,
+            )
+        } else {
+            result.options.output_path = fmt.aprintf(
+                "captures/%s.png",
+                result.options.case_name,
+            )
+        }
+        result.options.output_path_owned = true
+    }
+    if result.options.frame_range_set {
+        output_template, template_valid := parse_capture_output_template(
+            result.options.output_path,
+        )
+        if !template_valid {
+            result.error = .INVALID_OUTPUT_TEMPLATE
+            result.error_argument = result.options.output_path
+            result.options.enabled = false
+            return result
+        }
+        result.options.output_template = output_template
+    }
+    return result
+}
+
+print_capture_usage :: proc() {
+    fmt.println("Non-interactive capture mode")
+    fmt.println("")
+    fmt.println("  --capture-case <name>          Enable capture mode and name the case")
+    fmt.println("  --capture-output <path.png>    Output path or sequence template")
+    fmt.println("  --capture-model <source>       Exact asset path or builtin:cube|sphere|triangle")
+    fmt.println("  --capture-view <view>          default|x|y|z|isometric")
+    fmt.println("  --capture-mode <mode>          pixelated|blended|coverage-mask")
+    fmt.println("  --capture-target <target>      composite|lens|scene|downsample|coverage-mask")
+    fmt.println("  --capture-frame <frame>        Fixed animation frame (default: 0)")
+    fmt.println("  --capture-frame-range <range>  Inclusive start:end[:step] PNG sequence")
+    fmt.println("  --capture-warmup <frames>      Frames rendered before export (default: 2)")
+    fmt.println("  --capture-show-window          Show the otherwise hidden capture window")
+    fmt.println("  --capture-help                 Print this help without opening a window")
+}
+
+find_capture_model_source :: proc(
+    model_assets: ^Model_Assets,
+    requested_source: string,
+) -> (source_index: int, source_found: bool) {
+    requested_absolute_path := requested_source
+    if !strings.has_prefix(requested_source, "builtin:") {
+        if absolute_path, absolute_path_error := filepath.abs(
+            requested_source,
+            context.temp_allocator,
+        ); absolute_path_error == nil {
+            requested_absolute_path = absolute_path
+        }
+    }
+    for model_path, model_index in model_assets.paths {
+        if model_path == requested_source ||
+           model_path == requested_absolute_path {
+            return model_index, true
+        }
+    }
+    return -1, false
+}
+
+apply_capture_view :: proc(
+    view: Capture_View,
+    camera: ^rl.Camera3D,
+    model_center: rl.Vector3,
+    scene_size: f32,
+) {
+    switch view {
+    case .DEFAULT:
+        return
+    case .X:
+        reset_camera_to_axis_view(
+            camera,
+            model_center,
+            {1, 0, 0},
+            {0, 1, 0},
+            scene_size,
+        )
+    case .Y:
+        reset_camera_to_axis_view(
+            camera,
+            model_center,
+            {0, 1, 0},
+            {0, 0, 1},
+            scene_size,
+        )
+    case .Z:
+        reset_camera_to_axis_view(
+            camera,
+            model_center,
+            {0, 0, 1},
+            {0, 1, 0},
+            scene_size,
+        )
+    case .ISOMETRIC:
+        reset_camera_to_axis_view(
+            camera,
+            model_center,
+            rl.Vector3Normalize({1, 1, 1}),
+            {0, 1, 0},
+            scene_size,
+        )
+    }
+}
+
+ensure_capture_output_directory :: proc(output_path: string) -> bool {
+    output_directory := filepath.dir(output_path)
+    if output_directory == "" || output_directory == "." {
+        return true
+    }
+    if directory_error := os.make_directory_all(output_directory);
+       directory_error != nil {
+        // Odin's make_directory_all reports .Exist when the final directory
+        // already exists on some platforms. Another capture worker may also
+        // create it between our call and this check, so accept either case.
+        if os.is_directory(output_directory) {
+            return true
+        }
+        log.errorf(
+            "Failed to create capture output directory %s: %v",
+            output_directory,
+            directory_error,
+        )
+        return false
+    }
+    return true
+}
+
+export_render_texture_png :: proc(
+    texture: rl.Texture2D,
+    output_path: string,
+    crop_bounds: ^rl.Rectangle = nil,
+) -> bool {
+    if !ensure_capture_output_directory(output_path) {
+        return false
+    }
+
+    texture_readback := rl.LoadImageFromTexture(texture)
+    if texture_readback.data == nil {
+        log.error("Failed to read capture texture from the GPU")
+        return false
+    }
+    defer rl.UnloadImage(texture_readback)
+
+    // All capture sources are RenderTexture attachments, whose readback is
+    // vertically inverted relative to the logical viewport.
+    rl.ImageFlipVertical(&texture_readback)
+    if crop_bounds != nil {
+        rl.ImageCrop(&texture_readback, crop_bounds^)
+    }
+    rl.ImageFormat(&texture_readback, .UNCOMPRESSED_R8G8B8A8)
+
+    output_path_cstr := strings.clone_to_cstring(
+        output_path,
+        context.temp_allocator,
+    )
+    return rl.ExportImage(texture_readback, output_path_cstr)
+}
+
+export_capture_target :: proc(
+    options: ^Capture_Options,
+    output_path: string,
+    composite_render_target: rl.RenderTexture2D,
+    scene_render_target: rl.RenderTexture2D,
+    downsample_render_target: rl.RenderTexture2D,
+    coverage_mask_render_target: rl.RenderTexture2D,
+    lens_bounds: rl.Rectangle,
+) -> bool {
+    lens_crop_bounds := lens_bounds
+    switch options.target {
+    case .COMPOSITE:
+        return export_render_texture_png(
+            composite_render_target.texture,
+            output_path,
+        )
+    case .LENS:
+        return export_render_texture_png(
+            composite_render_target.texture,
+            output_path,
+            &lens_crop_bounds,
+        )
+    case .SCENE:
+        return export_render_texture_png(
+            scene_render_target.texture,
+            output_path,
+        )
+    case .DOWNSAMPLE:
+        return export_render_texture_png(
+            downsample_render_target.texture,
+            output_path,
+        )
+    case .COVERAGE_MASK:
+        return export_render_texture_png(
+            coverage_mask_render_target.texture,
+            output_path,
+        )
+    }
+    return false
+}

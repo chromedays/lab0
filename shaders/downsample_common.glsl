@@ -4,10 +4,10 @@ const int DOWNSAMPLE_SAMPLE_COUNT =
     DOWNSAMPLE_GRID_SIZE * DOWNSAMPLE_GRID_SIZE;
 
 vec2 downsample_grid_position(int sample_index) {
-    int x = sample_index % DOWNSAMPLE_GRID_SIZE;
-    int y = sample_index / DOWNSAMPLE_GRID_SIZE;
+    int grid_column = sample_index % DOWNSAMPLE_GRID_SIZE;
+    int grid_row = sample_index / DOWNSAMPLE_GRID_SIZE;
     return
-        (vec2(float(x), float(y)) + 0.5) /
+        (vec2(float(grid_column), float(grid_row)) + 0.5) /
         float(DOWNSAMPLE_GRID_SIZE) - 0.5;
 }
 

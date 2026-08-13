@@ -19,6 +19,8 @@ bin/
 build/
 out/
 obj/
+captures/
+artifacts/
 
 # Odin-specific
 *.tmp

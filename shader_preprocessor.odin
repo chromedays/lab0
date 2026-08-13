@@ -22,30 +22,38 @@ Preprocessed_Shader_Program_Source :: struct {
 	fragment: Preprocessed_Shader_Source,
 }
 
-destroy_preprocessed_shader_source :: proc(source: ^Preprocessed_Shader_Source) {
-	delete(source.code)
-	for dependency in source.dependencies {
+destroy_preprocessed_shader_source :: proc(
+	preprocessed_source: ^Preprocessed_Shader_Source,
+) {
+	delete(preprocessed_source.code)
+	for dependency in preprocessed_source.dependencies {
 		delete(dependency.path)
 	}
-	delete(source.dependencies)
-	source^ = {}
+	delete(preprocessed_source.dependencies)
+	preprocessed_source^ = {}
 }
 
 destroy_preprocessed_shader_program_source :: proc(
-	source: ^Preprocessed_Shader_Program_Source,
+	preprocessed_program: ^Preprocessed_Shader_Program_Source,
 ) {
-	destroy_preprocessed_shader_source(&source.vertex)
-	destroy_preprocessed_shader_source(&source.fragment)
+	destroy_preprocessed_shader_source(&preprocessed_program.vertex)
+	destroy_preprocessed_shader_source(&preprocessed_program.fragment)
 }
 
-shader_source_dependencies_changed :: proc(source: ^Preprocessed_Shader_Source) -> bool {
-	for dependency in source.dependencies {
-		info, err := os.stat(dependency.path, context.temp_allocator)
-		exists := err == nil
-		if exists != dependency.exists {
+shader_source_dependencies_changed :: proc(
+	preprocessed_source: ^Preprocessed_Shader_Source,
+) -> bool {
+	for dependency in preprocessed_source.dependencies {
+		file_info, stat_error := os.stat(
+			dependency.path,
+			context.temp_allocator,
+		)
+		dependency_exists := stat_error == nil
+		if dependency_exists != dependency.exists {
 			return true
 		}
-		if exists && info.modification_time != dependency.modification_time {
+		if dependency_exists &&
+		   file_info.modification_time != dependency.modification_time {
 			return true
 		}
 	}
@@ -53,26 +61,31 @@ shader_source_dependencies_changed :: proc(source: ^Preprocessed_Shader_Source) 
 }
 
 shader_program_source_dependencies_changed :: proc(
-	source: ^Preprocessed_Shader_Program_Source,
+	preprocessed_program: ^Preprocessed_Shader_Program_Source,
 ) -> bool {
-	return shader_source_dependencies_changed(&source.vertex) ||
-	       shader_source_dependencies_changed(&source.fragment)
+	return shader_source_dependencies_changed(&preprocessed_program.vertex) ||
+	       shader_source_dependencies_changed(&preprocessed_program.fragment)
 }
 
 track_shader_dependency :: proc(
 	dependencies: ^[dynamic]Shader_Source_Dependency,
-	path: string,
+	dependency_path: string,
 ) {
 	for dependency in dependencies^ {
-		if dependency.path == path {
+		if dependency.path == dependency_path {
 			return
 		}
 	}
 
-	dependency := Shader_Source_Dependency{path = strings.clone(path)}
-	if info, err := os.stat(path, context.temp_allocator); err == nil {
+	dependency := Shader_Source_Dependency{
+		path = strings.clone(dependency_path),
+	}
+	if file_info, stat_error := os.stat(
+		dependency_path,
+		context.temp_allocator,
+	); stat_error == nil {
 		dependency.exists = true
-		dependency.modification_time = info.modification_time
+		dependency.modification_time = file_info.modification_time
 	}
 	append(dependencies, dependency)
 }
@@ -88,8 +101,8 @@ parse_shader_include :: proc(line: string) -> (
 		return "", false, true
 	}
 	if len(trimmed) > len(keyword) {
-		next := trimmed[len(keyword)]
-		if next != ' ' && next != '\t' {
+		directive_separator := trimmed[len(keyword)]
+		if directive_separator != ' ' && directive_separator != '\t' {
 			return "", false, true
 		}
 	}
@@ -114,7 +127,7 @@ parse_shader_include :: proc(line: string) -> (
 
 preprocess_shader_file_recursive :: proc(
 	path: string,
-	builder: ^strings.Builder,
+	output_builder: ^strings.Builder,
 	dependencies: ^[dynamic]Shader_Source_Dependency,
 	include_stack: ^[dynamic]string,
 ) -> bool {
@@ -126,60 +139,73 @@ preprocess_shader_file_recursive :: proc(
 	}
 
 	track_shader_dependency(dependencies, path)
-	data, read_err := os.read_entire_file(path, context.allocator)
-	if read_err != nil {
-		log.error("Failed to read shader source %s: %v", path, read_err)
+	shader_source_bytes, read_error := os.read_entire_file(
+		path,
+		context.allocator,
+	)
+	if read_error != nil {
+		log.error("Failed to read shader source %s: %v", path, read_error)
 		return false
 	}
-	defer delete(data)
+	defer delete(shader_source_bytes)
 
 	append(include_stack, path)
 	defer pop(include_stack)
 
-	contents := string(data)
+	shader_contents := string(shader_source_bytes)
 	line_number := 0
-	for line in strings.split_lines_iterator(&contents) {
+	for line in strings.split_lines_iterator(&shader_contents) {
 		line_number += 1
-		include_path, is_include, valid := parse_shader_include(line)
+		include_path, is_include, include_is_valid := parse_shader_include(line)
 		if !is_include {
-			strings.write_string(builder, line)
-			strings.write_byte(builder, '\n')
+			strings.write_string(output_builder, line)
+			strings.write_byte(output_builder, '\n')
 			continue
 		}
-		if !valid {
+		if !include_is_valid {
 			log.error("Malformed shader include in %s:%d", path, line_number)
 			return false
 		}
 
 		include_candidate := include_path
-		candidate_is_allocated := false
+		include_candidate_is_owned := false
 		if !filepath.is_abs(include_path) {
-			joined_path, join_err := filepath.join({filepath.dir(path), include_path})
-			if join_err != nil {
-				log.error("Failed to resolve shader include %s from %s: %v", include_path, path, join_err)
+			joined_path, join_error := filepath.join({filepath.dir(path), include_path})
+			if join_error != nil {
+				log.error(
+					"Failed to resolve shader include %s from %s: %v",
+					include_path,
+					path,
+					join_error,
+				)
 				return false
 			}
 			include_candidate = joined_path
-			candidate_is_allocated = true
+			include_candidate_is_owned = true
 		}
 
-		resolved_path, clean_err := filepath.clean(include_candidate)
-		if candidate_is_allocated {
+		resolved_path, normalization_error := filepath.clean(include_candidate)
+		if include_candidate_is_owned {
 			delete(include_candidate)
 		}
-		if clean_err != nil {
-			log.error("Failed to normalize shader include %s from %s: %v", include_path, path, clean_err)
+		if normalization_error != nil {
+			log.error(
+				"Failed to normalize shader include %s from %s: %v",
+				include_path,
+				path,
+				normalization_error,
+			)
 			return false
 		}
 
-		included_ok := preprocess_shader_file_recursive(
+		include_preprocessing_succeeded := preprocess_shader_file_recursive(
 			resolved_path,
-			builder,
+			output_builder,
 			dependencies,
 			include_stack,
 		)
 		delete(resolved_path)
-		if !included_ok {
+		if !include_preprocessing_succeeded {
 			return false
 		}
 	}
@@ -187,39 +213,48 @@ preprocess_shader_file_recursive :: proc(
 }
 
 preprocess_shader_file :: proc(path: string) -> (
-	source: Preprocessed_Shader_Source,
-	ok: bool,
+	preprocessed_source: Preprocessed_Shader_Source,
+	preprocessing_succeeded: bool,
 ) {
-	normalized_path, path_err := filepath.clean(path)
-	if path_err != nil {
-		log.error("Failed to normalize shader path %s: %v", path, path_err)
+	normalized_path, normalization_error := filepath.clean(path)
+	if normalization_error != nil {
+		log.error(
+			"Failed to normalize shader path %s: %v",
+			path,
+			normalization_error,
+		)
 		return {}, false
 	}
 	defer delete(normalized_path)
 
-	builder := strings.builder_make()
-	defer strings.builder_destroy(&builder)
+	output_builder := strings.builder_make()
+	defer strings.builder_destroy(&output_builder)
 	include_stack: [dynamic]string
 	defer delete(include_stack)
 
-	ok = preprocess_shader_file_recursive(
+	preprocessing_succeeded = preprocess_shader_file_recursive(
 		normalized_path,
-		&builder,
-		&source.dependencies,
+		&output_builder,
+		&preprocessed_source.dependencies,
 		&include_stack,
 	)
-	if ok {
-		source.code = strings.clone(strings.to_string(builder))
+	if preprocessing_succeeded {
+		preprocessed_source.code = strings.clone(
+			strings.to_string(output_builder),
+		)
 	}
-	return source, ok
+	return preprocessed_source, preprocessing_succeeded
 }
 
 preprocess_shader_program :: proc(vertex_path, fragment_path: string) -> (
-	source: Preprocessed_Shader_Program_Source,
-	ok: bool,
+	preprocessed_program: Preprocessed_Shader_Program_Source,
+	preprocessing_succeeded: bool,
 ) {
-	vertex_ok, fragment_ok: bool
-	source.vertex, vertex_ok = preprocess_shader_file(vertex_path)
-	source.fragment, fragment_ok = preprocess_shader_file(fragment_path)
-	return source, vertex_ok && fragment_ok
+	vertex_preprocessing_succeeded, fragment_preprocessing_succeeded: bool
+	preprocessed_program.vertex, vertex_preprocessing_succeeded =
+		preprocess_shader_file(vertex_path)
+	preprocessed_program.fragment, fragment_preprocessing_succeeded =
+		preprocess_shader_file(fragment_path)
+	return preprocessed_program,
+	       vertex_preprocessing_succeeded && fragment_preprocessing_succeeded
 }
