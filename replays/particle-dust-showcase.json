@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "start_room": "R05",
+  "segments": [
+    {
+      "ticks": 1,
+      "move": [-1.0, 0.0],
+      "dash_on_first": true
+    },
+    {
+      "ticks": 227,
+      "move": [-1.0, 0.0],
+      "dash_on_first": false
+    }
+  ]
+}

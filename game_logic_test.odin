@@ -313,3 +313,80 @@ game_dash_can_evade_a_committed_zombie_lunge :: proc(t: ^testing.T) {
         state.player.position.z,
     )
 }
+
+@(test)
+game_step_dust_uses_actual_distance_travelled :: proc(t: ^testing.T) {
+    state := game_state_init()
+    for _ in 0 ..< 20 {
+        game_fixed_update(&state, {{1, 0}, false}, GAME_FIXED_DT)
+    }
+    testing.expectf(
+        t,
+        game_particles_active_count(&state.particle_system) > 0,
+        "ground movement should leave a sparse active dust particle",
+    )
+    testing.expectf(
+        t,
+        state.particle_system.spawn_cursor <= 2,
+        "short movement should remain sparse, spawned %d particles",
+        state.particle_system.spawn_cursor,
+    )
+}
+
+@(test)
+game_dash_dust_starts_with_a_small_fixed_burst :: proc(t: ^testing.T) {
+    state := game_state_init()
+    game_fixed_update(&state, {{1, 0}, true}, GAME_FIXED_DT)
+    testing.expect_value(t, game_particles_active_count(&state.particle_system), 3)
+
+    for _ in 0 ..< 3 {
+        game_fixed_update(&state, {}, GAME_FIXED_DT)
+    }
+    testing.expectf(
+        t,
+        game_particles_active_count(&state.particle_system) > 3,
+        "dash travel should add restrained distance-based trail particles",
+    )
+}
+
+@(test)
+game_one_way_drop_emits_landing_dust :: proc(t: ^testing.T) {
+    state := game_state_init(.R05_OVERLOOK)
+    state.player.position = {11.1, 1.5, -20.5}
+    state.player.exit_reentry_lock = 0
+    started := game_try_start_room_transition(&state, state.player.position)
+    testing.expect(t, started, "the one-way drop should start a room transition")
+
+    for state.player.mode == .ROOM_TRANSITION {
+        game_fixed_update(&state, {}, GAME_FIXED_DT)
+    }
+    testing.expect_value(t, state.current_room, Game_Room_ID.R06_LOWER_TRAIL)
+    testing.expect_value(t, game_particles_active_count(&state.particle_system), 6)
+}
+
+@(test)
+game_dust_is_deterministic_for_matching_fixed_input :: proc(t: ^testing.T) {
+    first := game_state_init()
+    second := game_state_init()
+    for tick in 0 ..< 90 {
+        input := Game_Input{{1, 0}, tick == 28}
+        game_fixed_update(&first, input, GAME_FIXED_DT)
+        game_fixed_update(&second, input, GAME_FIXED_DT)
+    }
+
+    testing.expect_value(
+        t,
+        first.particle_system.random_state,
+        second.particle_system.random_state,
+    )
+    testing.expect_value(
+        t,
+        first.particle_system.spawn_cursor,
+        second.particle_system.spawn_cursor,
+    )
+    testing.expect_value(
+        t,
+        first.particle_system.particles,
+        second.particle_system.particles,
+    )
+}

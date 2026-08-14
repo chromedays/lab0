@@ -1534,6 +1534,28 @@ game_draw_player :: proc(assets: ^Game_Assets, state: ^Game_State) {
     )
 }
 
+game_draw_particles :: proc(assets: ^Game_Assets, state: ^Game_State) {
+    for particle in state.particle_system.particles {
+        if !particle.active || particle.lifetime <= 0 {
+            continue
+        }
+        lifetime_fraction := clamp(particle.age / particle.lifetime, f32(0), f32(1))
+        visibility_scale: f32 = 1
+        if lifetime_fraction > 0.68 {
+            visibility_scale = (1 - lifetime_fraction) / 0.32
+        }
+        size := particle.start_size * max(visibility_scale, f32(0.08))
+        rl.DrawModelEx(
+            assets.cube,
+            particle.position,
+            {0, 1, 0},
+            0,
+            {size, size * 0.72, size},
+            particle.color,
+        )
+    }
+}
+
 game_zombie_mode_label :: proc(mode: Game_Zombie_Mode) -> cstring {
     switch mode {
     case .SHAMBLING:  return "SHAMBLING"
@@ -1896,6 +1918,7 @@ game_draw_world :: proc(
     game_draw_obstacle_markers(assets)
     game_draw_decor(assets, state, camera)
     game_draw_zombies(assets, state)
+    game_draw_particles(assets, state)
     game_draw_player(assets, state)
 }
 

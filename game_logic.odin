@@ -157,6 +157,7 @@ Game_State :: struct {
     zombie_hits:        int,
     tick:               u64,
     debug_visible:      bool,
+    particle_system:    Game_Particle_System,
 }
 
 GAME_ROOMS := [?]Game_Room{
@@ -322,6 +323,7 @@ game_state_init :: proc(start_room: Game_Room_ID = .R00_START_FOREST) -> Game_St
             mode = .GROUNDED,
         },
         last_safe_position = room.spawn,
+        particle_system = game_particles_init(),
     }
     game_reset_all_zombies(&state)
     return state
@@ -339,6 +341,7 @@ game_reset_current_room :: proc(state: ^Game_State) {
         state.player.facing = {1, 0}
     }
     state.last_safe_position = room.spawn
+    state.particle_system = game_particles_init()
     game_reset_zombies_in_room(state, state.current_room)
 }
 
@@ -940,6 +943,7 @@ game_update_progress :: proc(state: ^Game_State) {
 game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
     state.tick += 1
     state.elapsed_time += dt
+    game_particles_fixed_update(&state.particle_system, dt)
     dash_noise := raw_input.dash_pressed || state.player.mode == .DASHING
     state.player.dash_cooldown = max(state.player.dash_cooldown - dt, 0)
     state.player.exit_reentry_lock = max(state.player.exit_reentry_lock - dt, 0)
@@ -951,12 +955,27 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
     }
 
     if state.player.mode == .ROOM_TRANSITION {
+        drop_height := state.player.transition_start.y - state.player.transition_end.y
         game_update_room_transition(state, dt)
+        if state.player.mode == .GROUNDED && drop_height > 0.25 {
+            game_particles_emit_landing(
+                &state.particle_system,
+                state.player.position,
+                drop_height,
+            )
+        }
         game_update_progress(state)
         return
     }
     if state.player.mode == .DASHING {
+        dash_from := state.player.position
         game_update_dash(state, dt)
+        game_particles_track_dash(
+            &state.particle_system,
+            dash_from,
+            state.player.position,
+            state.player.dash_direction,
+        )
         if state.player.mode != .ROOM_TRANSITION {
             game_update_zombies(state, true, dt)
         }
@@ -976,6 +995,7 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
         }
         dash_direction = game_normalize_input(dash_direction)
         if game_vector_length(dash_direction) > 0.001 {
+            dash_from := state.player.position
             state.player.mode = .DASHING
             state.player.dash_direction = dash_direction
             state.player.dash_start = state.player.position
@@ -983,7 +1003,18 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
             state.player.dash_cooldown = GAME_DASH_COOLDOWN
             state.player.dash_buffer = 0
             state.dash_count += 1
+            game_particles_emit_dash_start(
+                &state.particle_system,
+                state.player.position,
+                dash_direction,
+            )
             game_update_dash(state, dt)
+            game_particles_track_dash(
+                &state.particle_system,
+                dash_from,
+                state.player.position,
+                dash_direction,
+            )
             if state.player.mode != .ROOM_TRANSITION {
                 game_update_zombies(state, true, dt)
             }
@@ -1002,7 +1033,15 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
         target_velocity,
         acceleration * dt,
     )
+    move_from := state.player.position
     game_move_grounded(state, state.player.velocity * dt)
+    if state.player.mode == .GROUNDED {
+        game_particles_track_steps(
+            &state.particle_system,
+            move_from,
+            state.player.position,
+        )
+    }
 
     if state.player.mode == .GROUNDED &&
        !game_position_hits_hazard(state.current_room, state.player.position) {
