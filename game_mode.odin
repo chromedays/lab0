@@ -1664,6 +1664,10 @@ run_game_mode :: proc(arguments: []string) -> int {
         return 2
     }
     capture := &capture_result.options
+    if len(capture.video_output) > 0 || capture.video_frame_count > 0 {
+        log.error("Viewer video options are available only in Viewer mode")
+        return 2
+    }
     if capture.enabled &&
        (capture.target == .LENS ||
         capture.frame_range_set ||
@@ -1727,12 +1731,15 @@ run_game_mode :: proc(arguments: []string) -> int {
         return 2
     }
 
-    video_encoder: Game_Video_Encoder
-    defer destroy_game_video_encoder(&video_encoder)
+    video_encoder: Video_Stream_Encoder
+    defer destroy_video_stream_encoder(&video_encoder)
     if video_enabled {
-        video_start_error := start_game_video_encoder(
+        video_start_error := start_video_stream_encoder(
             &video_encoder,
             run_options.video_output,
+            GAME_SCREEN_WIDTH,
+            GAME_SCREEN_HEIGHT,
+            60,
         )
         if video_start_error == .FFMPEG_NOT_FOUND {
             return 2
@@ -1926,7 +1933,7 @@ run_game_mode :: proc(arguments: []string) -> int {
                     )
                     capture_complete = true
                     capture_succeeded = false
-                } else if !game_video_write_render_texture(
+                } else if !video_stream_write_render_texture(
                     &video_encoder,
                     renderer.composite_target.texture,
                 ) {
@@ -1939,10 +1946,11 @@ run_game_mode :: proc(arguments: []string) -> int {
                     capture_succeeded = false
                 } else if replay_player.ticks_played >= replay.total_ticks {
                     capture_complete = true
-                    capture_succeeded = finish_game_video_encoder(
+                    capture_succeeded = finish_video_stream_encoder(
                         &video_encoder,
                         run_options.video_output,
                         replay.total_ticks,
+                        "fixed-tick",
                     )
                 }
             } else if recording_enabled && ticks_run > 0 {

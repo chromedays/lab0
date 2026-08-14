@@ -139,6 +139,7 @@ UI_Focus_ID :: enum {
     CAMERA_Z,
     CAMERA_ISOMETRIC,
     CAMERA_DOWNSCALE,
+    CAMERA_EDGE_AA,
     CEL_HEADER,
     CEL_PRESET,
     CEL_RELOAD,
@@ -249,7 +250,7 @@ ui_focus_fallback :: proc(focused: UI_Focus_ID) -> UI_Focus_ID {
     case .MODEL_SEARCH, .MODEL_CLEAR, .MODEL_LIST:
         return .MODEL_HEADER
     case .CAMERA_X, .CAMERA_Y, .CAMERA_Z, .CAMERA_ISOMETRIC,
-         .CAMERA_DOWNSCALE:
+         .CAMERA_DOWNSCALE, .CAMERA_EDGE_AA:
         return .CAMERA_HEADER
     case .CEL_PRESET, .CEL_RELOAD, .CEL_SAVE, .CEL_RESET,
          .CEL_LIGHT_HEADER, .CEL_BANDS_HEADER, .CEL_ACCENTS_HEADER,

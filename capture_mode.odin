@@ -45,6 +45,7 @@ Capture_Parse_Error :: enum {
     INVALID_MODEL,
     INVALID_STYLE,
     INVALID_MODE,
+    INVALID_EDGE_AA,
     INVALID_VIEW,
     INVALID_TARGET,
     INVALID_FRAME,
@@ -52,6 +53,8 @@ Capture_Parse_Error :: enum {
     CONFLICTING_FRAME_OPTIONS,
     INVALID_WARMUP,
     INVALID_OUTPUT,
+    INVALID_VIDEO_OUTPUT,
+    INVALID_VIDEO_DURATION,
     INVALID_OUTPUT_TEMPLATE,
 }
 
@@ -75,7 +78,10 @@ Capture_Options :: struct {
     output_path_explicit: bool,
     model_source:        string,
     style_path:          string,
+    video_output:        string,
+    video_frame_count:   u64,
     lens_mode:           Lens_Mode,
+    edge_aa_mode:        Edge_AA_Mode,
     view:                Capture_View,
     target:              Capture_Target,
     animation_frame:     f32,
@@ -149,7 +155,9 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
             result.options.help_requested = true
             continue
         }
-        if !strings.has_prefix(argument, "--capture-") {
+        if !strings.has_prefix(argument, "--capture-") &&
+           argument != "--viewer-video-output" &&
+           argument != "--viewer-video-duration" {
             continue
         }
 
@@ -215,6 +223,29 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
             }
             result.options.style_path = value
 
+        case "--viewer-video-output":
+            if !video_stream_output_path_valid(value) {
+                result.error = .INVALID_VIDEO_OUTPUT
+                result.error_argument = value
+                return result
+            }
+            result.options.video_output = value
+
+        case "--viewer-video-duration":
+            duration_seconds, duration_valid := strconv.parse_f64(value)
+            duration_frames := duration_seconds *
+                               f64(VIEWER_VIDEO_FRAMES_PER_SECOND)
+            rounded_duration_frames := math.round(duration_frames)
+            if !duration_valid || math.is_nan(duration_seconds) ||
+               math.is_inf(duration_seconds) || duration_seconds <= 0 ||
+               duration_seconds > 600 || rounded_duration_frames < 1 ||
+               math.abs(duration_frames - rounded_duration_frames) > 0.000001 {
+                result.error = .INVALID_VIDEO_DURATION
+                result.error_argument = value
+                return result
+            }
+            result.options.video_frame_count = u64(rounded_duration_frames)
+
         case "--capture-mode":
             if value == "pixelated" {
                 result.options.lens_mode = .PIXELATED
@@ -224,6 +255,17 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
                 result.options.lens_mode = .COVERAGE_MASK
             } else {
                 result.error = .INVALID_MODE
+                result.error_argument = value
+                return result
+            }
+
+        case "--capture-edge-aa":
+            if value == "hard" {
+                result.options.edge_aa_mode = .HARD
+            } else if value == "coverage" {
+                result.options.edge_aa_mode = .COVERAGE
+            } else {
+                result.error = .INVALID_EDGE_AA
                 result.error_argument = value
                 return result
             }
@@ -338,7 +380,8 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
     }
 
     result.options.enabled = true
-    if len(result.options.output_path) == 0 {
+    if len(result.options.output_path) == 0 &&
+       len(result.options.video_output) == 0 {
         if result.options.frame_range_set {
             result.options.output_path = fmt.aprintf(
                 "captures/%s-%%04d.png",
@@ -352,7 +395,7 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
         }
         result.options.output_path_owned = true
     }
-    if result.options.frame_range_set {
+    if result.options.frame_range_set && len(result.options.video_output) == 0 {
         // Locate and validate the one frame token where the template is used.
         output_template: Capture_Output_Template
         template_valid := true
@@ -430,11 +473,14 @@ print_capture_usage :: proc() {
     fmt.println("  --capture-output <path.png>    Output path or sequence template")
     fmt.println("  --capture-model <source>       Exact asset path or builtin:cube|sphere|triangle")
     fmt.println("  --capture-style <path.json>    Cel style preset (default: built-in Classic)")
+    fmt.println("  --viewer-video-output <mp4>    Stream a Viewer frame range through FFmpeg")
+    fmt.println("  --viewer-video-duration <sec>  Retime the range once to an exact duration")
     fmt.println("  --capture-view <view>          default|x|y|z|isometric")
     fmt.println("  --capture-mode <mode>          pixelated|blended|coverage-mask")
+    fmt.println("  --capture-edge-aa <mode>       hard|coverage (default: hard)")
     fmt.println("  --capture-target <target>      composite|lens|scene|downsample|coverage-mask")
     fmt.println("  --capture-frame <frame>        Fixed animation frame (default: 0)")
-    fmt.println("  --capture-frame-range <range>  Inclusive start:end[:step] PNG sequence")
+    fmt.println("  --capture-frame-range <range>  Inclusive start:end[:step] pose sequence")
     fmt.println("  --capture-warmup <frames>      Frames rendered before export (default: 2)")
     fmt.println("  --capture-show-window          Show the otherwise hidden capture window")
     fmt.println("  --capture-help                 Print this help without opening a window")

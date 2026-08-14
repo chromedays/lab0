@@ -40,6 +40,7 @@ LENS_WIDTH              :: 400
 LENS_HEIGHT             :: 400
 DEFAULT_COLOR_CLUSTER_THRESHOLD :: 0.10
 MODEL_SEARCH_TEXT_CAPACITY :: 128
+INSPECTOR_CAMERA_EXPANDED_HEIGHT :: f32(278)
 
 MAGNIFIER_SAMPLE_SIZE  :: 16
 MAGNIFIER_DISPLAY_SCALE :: 8
@@ -59,6 +60,14 @@ Lens_Mode :: enum {
     PIXELATED,
     BLENDED,
     COVERAGE_MASK,
+}
+
+// Edge_AA_Mode controls only the viewer's low-resolution silhouette resolve.
+// HARD preserves the historical binary output; COVERAGE exposes the existing
+// deterministic 4x4 occupancy as fractional alpha.
+Edge_AA_Mode :: enum {
+    HARD,
+    COVERAGE,
 }
 
 // Model_Source_Kind distinguishes disk assets from generated primitives because
@@ -1213,7 +1222,10 @@ inspector_section_height :: proc(expanded: bool, expanded_height: f32) -> f32 {
 inspector_cel_section_offset :: proc(state: ^Inspector_UI_State) -> f32 {
     return inspector_section_height(state.model_open, 310) +
            INSPECTOR_SECTION_GAP +
-           inspector_section_height(state.camera_open, 250) +
+           inspector_section_height(
+               state.camera_open,
+               INSPECTOR_CAMERA_EXPANDED_HEIGHT,
+           ) +
            INSPECTOR_SECTION_GAP
 }
 
@@ -1604,6 +1616,8 @@ main :: proc() {
                 capture_error_message = "capture style must be a non-empty .json path"
             case .INVALID_MODE:
                 capture_error_message = "capture mode must be pixelated, blended, or coverage-mask"
+            case .INVALID_EDGE_AA:
+                capture_error_message = "capture edge AA must be hard or coverage"
             case .INVALID_VIEW:
                 capture_error_message = "capture view must be default, x, y, z, or isometric"
             case .INVALID_TARGET:
@@ -1618,6 +1632,10 @@ main :: proc() {
                 capture_error_message = "capture warmup must be an integer from 1 through 600"
             case .INVALID_OUTPUT:
                 capture_error_message = "capture output must be a non-empty .png path"
+            case .INVALID_VIDEO_OUTPUT:
+                capture_error_message = "Viewer video output must be a non-empty .mp4 path"
+            case .INVALID_VIDEO_DURATION:
+                capture_error_message = "Viewer video duration must be positive, at most 600 seconds, and map to whole 60 fps frames"
             case .INVALID_OUTPUT_TEMPLATE:
                 capture_error_message = "capture sequence output must contain exactly one %d or %0Nd frame token"
             }
@@ -1631,6 +1649,20 @@ main :: proc() {
             break
         }
         capture_options := &capture_parse_result.options
+        viewer_video_options_error := validate_viewer_video_options(
+            capture_options,
+        )
+        if viewer_video_options_error != .NONE {
+            log.error(
+                viewer_video_options_error_message(viewer_video_options_error),
+            )
+            print_capture_usage()
+            exit_code = 2
+            break
+        }
+        viewer_video_enabled := len(capture_options.video_output) > 0
+        viewer_video_encoder: Video_Stream_Encoder
+        defer destroy_video_stream_encoder(&viewer_video_encoder)
 
         cel_style := make_classic_cel_style()
         defer destroy_cel_style(&cel_style)
@@ -2023,6 +2055,23 @@ main :: proc() {
         composite_render_target := rl.LoadRenderTexture(screen_width, screen_height)
         defer rl.UnloadRenderTexture(composite_render_target)
         rl.SetTextureFilter(composite_render_target.texture, .POINT)
+        if viewer_video_enabled {
+            video_start_error := start_video_stream_encoder(
+                &viewer_video_encoder,
+                capture_options.video_output,
+                VIEWER_VIDEO_WIDTH,
+                VIEWER_VIDEO_HEIGHT,
+                VIEWER_VIDEO_FRAMES_PER_SECOND,
+            )
+            if video_start_error == .FFMPEG_NOT_FOUND {
+                exit_code = 2
+                break
+            }
+            if video_start_error != .NONE {
+                exit_code = 1
+                break
+            }
+        }
 
         scene_resolution := [2]f32{f32(screen_width), f32(screen_height)}
         downsample_resolution := [2]f32{
@@ -2053,6 +2102,10 @@ main :: proc() {
             downscale_shader,
             "u_highlight_preserve_samples",
         )
+        downscale_edge_aa_mode_location := rl.GetShaderLocation(
+            downscale_shader,
+            "u_edge_aa_mode",
+        )
         mask_downscale_source_resolution_location := rl.GetShaderLocation(
             mask_downscale_shader,
             "u_source_resolution",
@@ -2082,10 +2135,16 @@ main :: proc() {
             outline_shader,
             "u_coverage_threshold",
         )
+        outline_edge_aa_mode_location := rl.GetShaderLocation(
+            outline_shader,
+            "u_edge_aa_mode",
+        )
 
         lens_mode := Lens_Mode.PIXELATED
+        edge_aa_mode := Edge_AA_Mode.HARD
         if capture_options.enabled {
             lens_mode = capture_options.lens_mode
+            edge_aa_mode = capture_options.edge_aa_mode
         }
         lens_grid_visible := true
         scene_background_color := rl.BLACK
@@ -2310,6 +2369,7 @@ main :: proc() {
                 #partial switch ui_keyboard.focused {
                 case .ANIMATION_TIMELINE, .ANIMATION_SPEED,
                      .ANIMATION_SAMPLE_COUNT, .MODEL_LIST, .CAMERA_DOWNSCALE,
+                     .CAMERA_EDGE_AA,
                      .CEL_PRESET, .CEL_LIGHT_SPACE, .CEL_LIGHT_AZIMUTH,
                      .CEL_LIGHT_ELEVATION, .CEL_LIGHT_WRAP, .CEL_BAND_SELECT,
                      .CEL_BAND_UPPER_BOUND, .CEL_BAND_BRIGHTNESS,
@@ -2684,6 +2744,10 @@ main :: proc() {
                         downscale_shader,
                         "u_highlight_preserve_samples",
                     )
+                    downscale_edge_aa_mode_location = rl.GetShaderLocation(
+                        downscale_shader,
+                        "u_edge_aa_mode",
+                    )
                 }
 
                 if reload_fragment_shader_with_includes(
@@ -2726,6 +2790,10 @@ main :: proc() {
                         outline_shader,
                         "u_coverage_threshold",
                     )
+                    outline_edge_aa_mode_location = rl.GetShaderLocation(
+                        outline_shader,
+                        "u_edge_aa_mode",
+                    )
                 }
             }
 
@@ -2743,6 +2811,7 @@ main :: proc() {
                 cel_style.highlight.preserve_samples,
             )
             outline_width := c.int(cel_style.outline.width)
+            edge_aa_mode_value := c.int(edge_aa_mode)
             outline_color := [4]f32{
                 f32(cel_style.outline.color.r) / 255,
                 f32(cel_style.outline.color.g) / 255,
@@ -2781,6 +2850,12 @@ main :: proc() {
                 .INT,
             )
             rl.SetShaderValue(
+                downscale_shader,
+                downscale_edge_aa_mode_location,
+                &edge_aa_mode_value,
+                .INT,
+            )
+            rl.SetShaderValue(
                 mask_downscale_shader,
                 mask_downscale_source_resolution_location,
                 &scene_resolution,
@@ -2809,6 +2884,12 @@ main :: proc() {
                 outline_coverage_threshold_location,
                 &cel_style.outline.coverage_threshold,
                 .FLOAT,
+            )
+            rl.SetShaderValue(
+                outline_shader,
+                outline_edge_aa_mode_location,
+                &edge_aa_mode_value,
+                .INT,
             )
             rl.SetShaderValue(
                 mask_downscale_shader,
@@ -2900,6 +2981,9 @@ main :: proc() {
 
             rl.BeginTextureMode(downsample_render_target)
                 rl.ClearBackground(rl.BLANK)
+                // The fullscreen resolve writes straight RGBA directly. Blending
+                // into the cleared target would premultiply fractional coverage.
+                rgl.DisableColorBlend()
                 rl.BeginShaderMode(downscale_shader)
                     rl.SetShaderValueTexture(
                         downscale_shader,
@@ -2915,6 +2999,7 @@ main :: proc() {
                         rl.WHITE,
                     )
                 rl.EndShaderMode()
+                rgl.EnableColorBlend()
             rl.EndTextureMode()
 
             rl.BeginTextureMode(coverage_mask_render_target)
@@ -2939,7 +3024,9 @@ main :: proc() {
             }
             rl.BeginTextureMode(outlined_render_target)
                 rl.ClearBackground(rl.BLANK)
-                rl.BeginBlendMode(.ALPHA_PREMULTIPLY)
+                // outline.fs performs fill-over-outline composition itself and
+                // returns straight alpha suitable for both display and PNG export.
+                rgl.DisableColorBlend()
                 rl.BeginShaderMode(outline_shader)
                     rl.SetShaderValueTexture(
                         outline_shader,
@@ -2955,7 +3042,7 @@ main :: proc() {
                         rl.WHITE,
                     )
                 rl.EndShaderMode()
-                rl.EndBlendMode()
+                rgl.EnableColorBlend()
             rl.EndTextureMode()
 
             rl.BeginTextureMode(composite_render_target)
@@ -3516,6 +3603,7 @@ main :: proc() {
                     requested_source_index := &model_active_index
                     camera := &control_camera
                     downscale_level_ptr := &downscale_level
+                    edge_aa_mode_ptr := &edge_aa_mode
                     background_color := &scene_background_color
                     background_picker_open_ptr := &background_picker_open
                 rl.GuiPanel(bounds, "INSPECTOR")
@@ -3750,7 +3838,10 @@ main :: proc() {
                     }
                     content_y += model_height + INSPECTOR_SECTION_GAP
 
-                    camera_height := inspector_section_height(state.camera_open, 250)
+                    camera_height := inspector_section_height(
+                        state.camera_open,
+                        INSPECTOR_CAMERA_EXPANDED_HEIGHT,
+                    )
                     // Render camera controls inline in their only inspector location.
                     for {
                         bounds := rl.Rectangle{view.x, content_y, content_width, camera_height}
@@ -3871,6 +3962,26 @@ main :: proc() {
                             ),
                         )
                         content_y += line_height
+
+                        rl.GuiLabel({content_x, content_y, 104, 22}, "Edge AA")
+                        edge_aa_mode_index := c.int(edge_aa_mode_ptr^)
+                        previous_edge_aa_mode := edge_aa_mode_index
+                        _ = ui_gui_combo_box(
+                            .CAMERA_EDGE_AA,
+                            {content_x + 108, content_y, content_width - 108, 22},
+                            "Hard;Coverage",
+                            &edge_aa_mode_index,
+                            2,
+                        )
+                        if edge_aa_mode_index != previous_edge_aa_mode {
+                            edge_aa_mode_ptr^ = Edge_AA_Mode(edge_aa_mode_index)
+                            if edge_aa_mode_ptr^ == .COVERAGE {
+                                log.info("Edge AA: coverage")
+                            } else {
+                                log.info("Edge AA: hard")
+                            }
+                        }
+                        content_y += 28
 
                         rl.GuiLabel({content_x, content_y, content_width, 18}, "LMB orbit | MMB drag pan")
                         content_y += line_height
@@ -4930,90 +5041,140 @@ main :: proc() {
             if capture_options.enabled {
                 rendered_capture_frames += 1
                 if rendered_capture_frames >= capture_options.warmup_frames {
-                    capture_output_path := capture_options.output_path
-                    capture_output_path_owned := false
-                    if capture_options.frame_range_set {
-                        capture_output_path = format_capture_sequence_output_path(
-                            capture_options.output_path,
-                            capture_options.output_template,
-                            capture_sequence_frame,
-                        )
-                        capture_output_path_owned = true
-                    }
-                    // Export the selected render target inline at the only capture point.
-                    lens_crop_bounds := lens_bounds
-                    switch capture_options.target {
-                    case .COMPOSITE:
-                        capture_succeeded = export_render_texture_png(
+                    if viewer_video_enabled {
+                        frame_streamed := video_stream_write_render_texture(
+                            &viewer_video_encoder,
                             composite_render_target.texture,
-                            capture_output_path,
                         )
-                    case .LENS:
-                        capture_succeeded = export_render_texture_png(
-                            composite_render_target.texture,
-                            capture_output_path,
-                            &lens_crop_bounds,
-                        )
-                    case .SCENE:
-                        capture_succeeded = export_render_texture_png(
-                            scene_render_target.texture,
-                            capture_output_path,
-                        )
-                    case .DOWNSAMPLE:
-                        capture_succeeded = export_render_texture_png(
-                            outlined_render_target.texture,
-                            capture_output_path,
-                        )
-                    case .COVERAGE_MASK:
-                        capture_succeeded = export_render_texture_png(
-                            coverage_mask_render_target.texture,
-                            capture_output_path,
-                        )
-                    }
-                    if capture_succeeded {
-                        if capture_options.frame_range_set {
-                            captured_sequence_frames += 1
-                            log.infof(
-                                "Captured case %s frame %d to %s",
+                        if !frame_streamed {
+                            log.errorf(
+                                "Failed to stream Viewer case %s at animation frame %.3f",
                                 capture_options.case_name,
+                                animation_playback.current_frame,
+                            )
+                            capture_complete = true
+                            capture_succeeded = false
+                        } else {
+                            captured_sequence_frames += 1
+                            expected_video_frames :=
+                                viewer_video_expected_frame_count(
+                                    capture_options,
+                                )
+                            if u64(captured_sequence_frames) >=
+                               expected_video_frames {
+                                capture_complete = true
+                                capture_succeeded = finish_video_stream_encoder(
+                                    &viewer_video_encoder,
+                                    capture_options.video_output,
+                                    expected_video_frames,
+                                    "animation",
+                                )
+                                if capture_succeeded {
+                                    log.infof(
+                                        "Streamed Viewer source frames %.3f through %.3f exactly once across %d output frames",
+                                        viewer_video_pose_frame(capture_options, 0),
+                                        viewer_video_pose_frame(
+                                            capture_options,
+                                            expected_video_frames - 1,
+                                        ),
+                                        int(expected_video_frames),
+                                    )
+                                }
+                            } else {
+                                animation_playback.current_frame =
+                                    viewer_video_pose_frame(
+                                        capture_options,
+                                        u64(captured_sequence_frames),
+                                    )
+                                animation_playback.pose_dirty = true
+                            }
+                        }
+                    } else {
+                        capture_output_path := capture_options.output_path
+                        capture_output_path_owned := false
+                        if capture_options.frame_range_set {
+                            capture_output_path = format_capture_sequence_output_path(
+                                capture_options.output_path,
+                                capture_options.output_template,
                                 capture_sequence_frame,
+                            )
+                            capture_output_path_owned = true
+                        }
+                        // Export the selected render target inline at the only capture point.
+                        lens_crop_bounds := lens_bounds
+                        switch capture_options.target {
+                        case .COMPOSITE:
+                            capture_succeeded = export_render_texture_png(
+                                composite_render_target.texture,
                                 capture_output_path,
                             )
+                        case .LENS:
+                            capture_succeeded = export_render_texture_png(
+                                composite_render_target.texture,
+                                capture_output_path,
+                                &lens_crop_bounds,
+                            )
+                        case .SCENE:
+                            capture_succeeded = export_render_texture_png(
+                                scene_render_target.texture,
+                                capture_output_path,
+                            )
+                        case .DOWNSAMPLE:
+                            capture_succeeded = export_render_texture_png(
+                                outlined_render_target.texture,
+                                capture_output_path,
+                            )
+                        case .COVERAGE_MASK:
+                            capture_succeeded = export_render_texture_png(
+                                coverage_mask_render_target.texture,
+                                capture_output_path,
+                            )
+                        }
+                        if capture_succeeded {
+                            if capture_options.frame_range_set {
+                                captured_sequence_frames += 1
+                                log.infof(
+                                    "Captured case %s frame %d to %s",
+                                    capture_options.case_name,
+                                    capture_sequence_frame,
+                                    capture_output_path,
+                                )
+                            } else {
+                                log.infof(
+                                    "Captured case %s to %s",
+                                    capture_options.case_name,
+                                    capture_output_path,
+                                )
+                            }
                         } else {
-                            log.infof(
-                                "Captured case %s to %s",
+                            log.errorf(
+                                "Failed to capture case %s to %s",
                                 capture_options.case_name,
                                 capture_output_path,
                             )
                         }
-                    } else {
-                        log.errorf(
-                            "Failed to capture case %s to %s",
-                            capture_options.case_name,
-                            capture_output_path,
-                        )
-                    }
-                    if capture_output_path_owned {
-                        delete(capture_output_path)
-                    }
+                        if capture_output_path_owned {
+                            delete(capture_output_path)
+                        }
 
-                    if !capture_succeeded || !capture_options.frame_range_set {
-                        capture_complete = true
-                    } else if capture_options.frame_range_step <=
-                              capture_options.frame_range_end &&
-                              capture_sequence_frame <=
-                              capture_options.frame_range_end -
-                              capture_options.frame_range_step {
-                        capture_sequence_frame += capture_options.frame_range_step
-                        animation_playback.current_frame = f32(capture_sequence_frame)
-                        animation_playback.pose_dirty = true
-                    } else {
-                        capture_complete = true
-                        log.infof(
-                            "Captured sequence case %s with %d frame(s)",
-                            capture_options.case_name,
-                            captured_sequence_frames,
-                        )
+                        if !capture_succeeded || !capture_options.frame_range_set {
+                            capture_complete = true
+                        } else if capture_options.frame_range_step <=
+                                  capture_options.frame_range_end &&
+                                  capture_sequence_frame <=
+                                  capture_options.frame_range_end -
+                                  capture_options.frame_range_step {
+                            capture_sequence_frame += capture_options.frame_range_step
+                            animation_playback.current_frame = f32(capture_sequence_frame)
+                            animation_playback.pose_dirty = true
+                        } else {
+                            capture_complete = true
+                            log.infof(
+                                "Captured sequence case %s with %d frame(s)",
+                                capture_options.case_name,
+                                captured_sequence_frames,
+                            )
+                        }
                     }
                 }
             }

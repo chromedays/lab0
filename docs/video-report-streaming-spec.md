@@ -1,7 +1,7 @@
-# Lab0 게임 비디오 리포트 스트리밍 명세
+# Lab0 비디오 리포트 스트리밍 명세
 
-문서 상태: Implemented v1 (2026-08-14)
-대상: `scripts/test-game.sh --video-report`와 Game 모드 리플레이 캡처
+문서 상태: Implemented v2 (2026-08-14)
+대상: Viewer 애니메이션 범위와 Game 리플레이 비디오 리포트
 
 ## 1. 목적
 
@@ -28,7 +28,6 @@ MP4로 인코딩하지 않는다. Lab0가 정상 GPU 렌더 경로에서 읽은 
 - MP4 바이트의 결정성 보장
 - GPU 하드웨어 인코더 선택 UI
 - 네트워크 스트리밍
-- Viewer 모드의 영상 녹화
 - 기존 PNG 시퀀스 캡처 기능 제거
 
 ## 3. 책임 경계
@@ -281,13 +280,92 @@ scripts/test-game.sh --video-report artifacts/<new-report-directory>
 - FFmpeg가 비정상 종료할 때 임시 파일을 PASS로 보고하지 않는지
   확인한다.
 
-## 11. 완료 조건
+## 11. Viewer 모드 확장
+
+Viewer는 Game의 `Video_Stream_Encoder` 전송 계층을 공유한다. Game의
+프레임 진행 권위가 60 Hz replay tick이라면 Viewer의 권위는 기존
+`--capture-frame-range start:end[:step]`가 정의하는 결정적 애니메이션
+포즈다. 각 선택 포즈는 보간 없이 영상 한 프레임이 된다.
+
+### CLI
+
+```text
+--viewer-video-output <path.mp4>
+```
+
+```sh
+/tmp/lab0-viewer-video \
+  --capture-case cesium-viewer-video \
+  --capture-model assets/CesiumMan.glb \
+  --capture-style styles/anime.json \
+  --capture-frame-range 0:119 \
+  --capture-view isometric \
+  --capture-edge-aa coverage \
+  --capture-target composite \
+  --viewer-video-output artifacts/report/viewer-test.mp4 \
+  --viewer-video-duration 5
+```
+
+Viewer video는 애니메이션이 있는 모델, 유효한 frame range,
+`--capture-case`, 1280×720 `composite` target과 `.mp4` 출력 경로를
+요구한다. `--capture-output`, 단일 `--capture-frame`, Game 모드와 함께
+사용할 수 없다. 범위 끝이 마지막 animation keyframe을 넘는 경우를 포함한
+잘못된 요청은 GPU 창 또는 FFmpeg 시작 전에 상태 2로 종료한다.
+
+`--viewer-video-duration <seconds>`를 지정하면 60 fps에서 정확한 정수
+프레임 수로 표현되어야 하며 최대 600초다. 선택 범위의 시작과 끝을 요청한
+출력 프레임 전체에 선형으로 대응시켜 정확히 한 번 진행한다. 끝에서 첫
+포즈로 되감지 않는다. 옵션을 생략하면 범위를 한 번만 스트리밍한다.
+
+Warmup 뒤 각 포즈에서 기존 Viewer scene, downsample, outline, composite
+파이프라인을 한 번 렌더하고 composite RenderTexture의
+`1280 * 720 * 4` RGBA8 bytes를 FFmpeg stdin에 모두 기록한다. 프레임 수는
+정확히 다음과 같다.
+
+```text
+(end - start) / step + 1   // 정수 나눗셈
+```
+
+출력 계약은 Game과 같은 H.264/yuv420p, 60 fps, 무음 MP4다. 60 fps는
+재생 계약이며 누락된 애니메이션 프레임 번호를 합성하지 않는다.
+
+### Viewer 자동 리포트
+
+```sh
+scripts/test-viewer.sh --video-report artifacts/<new-report-directory>
+```
+
+기본 리포트는 `assets/CesiumMan.glb`, `styles/anime.json`, isometric view,
+coverage edge AA와 distinct runtime frame range `0:119`를 사용한다. frame
+120은 루프를 닫기 위해 frame 0을 복제한 terminal keyframe이라 제외한다.
+Runner는 다음을
+검증한다.
+
+1. `odin test .`과 새 고유 바이너리 빌드가 성공한다.
+2. animation frame 24 composite PNG를 두 번 캡처해 byte-identical을
+   요구한다.
+3. 0:119 전체를 처음부터 끝까지 한 번 진행시키며 300개 composite를 중간
+   PNG 없이 FFmpeg stdin에 스트리밍한다.
+4. MP4가 H.264, 1280×720, 60 fps, 정확히 300프레임인지 확인한다.
+5. duration이 정확히 5초인지 확인한다.
+6. asset image/load warning, `frames/` 디렉터리와 남은 partial MP4가 없어야
+   한다.
+7. 완성된 MP4에서 네 시점 contact sheet를 생성한다.
+
+성공 산출물은 `viewer-test.mp4`, `contact-sheet.png`, `report.md`, 로그와
+회귀 근거용 fixed-pose PNG 한 장이다. contact sheet와 fixed-pose PNG는
+인코딩 입력으로 사용하지 않는다. MP4는 육안 검토용이고 fixed-pose PNG가
+Viewer 픽셀 결정성의 기준이다.
+
+## 12. 완료 조건
 
 다음 조건을 모두 만족하면 구현이 완료된 것으로 본다.
 
 - 기존 PNG 단일/시퀀스 캡처와 Game 고정 틱 캡처 동작이 유지된다.
 - `scripts/test-game.sh`의 비디오 리포트가 PNG 시퀀스를 만들지 않는다.
+- `scripts/test-viewer.sh`의 비디오 리포트도 PNG 시퀀스를 만들지 않는다.
 - 모든 리플레이 틱이 정확히 하나의 MP4 프레임으로 인코딩된다.
+- 모든 선택 Viewer 포즈가 정확히 하나의 MP4 프레임으로 인코딩된다.
 - MP4는 기존 리포트와 같은 1280×720, 60 fps, H.264/yuv420p 형식이다.
 - 동일 틱 PNG 결정성 검증과 asset warning 검사가 그대로 통과한다.
 - FFmpeg 및 GPU 오류가 성공으로 오인되지 않는다.

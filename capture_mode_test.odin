@@ -32,6 +32,7 @@ capture_options_build_a_deterministic_default_output :: proc(t: ^testing.T) {
     testing.expect_value(t, result.options.target, Capture_Target.COMPOSITE)
     testing.expect_value(t, result.options.view, Capture_View.DEFAULT)
     testing.expect_value(t, result.options.lens_mode, Lens_Mode.PIXELATED)
+    testing.expect_value(t, result.options.edge_aa_mode, Edge_AA_Mode.HARD)
     testing.expect_value(t, result.options.warmup_frames, 2)
     testing.expect(t, result.options.hide_window)
 }
@@ -46,6 +47,7 @@ capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
         "--capture-style", "styles/anime.json",
         "--capture-view", "isometric",
         "--capture-mode", "coverage-mask",
+        "--capture-edge-aa", "coverage",
         "--capture-target", "lens",
         "--capture-frame", "12.5",
         "--capture-warmup", "4",
@@ -58,10 +60,24 @@ capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
     testing.expect_value(t, result.options.style_path, "styles/anime.json")
     testing.expect_value(t, result.options.view, Capture_View.ISOMETRIC)
     testing.expect_value(t, result.options.lens_mode, Lens_Mode.COVERAGE_MASK)
+    testing.expect_value(t, result.options.edge_aa_mode, Edge_AA_Mode.COVERAGE)
     testing.expect_value(t, result.options.target, Capture_Target.LENS)
     testing.expect_value(t, result.options.animation_frame, f32(12.5))
     testing.expect_value(t, result.options.warmup_frames, 4)
     testing.expect(t, !result.options.hide_window)
+}
+
+// Edge AA accepts only the two viewer resolve modes.
+@test
+capture_options_reject_an_invalid_edge_aa_mode :: proc(t: ^testing.T) {
+    result := parse_capture_options({
+        "--capture-case", "smoke",
+        "--capture-edge-aa", "fxaa",
+    })
+    defer destroy_capture_options(&result.options)
+
+    testing.expect_value(t, result.error, Capture_Parse_Error.INVALID_EDGE_AA)
+    testing.expect(t, !result.options.enabled)
 }
 
 // Style inputs must be non-empty JSON paths before any file access occurs.

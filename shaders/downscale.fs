@@ -16,6 +16,7 @@ uniform vec2 u_target_resolution;
 uniform float u_color_cluster_threshold;
 uniform int u_rim_preserve_samples;
 uniform int u_highlight_preserve_samples;
+uniform int u_edge_aa_mode;
 
 out vec4 finalColor;
 
@@ -34,6 +35,7 @@ void main() {
     vec2 sample_uvs[DOWNSAMPLE_SAMPLE_COUNT];
     int sample_bands[DOWNSAMPLE_SAMPLE_COUNT];
     int sample_accents[DOWNSAMPLE_SAMPLE_COUNT];
+    float resolved_coverage = 0.0;
 
     for (int sample_index = 0;
          sample_index < DOWNSAMPLE_SAMPLE_COUNT;
@@ -45,12 +47,10 @@ void main() {
             sample_index
         );
         sample_uvs[sample_index] = sample_uv;
-        sample_bands[sample_index] = decode_cel_band(
-            texture(u_cel_band_texture, sample_uv)
-        );
-        sample_accents[sample_index] = decode_cel_accents(
-            texture(u_cel_band_texture, sample_uv)
-        );
+        vec4 encoded_sample = texture(u_cel_band_texture, sample_uv);
+        sample_bands[sample_index] = decode_cel_band(encoded_sample);
+        sample_accents[sample_index] = decode_cel_accents(encoded_sample);
+        resolved_coverage += encoded_sample.a;
     }
 
     // First choose the cel-shading band with the greatest source coverage.
@@ -202,6 +202,20 @@ void main() {
 
     // winning_sample_index is guaranteed once a non-background band wins because
     // at least one sample belongs to that band and matches the selected accent.
-    vec4 winning_color = vec4(sample_colors[winning_sample_index], 1.0);
+    // Coverage AA keeps the representative source color but resolves silhouette
+    // occupancy from the same deterministic 4x4 metadata footprint. Hard mode
+    // deliberately retains the historical binary alpha contract.
+    float output_alpha = 1.0;
+    if (u_edge_aa_mode != 0) {
+        output_alpha = clamp(
+            resolved_coverage / float(DOWNSAMPLE_SAMPLE_COUNT),
+            0.0,
+            1.0
+        );
+    }
+    vec4 winning_color = vec4(
+        sample_colors[winning_sample_index],
+        output_alpha
+    );
     finalColor = winning_color * fragColor * colDiffuse;
 }

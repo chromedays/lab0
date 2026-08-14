@@ -27,7 +27,8 @@
 3. The cel metadata pass uses the same material, alpha rule, lighting inputs,
    ramp, and accent classification.
 4. The existing 4x4 downsample pass chooses the dominant diffuse band, then
-   preserves eligible highlight or rim samples before color clustering.
+   preserves eligible highlight or rim samples before color clustering. Viewer
+   Coverage AA also resolves the footprint's occupied-sample ratio into alpha.
 5. The coverage pass resolves the visible metadata mask.
 6. A low-resolution outline pass combines the downsampled color and coverage
    mask for the pixelated lens and PNG export.
@@ -171,6 +172,13 @@ keeps its source color. A background pixel becomes outline color when any
 coverage sample within the configured Chebyshev radius exceeds the coverage
 threshold. Width is zero through three low-resolution pixels. Width zero is a
 copy operation.
+
+Viewer Edge AA has two runtime modes. `HARD` preserves that binary behavior.
+`COVERAGE` retains the representative source RGB, averages the sixteen metadata
+occupancy samples into straight output alpha, scales sparse outline corners by
+their strongest qualifying coverage, and composites partial fill over the
+outline. It does not soften material alpha testing or internal cel bands. Game
+mode leaves the shader uniform at its zero-valued `HARD` default.
 
 ## JSON presets
 

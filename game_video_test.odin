@@ -99,15 +99,19 @@ game_video_options_reject_invalid_and_conflicting_requests :: proc(t: ^testing.T
 }
 
 @(test)
-game_video_frame_and_ffmpeg_contract_are_stable :: proc(t: ^testing.T) {
+video_stream_frame_and_ffmpeg_contract_are_stable :: proc(t: ^testing.T) {
     testing.expect_value(
         t,
-        game_video_frame_byte_count(GAME_VIDEO_WIDTH, GAME_VIDEO_HEIGHT),
+        video_stream_frame_byte_count(GAME_SCREEN_WIDTH, GAME_SCREEN_HEIGHT),
         3_686_400,
     )
-    testing.expect_value(t, game_video_frame_byte_count(0, GAME_VIDEO_HEIGHT), 0)
+    testing.expect_value(
+        t,
+        video_stream_frame_byte_count(0, GAME_SCREEN_HEIGHT),
+        0,
+    )
 
-    temporary_path := game_video_temporary_output_path(
+    temporary_path := video_stream_temporary_output_path(
         "artifacts/report/game-test.mp4",
         42,
     )
@@ -118,7 +122,7 @@ game_video_frame_and_ffmpeg_contract_are_stable :: proc(t: ^testing.T) {
         "artifacts/report/game-test.partial-42.mp4",
     )
 
-    command := game_video_ffmpeg_command(temporary_path)
+    command := video_stream_ffmpeg_command(temporary_path, "1280x720", "60")
     testing.expect_value(t, command[0], "ffmpeg")
     testing.expect_value(t, command[5], "rawvideo")
     testing.expect_value(t, command[7], "rgba")
