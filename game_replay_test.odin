@@ -134,6 +134,49 @@ game_room_transition_replay_enters_r01_through_the_real_exit :: proc(t: ^testing
 }
 
 @(test)
+game_all_rooms_camera_review_replay_visits_the_full_authored_route :: proc(
+    t: ^testing.T,
+) {
+    replay, replay_error := load_game_replay(
+        "replays/all-rooms-camera-review.json",
+    )
+    testing.expect_value(t, replay_error, Game_Replay_Error.NONE)
+    if replay_error != .NONE { return }
+    defer destroy_game_replay(&replay)
+
+    state := game_state_init(replay.start_room)
+    visited: [7]bool
+    visited[int(state.current_room)] = true
+    player: Game_Replay_Player
+    for {
+        input, available := game_replay_next_input(&replay, &player)
+        if !available { break }
+        game_fixed_update(&state, input, GAME_FIXED_DT)
+        if int(state.current_room) < len(visited) {
+            visited[int(state.current_room)] = true
+        }
+    }
+
+    for was_visited, room_index in visited {
+        testing.expectf(
+            t,
+            was_visited,
+            "camera-review replay never visited %s",
+            game_room(Game_Room_ID(room_index)).name,
+        )
+    }
+    testing.expectf(
+        t,
+        state.completed,
+        "camera-review replay ended in %s at (%.3f, %.3f) without completing",
+        game_room(state.current_room).name,
+        state.player.position.x,
+        state.player.position.z,
+    )
+    testing.expect_value(t, state.tick, replay.total_ticks)
+}
+
+@(test)
 game_zombie_encounter_replay_commits_to_one_dodge :: proc(t: ^testing.T) {
     replay, replay_error := load_game_replay("replays/zombie-encounter-smoke.json")
     testing.expect_value(t, replay_error, Game_Replay_Error.NONE)
