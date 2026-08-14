@@ -21,6 +21,7 @@ GAME_CAMERA_FOVY        :: f32(8.0)
 GAME_CAMERA_SMOOTH_TIME :: f32(0.12)
 GAME_CAMERA_LOOK_AHEAD  :: f32(0.7)
 GAME_PLAYER_MODEL_PATH  :: "assets/Meshy_AI_lowpoly_man_rigged_biped_Meshy_AI_Meshy_Merged_Animations.glb"
+GAME_PLAYER_ANIMATION_SAMPLE_COUNT :: c.int(8)
 
 Game_Run_Options :: struct {
     start_room:          Game_Room_ID,
@@ -57,6 +58,11 @@ Game_Assets :: struct {
     walk_clip:  c.int,
     run_clip:   c.int,
     active_clip: c.int,
+}
+
+game_configure_player_animation :: proc(playback: ^Animation_Playback) {
+    playback.sampled_playback = true
+    playback.sample_count = GAME_PLAYER_ANIMATION_SAMPLE_COUNT
 }
 
 Game_Decor_Kind :: enum {
@@ -368,6 +374,7 @@ game_load_assets :: proc() -> Game_Assets {
             GAME_PLAYER_MODEL_PATH,
             .ASSET,
         )
+        game_configure_player_animation(&assets.animation)
         assets.walk_clip = game_find_animation_clip(&assets.animation, "Walking")
         assets.run_clip = game_find_animation_clip(&assets.animation, "Running")
         assets.active_clip = -1
@@ -1207,13 +1214,14 @@ game_update_player_animation :: proc(
     } else {
         assets.animation.current_frame = 0
     }
-    if assets.animation.current_frame != assets.animation.applied_frame {
+    pose_frame := get_animation_pose_frame(&assets.animation, animation)
+    if pose_frame != assets.animation.applied_frame {
         rl.UpdateModelAnimation(
             assets.player.model,
             animation,
-            assets.animation.current_frame,
+            pose_frame,
         )
-        assets.animation.applied_frame = assets.animation.current_frame
+        assets.animation.applied_frame = pose_frame
     }
 }
 

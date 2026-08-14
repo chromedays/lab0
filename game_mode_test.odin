@@ -1,6 +1,31 @@
 package main
 
 import "core:testing"
+import rl "vendor:raylib"
+
+@(test)
+game_player_animation_uses_eight_samples :: proc(t: ^testing.T) {
+    playback: Animation_Playback
+    game_configure_player_animation(&playback)
+
+    testing.expect(t, playback.sampled_playback)
+    testing.expect_value(
+        t,
+        playback.sample_count,
+        GAME_PLAYER_ANIMATION_SAMPLE_COUNT,
+    )
+}
+
+@(test)
+game_player_animation_quantizes_pose_frames :: proc(t: ^testing.T) {
+    playback := Animation_Playback{current_frame = 29}
+    game_configure_player_animation(&playback)
+    animation := rl.ModelAnimation{keyframeCount = 121}
+
+    pose_frame := get_animation_pose_frame(&playback, animation)
+
+    testing.expect_value(t, pose_frame, f32(15))
+}
 
 @(test)
 game_mode_requires_the_explicit_game_value :: proc(t: ^testing.T) {
