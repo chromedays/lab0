@@ -185,6 +185,37 @@ FFmpeg may be used to assemble a contact sheet for human review. PNG files, not
 encoded video, remain the regression source of truth because video codecs can
 introduce irrelevant differences.
 
+## Scene Editor validation
+
+Scene Editor is selected with `--mode scene-editor` and requires a strict-JSON
+scene for non-interactive capture. Use the bundled all-primitives, fixed-pose,
+and multi-light fixture for a representative check:
+
+```sh
+/tmp/lab0-capture-worker-a \
+  --mode scene-editor \
+  --scene scenes/primitive-light-grid.json \
+  --capture-case primitive-light-grid \
+  --capture-target composite \
+  --capture-output /tmp/lab0-worker-a/primitive-light-grid.png
+```
+
+Scene captures support `composite`, `scene`, `downsample`, and
+`coverage-mask`. Their low-resolution dimensions follow the scene's serialized
+downscale level. Viewer model/style/view/frame options and Game replay options
+are invalid because the scene owns all render state.
+
+Use `scripts/test-scene-editor.sh --video-report
+artifacts/<unique-report-name>` for a human-reviewable camera-orbit report. It
+runs the unit suite, builds a fresh binary, checks two serialized-camera PNGs
+for byte determinism, then streams 300 1280x720 composite RenderTextures
+directly to FFmpeg over one five-second orbit at 60 fps. Frame zero is not
+duplicated at the endpoint. The runner creates `scene-editor-test.mp4`,
+`contact-sheet.png`, `report.md`, one deterministic composite PNG, and logs,
+without creating a `frames/` directory. Inspect and link the MP4, report, and
+contact sheet by absolute local path; retain the PNG and versioned scene JSON
+as regression truth.
+
 ## Game-mode validation
 
 The traversal prototype is a separate runtime path selected with `--mode game`.

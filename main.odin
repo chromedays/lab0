@@ -1574,6 +1574,13 @@ execute_ui_command :: proc(
 // and capture failures to set exit codes: 0 success, 1 render/export failure,
 // and 2 invalid capture configuration or state.
 main :: proc() {
+    if scene_editor_mode_requested(os.args[1:]) {
+        scene_editor_exit_code := run_scene_editor_mode(os.args[1:])
+        if scene_editor_exit_code != 0 {
+            os.exit(scene_editor_exit_code)
+        }
+        return
+    }
     if game_mode_requested(os.args[1:]) {
         game_exit_code := run_game_mode(os.args[1:])
         if game_exit_code != 0 {
