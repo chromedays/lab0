@@ -25,7 +25,9 @@ GAME_CONNECTION_LIFT    :: f32(0.015)
 GAME_OVERLAY_HEIGHT     :: f32(0.06)
 GAME_OVERLAY_EMBED      :: f32(0.01)
 GAME_PLAYER_MODEL_PATH  :: "assets/Meshy_AI_lowpoly_man_rigged_biped_Meshy_AI_Meshy_Merged_Animations.glb"
+GAME_ZOMBIE_MODEL_PATH  :: "assets/godotman.glb"
 GAME_PLAYER_ANIMATION_SAMPLE_COUNT :: c.int(8)
+GAME_ZOMBIE_ANIMATION_SAMPLE_COUNT :: c.int(8)
 GAME_OCCLUSION_DEBUG_TINT :: rl.Color{255, 96, 200, 255}
 
 Game_Run_Options :: struct {
@@ -55,6 +57,7 @@ Game_Assets :: struct {
     sphere:     rl.Model,
     cylinder:   rl.Model,
     player:     Game_Imported_Model,
+    zombie:     Game_Imported_Model,
     tree:       Game_Imported_Model,
     dead_tree:  Game_Imported_Model,
     trunk:      Game_Imported_Model,
@@ -63,12 +66,40 @@ Game_Assets :: struct {
     walk_clip:  c.int,
     run_clip:   c.int,
     active_clip: c.int,
+    zombie_animation: Animation_Playback,
+    zombie_walk_clip: c.int,
+    zombie_idle_clip: c.int,
+    zombie_attack_clip: c.int,
+    zombie_clips_valid: bool,
     debug_white_texture: rl.Texture2D,
 }
 
 game_configure_player_animation :: proc(playback: ^Animation_Playback) {
     playback.sampled_playback = true
     playback.sample_count = GAME_PLAYER_ANIMATION_SAMPLE_COUNT
+}
+
+game_configure_zombie_animation :: proc(playback: ^Animation_Playback) {
+    playback.sampled_playback = true
+    playback.sample_count = GAME_ZOMBIE_ANIMATION_SAMPLE_COUNT
+}
+
+Game_Zombie_Animation_Kind :: enum {
+    WALKING,
+    IDLE,
+    ATTACK,
+}
+
+game_zombie_animation_kind :: proc(mode: Game_Zombie_Mode) -> Game_Zombie_Animation_Kind {
+    switch mode {
+    case .SHAMBLING, .CHASING:
+        return .WALKING
+    case .WINDUP, .LUNGING:
+        return .ATTACK
+    case .RECOVERING:
+        return .IDLE
+    }
+    return .IDLE
 }
 
 Game_Decor_Kind :: enum {
@@ -398,12 +429,27 @@ game_find_animation_clip :: proc(
     return 0
 }
 
+game_try_find_animation_clip :: proc(
+    playback: ^Animation_Playback,
+    requested_name: string,
+) -> (clip: c.int, found: bool) {
+    for valid_index, playback_index in playback.valid_indices {
+        animation := playback.animations[valid_index]
+        animation_name := string(cstring(&animation.name[0]))
+        if strings.equal_fold(animation_name, requested_name) {
+            return c.int(playback_index), true
+        }
+    }
+    return 0, false
+}
+
 game_load_assets :: proc() -> Game_Assets {
     assets: Game_Assets
     assets.cube = rl.LoadModelFromMesh(rl.GenMeshCube(1, 1, 1))
     assets.sphere = rl.LoadModelFromMesh(rl.GenMeshSphere(0.5, 12, 12))
     assets.cylinder = rl.LoadModelFromMesh(rl.GenMeshCylinder(0.5, 1, 12))
     assets.player = game_load_imported_model(GAME_PLAYER_MODEL_PATH)
+    assets.zombie = game_load_imported_model(GAME_ZOMBIE_MODEL_PATH)
     assets.tree = game_load_imported_model("assets/tree_1.glb")
     assets.dead_tree = game_load_imported_model("assets/dead_tree_1.glb")
     assets.trunk = game_load_imported_model("assets/trunk_1.glb")
@@ -423,12 +469,47 @@ game_load_assets :: proc() -> Game_Assets {
         assets.run_clip = game_find_animation_clip(&assets.animation, "Running")
         assets.active_clip = -1
     }
+    if assets.zombie.valid {
+        assets.zombie_animation = load_animation_playback(
+            assets.zombie.model,
+            GAME_ZOMBIE_MODEL_PATH,
+            .ASSET,
+        )
+        game_configure_zombie_animation(&assets.zombie_animation)
+        attack_found, idle_found, walk_found: bool
+        assets.zombie_attack_clip, attack_found = game_try_find_animation_clip(
+            &assets.zombie_animation,
+            "attack",
+        )
+        assets.zombie_idle_clip, idle_found = game_try_find_animation_clip(
+            &assets.zombie_animation,
+            "idle",
+        )
+        assets.zombie_walk_clip, walk_found = game_try_find_animation_clip(
+            &assets.zombie_animation,
+            "walking",
+        )
+        if !walk_found {
+            // GodotMan currently names its locomotion clip "run". At the
+            // shamble speed it serves as the temporary zombie walk cycle.
+            assets.zombie_walk_clip, walk_found = game_try_find_animation_clip(
+                &assets.zombie_animation,
+                "run",
+            )
+        }
+        assets.zombie_clips_valid = attack_found && idle_found && walk_found
+        if !assets.zombie_clips_valid {
+            log.warn("GodotMan is missing a required attack, idle, or walking/run clip")
+        }
+    }
     return assets
 }
 
 game_unload_assets :: proc(assets: ^Game_Assets) {
     destroy_animation_playback(&assets.animation)
+    destroy_animation_playback(&assets.zombie_animation)
     game_unload_imported_model(&assets.player)
+    game_unload_imported_model(&assets.zombie)
     game_unload_imported_model(&assets.tree)
     game_unload_imported_model(&assets.dead_tree)
     game_unload_imported_model(&assets.trunk)
@@ -465,6 +546,7 @@ game_prepare_assets_shader :: proc(
     game_prepare_model_shader(&assets.sphere, shader, cel_ramp)
     game_prepare_model_shader(&assets.cylinder, shader, cel_ramp)
     if assets.player.valid { game_prepare_model_shader(&assets.player.model, shader, cel_ramp) }
+    if assets.zombie.valid { game_prepare_model_shader(&assets.zombie.model, shader, cel_ramp) }
     if assets.tree.valid { game_prepare_model_shader(&assets.tree.model, shader, cel_ramp) }
     if assets.dead_tree.valid { game_prepare_model_shader(&assets.dead_tree.model, shader, cel_ramp) }
     if assets.trunk.valid { game_prepare_model_shader(&assets.trunk.model, shader, cel_ramp) }
@@ -1452,6 +1534,279 @@ game_draw_player :: proc(assets: ^Game_Assets, state: ^Game_State) {
     )
 }
 
+game_zombie_mode_label :: proc(mode: Game_Zombie_Mode) -> cstring {
+    switch mode {
+    case .SHAMBLING:  return "SHAMBLING"
+    case .CHASING:    return "CHASING"
+    case .WINDUP:     return "WINDUP"
+    case .LUNGING:    return "LUNGING"
+    case .RECOVERING: return "RECOVERING"
+    }
+    return "UNKNOWN"
+}
+
+game_zombie_count_in_room :: proc(room_id: Game_Room_ID) -> int {
+    count := 0
+    for spawn in GAME_ZOMBIE_SPAWNS {
+        if spawn.room == room_id {
+            count += 1
+        }
+    }
+    return count
+}
+
+game_apply_zombie_animation :: proc(
+    assets: ^Game_Assets,
+    state: ^Game_State,
+    zombie_index: int,
+) {
+    if !assets.zombie.valid ||
+       !assets.zombie_clips_valid ||
+       !has_playable_animations(&assets.zombie_animation) {
+        return
+    }
+
+    zombie := &state.zombies[zombie_index]
+    animation_kind := game_zombie_animation_kind(zombie.mode)
+    desired_clip := assets.zombie_idle_clip
+    switch animation_kind {
+    case .WALKING: desired_clip = assets.zombie_walk_clip
+    case .IDLE:    desired_clip = assets.zombie_idle_clip
+    case .ATTACK:  desired_clip = assets.zombie_attack_clip
+    }
+    assets.zombie_animation.active_index = desired_clip
+    animation, found := get_active_animation(&assets.zombie_animation)
+    if !found {
+        return
+    }
+
+    last_frame := f32(max(animation.keyframeCount - 1, 0))
+    frame: f32
+    if last_frame > 0 {
+        switch animation_kind {
+        case .WALKING:
+            playback_speed: f32 = 0.52
+            if zombie.mode == .CHASING {
+                playback_speed = 1.05
+            }
+            frame = math.mod(
+                state.elapsed_time * ANIMATION_SAMPLE_FPS * playback_speed +
+                    f32(zombie_index) * 7.0,
+                last_frame,
+            )
+        case .IDLE:
+            frame = math.mod(
+                state.elapsed_time * ANIMATION_SAMPLE_FPS * 0.38 +
+                    f32(zombie_index) * 5.0,
+                last_frame,
+            )
+        case .ATTACK:
+            attack_elapsed := zombie.mode_elapsed
+            if zombie.mode == .LUNGING {
+                attack_elapsed += GAME_ZOMBIE_WINDUP_TIME
+            }
+            attack_duration := GAME_ZOMBIE_WINDUP_TIME + GAME_ZOMBIE_LUNGE_TIME
+            attack_progress := clamp(attack_elapsed / attack_duration, f32(0), f32(1))
+            frame = attack_progress * last_frame
+        }
+    }
+
+    assets.zombie_animation.current_frame = frame
+    pose_frame := get_animation_pose_frame(&assets.zombie_animation, animation)
+    // All zombies share one animated model. Upload each deterministic pose
+    // immediately before its draw so every instance can show its own state.
+    rl.UpdateModelAnimation(assets.zombie.model, animation, pose_frame)
+    assets.zombie_animation.applied_frame = pose_frame
+}
+
+game_draw_zombie :: proc(
+    assets: ^Game_Assets,
+    state: ^Game_State,
+    zombie_index: int,
+) {
+    zombie := &state.zombies[zombie_index]
+    facing := game_normalize_input(zombie.facing)
+    if game_vector_length(facing) <= 0.001 {
+        facing = {0, 1}
+    }
+    side := rl.Vector2{-facing.y, facing.x}
+    rotation := f32(math.atan2(f64(facing.x), f64(facing.y)) * 180.0 / math.PI)
+
+    skin_color := rl.Color{139, 178, 111, 255}
+    shirt_color := rl.Color{75, 75, 111, 255}
+    marker_color := rl.Color{27, 31, 52, 255}
+    eye_color := rl.Color{241, 86, 119, 255}
+    lean: f32
+    height_offset: f32
+    arm_reach: f32 = 0.28
+    switch zombie.mode {
+    case .SHAMBLING:
+        sway := f32(math.sin(f64(state.elapsed_time * 7.0 + f32(zombie_index) * 1.9)))
+        lean = sway * 0.035
+        arm_reach = 0.22 + sway * 0.04
+    case .CHASING:
+        skin_color = {167, 197, 104, 255}
+        shirt_color = {91, 66, 112, 255}
+        marker_color = {103, 112, 58, 255}
+        lean = 0.09
+        arm_reach = 0.38
+    case .WINDUP:
+        skin_color = {225, 188, 83, 255}
+        shirt_color = {116, 60, 105, 255}
+        marker_color = {244, 91, 145, 255}
+        eye_color = {255, 225, 127, 255}
+        lean = -0.16
+        height_offset = 0.06
+        arm_reach = 0.08
+    case .LUNGING:
+        skin_color = {231, 118, 82, 255}
+        shirt_color = {126, 47, 83, 255}
+        marker_color = {255, 129, 78, 255}
+        eye_color = {255, 236, 183, 255}
+        lean = 0.24
+        height_offset = -0.18
+        arm_reach = 0.55
+    case .RECOVERING:
+        skin_color = {116, 145, 111, 255}
+        shirt_color = {61, 55, 91, 255}
+        marker_color = {72, 58, 91, 255}
+        lean = 0.13
+        height_offset = -0.14
+        arm_reach = 0.46
+    }
+
+    if zombie.mode == .WINDUP || zombie.mode == .LUNGING {
+        telegraph_length: f32 = 1.65
+        if zombie.mode == .LUNGING {
+            telegraph_length = 1.15
+        }
+        telegraph_center := zombie.position + rl.Vector3{
+            facing.x * telegraph_length * 0.5,
+            0.025,
+            facing.y * telegraph_length * 0.5,
+        }
+        rl.DrawModelEx(
+            assets.cube,
+            telegraph_center,
+            {0, 1, 0},
+            rotation,
+            {0.24, 0.045, telegraph_length},
+            marker_color,
+        )
+    }
+
+    body_offset := rl.Vector3{facing.x * lean, 0, facing.y * lean}
+    rl.DrawModelEx(
+        assets.sphere,
+        zombie.position + rl.Vector3{0, 0.03, 0},
+        {0, 1, 0},
+        rotation,
+        {0.82, 0.055, 0.62},
+        marker_color,
+    )
+
+    if assets.zombie.valid && assets.zombie_clips_valid {
+        zombie_tint := rl.Color{178, 214, 162, 255}
+        switch zombie.mode {
+        case .SHAMBLING:  zombie_tint = {178, 214, 162, 255}
+        case .CHASING:    zombie_tint = {205, 227, 154, 255}
+        case .WINDUP:     zombie_tint = {255, 211, 127, 255}
+        case .LUNGING:    zombie_tint = {255, 151, 112, 255}
+        case .RECOVERING: zombie_tint = {148, 170, 158, 255}
+        }
+        game_apply_zombie_animation(assets, state, zombie_index)
+        game_draw_imported(
+            &assets.zombie,
+            zombie.position,
+            1.68,
+            rotation,
+            zombie_tint,
+        )
+        return
+    }
+
+    side_signs := [2]f32{-1, 1}
+    leg_height := f32(0.58)
+    for side_sign in side_signs {
+        leg_position := zombie.position + rl.Vector3{
+            side.x * side_sign * 0.13,
+            leg_height * 0.5,
+            side.y * side_sign * 0.13,
+        }
+        rl.DrawModelEx(
+            assets.cylinder,
+            leg_position,
+            {0, 1, 0},
+            rotation,
+            {0.34, leg_height, 0.34},
+            {46, 49, 74, 255},
+        )
+    }
+
+    body_position := zombie.position + body_offset + rl.Vector3{0, 0.91 + height_offset, 0}
+    rl.DrawModelEx(
+        assets.cylinder,
+        body_position,
+        {0, 1, 0},
+        rotation,
+        {0.72, 0.88, 0.58},
+        shirt_color,
+    )
+
+    for side_sign in side_signs {
+        arm_center := zombie.position + body_offset + rl.Vector3{
+            side.x * side_sign * 0.29 + facing.x * arm_reach,
+            1.10 + height_offset,
+            side.y * side_sign * 0.29 + facing.y * arm_reach,
+        }
+        rl.DrawModelEx(
+            assets.cube,
+            arm_center,
+            {0, 1, 0},
+            rotation,
+            {0.15, 0.15, 0.68},
+            skin_color,
+        )
+    }
+
+    head_position := zombie.position + body_offset + rl.Vector3{
+        facing.x * 0.05,
+        1.52 + height_offset,
+        facing.y * 0.05,
+    }
+    rl.DrawModelEx(
+        assets.sphere,
+        head_position,
+        {0, 1, 0},
+        rotation,
+        {0.58, 0.58, 0.54},
+        skin_color,
+    )
+    for side_sign in side_signs {
+        eye_position := head_position + rl.Vector3{
+            facing.x * 0.26 + side.x * side_sign * 0.105,
+            0.035,
+            facing.y * 0.26 + side.y * side_sign * 0.105,
+        }
+        rl.DrawModelEx(
+            assets.sphere,
+            eye_position,
+            {0, 1, 0},
+            rotation,
+            {0.13, 0.13, 0.09},
+            eye_color,
+        )
+    }
+}
+
+game_draw_zombies :: proc(assets: ^Game_Assets, state: ^Game_State) {
+    for spawn, zombie_index in GAME_ZOMBIE_SPAWNS {
+        if spawn.room == state.current_room {
+            game_draw_zombie(assets, state, zombie_index)
+        }
+    }
+}
+
 game_set_cel_accents_enabled :: proc(
     shader: rl.Shader,
     bindings: ^Cel_Shader_Bindings,
@@ -1540,6 +1895,7 @@ game_draw_world :: proc(
     }
     game_draw_obstacle_markers(assets)
     game_draw_decor(assets, state, camera)
+    game_draw_zombies(assets, state)
     game_draw_player(assets, state)
 }
 
@@ -1724,6 +2080,33 @@ game_draw_debug_overlay :: proc(state: ^Game_State, camera: rl.Camera3D) {
             )
         }
     }
+    for spawn, zombie_index in GAME_ZOMBIE_SPAWNS {
+        if spawn.room != state.current_room {
+            continue
+        }
+        zombie := &state.zombies[zombie_index]
+        zombie_screen := rl.GetWorldToScreen(
+            zombie.position + rl.Vector3{0, 1.8, 0},
+            camera,
+        )
+        debug_color := rl.Color{174, 224, 95, 255}
+        if zombie.mode == .WINDUP || zombie.mode == .LUNGING {
+            debug_color = {255, 91, 145, 255}
+        }
+        rl.DrawCircleLines(
+            c.int(zombie_screen.x),
+            c.int(zombie_screen.y),
+            12,
+            debug_color,
+        )
+        rl.DrawText(
+            game_zombie_mode_label(zombie.mode),
+            c.int(zombie_screen.x) - 42,
+            c.int(zombie_screen.y) - 28,
+            10,
+            debug_color,
+        )
+    }
     player_screen := rl.GetWorldToScreen(state.player.position, camera)
     rl.DrawCircleLines(c.int(player_screen.x), c.int(player_screen.y), 11, rl.LIME)
     rl.DrawRectangleLines(
@@ -1779,6 +2162,21 @@ game_draw_hud :: proc(
         objective_text = "Return to the start forest"
     }
     rl.DrawText(objective_text, 25, 42, 14, accent)
+
+    zombie_count := game_zombie_count_in_room(state.current_room)
+    if zombie_count > 0 {
+        threat_panel := rl.Rectangle{1010, 12, 258, 48}
+        rl.DrawRectangleRec(threat_panel, {20, 17, 39, 230})
+        rl.DrawRectangle(1010, 12, 5, 48, {242, 88, 137, 255})
+        rl.DrawText("INFECTED AREA", 1024, 18, 17, {244, 207, 113, 255})
+        rl.DrawText(
+            rl.TextFormat("Undead %d    Hits %d", zombie_count, state.zombie_hits),
+            1024,
+            40,
+            13,
+            {225, 218, 238, 255},
+        )
+    }
 
     rl.DrawRectangle(12, GAME_SCREEN_HEIGHT - 34, 420, 22, {12, 14, 38, 205})
     rl.DrawRectangle(12, GAME_SCREEN_HEIGHT - 34, 5, 22, {239, 91, 145, 255})

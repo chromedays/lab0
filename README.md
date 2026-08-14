@@ -63,10 +63,10 @@ odin run . -- --mode game
 ```
 
 The prototype is a handcrafted seven-room forest loop rendered through the same
-cel-shading, coverage, downsample, and outline stages as the viewer. Gameplay is
-kept intentionally narrow: explore with screen-relative eight-directional
-movement, cross short gaps with a fixed-distance dash, reach the overlook, and
-return to the start forest.
+cel-shading, coverage, downsample, and outline stages as the viewer. Explore
+with screen-relative eight-directional movement, cross short gaps with a
+fixed-distance dash, evade the undead, reach the overlook, and return to the
+start forest.
 
 | Action | Keyboard | Gamepad |
 | --- | --- | --- |
@@ -75,6 +75,14 @@ return to the start forest.
 | Reset current room | `R` | Back/View button |
 | Debug overlay | `F3` | — |
 | Quit | `Cmd/Ctrl+Q` | — |
+
+R02 contains one roaming zombie and the optional R03 grove contains a
+six-enemy evasion arena. Zombies shamble between authored patrol points, detect the
+player through an unobstructed field of view, hear nearby dashes, and pursue the
+last detected position. Their committed lunge has a bright ground telegraph;
+dash across the lane during the windup to evade it. A lunge hit returns the
+player and that room's zombies to their room spawns, while the HUD retains the
+hit count.
 
 Start directly in a room for inspection with `--game-room R00` through
 `--game-room R06`. Game captures are deterministic at the selected room spawn:
@@ -181,6 +189,29 @@ odin run . -- \
   --capture-case traversal-dash-tick-5 \
   --capture-target composite \
   --capture-output artifacts/traversal/dash-tick-5.png
+```
+
+The zombie encounter fixture approaches the first R03 zombie, baits its lunge,
+and dodges across the committed lane:
+
+```sh
+odin run . -- \
+  --mode game \
+  --game-replay replays/zombie-encounter-smoke.json \
+  --game-capture-tick 50 \
+  --capture-case zombie-windup-tick-50 \
+  --capture-target composite \
+  --capture-output artifacts/traversal/zombie-windup-tick-50.png
+```
+
+For a longer stress run, `zombie-gauntlet-30s.json` drives 1,800 fixed ticks
+through the six-zombie R03 arena. It performs 39 dashes, triggers group chases,
+and intentionally records three room resets:
+
+```sh
+scripts/test-game.sh \
+  --video-report artifacts/zombie-gauntlet-report \
+  --replay replays/zombie-gauntlet-30s.json
 ```
 
 The replay's `start_room` owns the initial state. Supplying a conflicting

@@ -197,3 +197,119 @@ game_authored_main_route_connects_overlook_back_to_start :: proc(t: ^testing.T) 
     )
     testing.expect(t, state.completed, "the authored loop should complete after returning to R00")
 }
+
+@(test)
+game_zombies_spawn_in_valid_patrol_space :: proc(t: ^testing.T) {
+    state := game_state_init(.R03_WIDE_GROVE)
+    for spawn, zombie_index in GAME_ZOMBIE_SPAWNS {
+        zombie := state.zombies[zombie_index]
+        testing.expect_value(t, zombie.position, spawn.position)
+        testing.expect_value(t, zombie.mode, Game_Zombie_Mode.SHAMBLING)
+        testing.expectf(
+            t,
+            game_position_inside_room_radius(spawn.room, zombie.position, GAME_ZOMBIE_RADIUS),
+            "zombie %d should start inside %s",
+            zombie_index,
+            game_room(spawn.room).name,
+        )
+        testing.expectf(
+            t,
+            !game_zombie_position_blocked(spawn.room, zombie.position),
+            "zombie %d should not start in geometry or a hazard",
+            zombie_index,
+        )
+    }
+}
+
+@(test)
+game_zombie_sight_starts_a_chase_but_obstacles_block_it :: proc(t: ^testing.T) {
+    state := game_state_init(.R03_WIDE_GROVE)
+    zombie_index := 1
+    game_fixed_update(&state, {}, GAME_FIXED_DT)
+    testing.expect_value(
+        t,
+        state.zombies[zombie_index].mode,
+        Game_Zombie_Mode.CHASING,
+    )
+
+    state.player.position = {61, 0, 0}
+    state.zombies[zombie_index].position = {55, 0, 0}
+    state.zombies[zombie_index].facing = {1, 0}
+    state.zombies[zombie_index].mode = .SHAMBLING
+    state.zombies[zombie_index].alert_memory = 0
+    testing.expect(
+        t,
+        !game_zombie_can_see_player(&state, &state.zombies[zombie_index]),
+        "the wide-grove trunk should block zombie sight",
+    )
+}
+
+@(test)
+game_zombie_hears_a_dash_beyond_its_sight_radius :: proc(t: ^testing.T) {
+    state := game_state_init(.R02_CENTRAL_RUIN)
+    zombie_index := 0
+    state.player.position = {35.8, 0, 6.1}
+    state.player.facing = {0, 1}
+    game_fixed_update(&state, {{0, 1}, true}, GAME_FIXED_DT)
+    testing.expect_value(
+        t,
+        state.zombies[zombie_index].mode,
+        Game_Zombie_Mode.CHASING,
+    )
+    testing.expectf(
+        t,
+        state.zombies[zombie_index].alert_memory > 0,
+        "a heard dash should refresh zombie memory",
+    )
+}
+
+@(test)
+game_zombie_lunge_resets_the_room_after_a_hit :: proc(t: ^testing.T) {
+    state := game_state_init(.R03_WIDE_GROVE)
+    zombie_index := 1
+    state.player.position = {52, 0, -4.6}
+    zombie := &state.zombies[zombie_index]
+    zombie.mode = .CHASING
+    zombie.position = {53.2, 0, -4.6}
+    zombie.facing = {-1, 0}
+    zombie.last_known = state.player.position
+    zombie.alert_memory = GAME_ZOMBIE_MEMORY
+
+    game_fixed_update(&state, {}, GAME_FIXED_DT)
+    testing.expect_value(t, zombie.mode, Game_Zombie_Mode.WINDUP)
+    for _ in 0 ..< 90 {
+        if state.zombie_hits > 0 { break }
+        game_fixed_update(&state, {}, GAME_FIXED_DT)
+    }
+    testing.expect_value(t, state.zombie_hits, 1)
+    testing.expect_value(t, state.player.position, game_room(.R03_WIDE_GROVE).spawn)
+    testing.expect_value(t, state.zombies[zombie_index].position, GAME_ZOMBIE_SPAWNS[zombie_index].position)
+}
+
+@(test)
+game_dash_can_evade_a_committed_zombie_lunge :: proc(t: ^testing.T) {
+    state := game_state_init(.R03_WIDE_GROVE)
+    zombie_index := 1
+    state.player.position = {52, 0, -4.6}
+    state.player.facing = {0, 1}
+    zombie := &state.zombies[zombie_index]
+    zombie.mode = .WINDUP
+    zombie.mode_elapsed = GAME_ZOMBIE_WINDUP_TIME - GAME_FIXED_DT
+    zombie.position = {53.2, 0, -4.6}
+    zombie.facing = {-1, 0}
+    zombie.attack_direction = {-1, 0}
+    zombie.last_known = state.player.position
+    zombie.alert_memory = GAME_ZOMBIE_MEMORY
+
+    game_fixed_update(&state, {{0, 1}, true}, GAME_FIXED_DT)
+    for _ in 0 ..< 24 {
+        game_fixed_update(&state, {}, GAME_FIXED_DT)
+    }
+    testing.expect_value(t, state.zombie_hits, 0)
+    testing.expectf(
+        t,
+        state.player.position.z > -3.2,
+        "the perpendicular dash should clear the lunge lane, got z %.3f",
+        state.player.position.z,
+    )
+}

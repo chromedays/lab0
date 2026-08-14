@@ -28,6 +28,37 @@ game_player_animation_quantizes_pose_frames :: proc(t: ^testing.T) {
 }
 
 @(test)
+game_zombie_animation_maps_movement_attack_and_recovery_states :: proc(
+    t: ^testing.T,
+) {
+    testing.expect_value(
+        t,
+        game_zombie_animation_kind(.SHAMBLING),
+        Game_Zombie_Animation_Kind.WALKING,
+    )
+    testing.expect_value(
+        t,
+        game_zombie_animation_kind(.CHASING),
+        Game_Zombie_Animation_Kind.WALKING,
+    )
+    testing.expect_value(
+        t,
+        game_zombie_animation_kind(.WINDUP),
+        Game_Zombie_Animation_Kind.ATTACK,
+    )
+    testing.expect_value(
+        t,
+        game_zombie_animation_kind(.LUNGING),
+        Game_Zombie_Animation_Kind.ATTACK,
+    )
+    testing.expect_value(
+        t,
+        game_zombie_animation_kind(.RECOVERING),
+        Game_Zombie_Animation_Kind.IDLE,
+    )
+}
+
+@(test)
 game_mode_requires_the_explicit_game_value :: proc(t: ^testing.T) {
     testing.expect(
         t,

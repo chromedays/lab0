@@ -221,6 +221,37 @@ game_fixed_seed_random_inputs_preserve_simulation_invariants :: proc(t: ^testing
         testing.expectf(t, state.player.dash_cooldown >= 0, "negative dash cooldown at tick %d", tick)
         testing.expectf(t, state.player.dash_buffer >= 0, "negative dash buffer at tick %d", tick)
         testing.expectf(t, state.player.exit_reentry_lock >= 0, "negative exit lock at tick %d", tick)
+        for spawn, zombie_index in GAME_ZOMBIE_SPAWNS {
+            zombie := state.zombies[zombie_index]
+            zombie_finite := cel_f32_is_finite(zombie.position.x) &&
+                             cel_f32_is_finite(zombie.position.y) &&
+                             cel_f32_is_finite(zombie.position.z) &&
+                             cel_f32_is_finite(zombie.facing.x) &&
+                             cel_f32_is_finite(zombie.facing.y) &&
+                             cel_f32_is_finite(zombie.mode_elapsed) &&
+                             cel_f32_is_finite(zombie.alert_memory)
+            testing.expectf(
+                t,
+                zombie_finite,
+                "zombie %d produced non-finite state at tick %d",
+                zombie_index,
+                tick,
+            )
+            testing.expectf(
+                t,
+                zombie.mode_elapsed >= 0 && zombie.alert_memory >= 0,
+                "zombie %d produced a negative timer at tick %d",
+                zombie_index,
+                tick,
+            )
+            testing.expectf(
+                t,
+                !game_zombie_position_blocked(spawn.room, zombie.position),
+                "zombie %d entered blocked space at tick %d",
+                zombie_index,
+                tick,
+            )
+        }
 
         if state.player.mode == .GROUNDED {
             testing.expectf(

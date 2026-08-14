@@ -91,3 +91,86 @@ game_room_transition_replay_enters_r01_through_the_real_exit :: proc(t: ^testing
         state.player.position.x,
     )
 }
+
+@(test)
+game_zombie_encounter_replay_commits_to_one_dodge :: proc(t: ^testing.T) {
+    replay, replay_error := load_game_replay("replays/zombie-encounter-smoke.json")
+    testing.expect_value(t, replay_error, Game_Replay_Error.NONE)
+    if replay_error != .NONE { return }
+    defer destroy_game_replay(&replay)
+
+    state := game_state_init(replay.start_room)
+    player: Game_Replay_Player
+    for {
+        input, available := game_replay_next_input(&replay, &player)
+        if !available { break }
+        game_fixed_update(&state, input, GAME_FIXED_DT)
+    }
+    testing.expect_value(t, state.tick, u64(90))
+    testing.expect_value(t, state.dash_count, 1)
+    testing.expect_value(t, state.zombie_hits, 0)
+    testing.expectf(
+        t,
+        state.player.position.z > 2.5,
+        "the encounter replay should finish beyond the committed lunge lane",
+    )
+}
+
+@(test)
+game_zombie_gauntlet_replay_runs_thirty_seconds_of_active_evasion :: proc(
+    t: ^testing.T,
+) {
+    replay, replay_error := load_game_replay("replays/zombie-gauntlet-30s.json")
+    testing.expect_value(t, replay_error, Game_Replay_Error.NONE)
+    if replay_error != .NONE { return }
+    defer destroy_game_replay(&replay)
+
+    state := game_state_init(replay.start_room)
+    player: Game_Replay_Player
+    windup_ticks := 0
+    lunge_ticks := 0
+    maximum_chasers := 0
+    first_hit_tick: u64
+    first_exit_tick: u64
+    for {
+        input, available := game_replay_next_input(&replay, &player)
+        if !available { break }
+        game_fixed_update(&state, input, GAME_FIXED_DT)
+        if first_hit_tick == 0 && state.zombie_hits > 0 {
+            first_hit_tick = state.tick
+        }
+        if first_exit_tick == 0 && state.current_room != .R03_WIDE_GROVE {
+            first_exit_tick = state.tick
+        }
+
+        chasers := 0
+        for spawn, zombie_index in GAME_ZOMBIE_SPAWNS {
+            if spawn.room != state.current_room { continue }
+            #partial switch state.zombies[zombie_index].mode {
+            case .CHASING:
+                chasers += 1
+            case .WINDUP:
+                windup_ticks += 1
+            case .LUNGING:
+                lunge_ticks += 1
+            }
+        }
+        maximum_chasers = max(maximum_chasers, chasers)
+    }
+
+    testing.expect_value(t, replay.total_ticks, u64(1_800))
+    testing.expect_value(t, state.tick, u64(1_800))
+    testing.expect_value(t, state.dash_count, 39)
+    testing.expect_value(t, state.zombie_hits, 3)
+    testing.expectf(
+        t,
+        state.current_room == .R03_WIDE_GROVE,
+        "gauntlet left R03 at tick %d after first hit tick %d",
+        first_exit_tick,
+        first_hit_tick,
+    )
+    testing.expectf(t, state.dash_count >= 30, "gauntlet should contain repeated dashes")
+    testing.expectf(t, maximum_chasers >= 3, "at least three zombies should join one chase")
+    testing.expectf(t, windup_ticks > 0, "gauntlet should show attack windups")
+    testing.expectf(t, lunge_ticks > 0, "gauntlet should show committed lunges")
+}
