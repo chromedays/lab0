@@ -4,6 +4,7 @@ in vec2 fragTexCoord;
 in vec4 fragColor;
 in vec3 fragNormal;
 in vec3 fragWorldPosition;
+in vec4 fragShadowPosition;
 
 out vec4 finalColor;
 
@@ -30,7 +31,7 @@ void main() {
     finalColor = vec4(
         float(ramp_sample.band_id + 1) / 255.0,
         float(accent_flags) / 255.0,
-        0.0,
+        float(light_sample.shadowed) / 255.0,
         1.0
     );
 }

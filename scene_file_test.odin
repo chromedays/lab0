@@ -49,6 +49,46 @@ scene_default_is_valid_and_uses_strict_json_conventions :: proc(t: ^testing.T) {
     testing.expect_value(t, scene.style_path, "styles/classic.json")
     testing.expect_value(t, scene.render.downscale_level, DEFAULT_DOWNSCALE_LEVEL)
     testing.expect_value(t, scene.camera.projection, Scene_Projection.PERSPECTIVE)
+    testing.expect(t, scene.directional_light.casts_shadows)
+    testing.expect_value(
+        t,
+        scene.directional_light.shadow_extent,
+        SCENE_DEFAULT_SHADOW_EXTENT,
+    )
+}
+
+@test
+scene_legacy_v1_without_shadow_members_preserves_unshadowed_output :: proc(
+    t: ^testing.T,
+) {
+    source := make_default_scene()
+    defer destroy_scene(&source)
+    file := scene_to_file(&source)
+    defer destroy_scene_file(&file)
+    file.directional_light.casts_shadows = {}
+    file.directional_light.shadow_strength = {}
+    file.directional_light.shadow_bias = {}
+    file.directional_light.shadow_extent = {}
+
+    loaded, load_error := scene_from_file(&file, false)
+    defer destroy_scene(&loaded)
+    if !testing.expect_value(t, load_error, Scene_Error.NONE) { return }
+    testing.expect(t, !loaded.directional_light.casts_shadows)
+    testing.expect_value(
+        t,
+        loaded.directional_light.shadow_strength,
+        SCENE_DEFAULT_SHADOW_STRENGTH,
+    )
+    testing.expect_value(
+        t,
+        loaded.directional_light.shadow_bias,
+        SCENE_DEFAULT_SHADOW_BIAS,
+    )
+    testing.expect_value(
+        t,
+        loaded.directional_light.shadow_extent,
+        SCENE_DEFAULT_SHADOW_EXTENT,
+    )
 }
 
 @test
@@ -149,6 +189,12 @@ scene_json_round_trip_preserves_fixed_pose_and_lights :: proc(t: ^testing.T) {
     testing.expect_value(t, len(loaded.primitives), 1)
     testing.expect_value(t, len(loaded.point_lights), 1)
     testing.expect_value(t, len(loaded.spot_lights), 1)
+    testing.expect(t, loaded.directional_light.casts_shadows)
+    testing.expect_value(
+        t,
+        loaded.directional_light.shadow_strength,
+        SCENE_DEFAULT_SHADOW_STRENGTH,
+    )
     testing.expect_value(t, loaded.models[0].transform.rotation_euler_deg.y, f32(90))
     pose, pose_present := loaded.models[0].animation.?
     testing.expect(t, pose_present)
@@ -247,6 +293,14 @@ scene_validation_rejects_invalid_camera_and_light_limits :: proc(t: ^testing.T) 
     )
     scene.directional_light.intensity = 1
 
+    scene.directional_light.shadow_bias = SCENE_MAX_SHADOW_BIAS + 0.01
+    testing.expect_value(
+        t,
+        validate_scene(&scene),
+        Scene_Error.INVALID_DIRECTIONAL_LIGHT,
+    )
+    scene.directional_light.shadow_bias = SCENE_DEFAULT_SHADOW_BIAS
+
     for light_index := 0; light_index <= SCENE_MAX_POINT_LIGHTS; light_index += 1 {
         append(&scene.point_lights, Scene_Point_Light{})
     }
@@ -254,6 +308,38 @@ scene_validation_rejects_invalid_camera_and_light_limits :: proc(t: ^testing.T) 
         t,
         validate_scene(&scene),
         Scene_Error.TOO_MANY_POINT_LIGHTS,
+    )
+}
+
+@test
+scene_shadow_projection_snaps_to_whole_light_texels :: proc(t: ^testing.T) {
+    scene := make_default_scene()
+    defer destroy_scene(&scene)
+    scene.camera.target = {0.137, 1.271, -0.083}
+    frame := scene_make_shadow_frame(&scene)
+    if !testing.expect(t, frame.enabled) { return }
+
+    forward := rl.Vector3Normalize(frame.camera.target - frame.camera.position)
+    right := rl.Vector3Normalize(
+        rl.Vector3CrossProduct(forward, frame.camera.up),
+    )
+    horizontal_texels := rl.Vector3DotProduct(frame.camera.target, right) /
+                         frame.world_units_per_texel
+    vertical_texels := rl.Vector3DotProduct(
+        frame.camera.target,
+        frame.camera.up,
+    ) / frame.world_units_per_texel
+    testing.expectf(
+        t,
+        math.abs(horizontal_texels - math.round(horizontal_texels)) < 0.0001,
+        "shadow target x was not texel-snapped: %f",
+        horizontal_texels,
+    )
+    testing.expectf(
+        t,
+        math.abs(vertical_texels - math.round(vertical_texels)) < 0.0001,
+        "shadow target y was not texel-snapped: %f",
+        vertical_texels,
     )
 }
 

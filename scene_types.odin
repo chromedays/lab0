@@ -24,6 +24,16 @@ SCENE_MAX_POSITION         :: f32(100000)
 SCENE_MIN_LIGHT_RANGE      :: f32(0.001)
 SCENE_MAX_LIGHT_RANGE      :: f32(100000)
 SCENE_MAX_LIGHT_INTENSITY  :: f32(16)
+SCENE_SHADOW_MAP_SIZE      :: 1024
+SCENE_MIN_SHADOW_STRENGTH  :: f32(0)
+SCENE_MAX_SHADOW_STRENGTH  :: f32(1)
+SCENE_MIN_SHADOW_BIAS      :: f32(0.00001)
+SCENE_MAX_SHADOW_BIAS      :: f32(0.01)
+SCENE_MIN_SHADOW_EXTENT    :: f32(1)
+SCENE_MAX_SHADOW_EXTENT    :: f32(1000)
+SCENE_DEFAULT_SHADOW_STRENGTH :: f32(0.65)
+SCENE_DEFAULT_SHADOW_BIAS     :: f32(0.00035)
+SCENE_DEFAULT_SHADOW_EXTENT   :: f32(20)
 
 Scene_Error :: enum {
     NONE,
@@ -124,10 +134,14 @@ Scene_Primitive :: struct {
 }
 
 Scene_Directional_Light :: struct {
-    enabled:   bool,
-    direction: rl.Vector3,
-    color:     rl.Vector3,
-    intensity: f32,
+    enabled:         bool,
+    direction:       rl.Vector3,
+    color:           rl.Vector3,
+    intensity:       f32,
+    casts_shadows:   bool,
+    shadow_strength: f32,
+    shadow_bias:     f32,
+    shadow_extent:   f32,
 }
 
 Scene_Point_Light :: struct {
@@ -467,6 +481,10 @@ make_default_scene :: proc() -> Scene {
             direction = scene_normalize_direction_stable({0.35, 0.8, 0.55}),
             color = {1, 1, 1},
             intensity = 0.7,
+            casts_shadows = true,
+            shadow_strength = SCENE_DEFAULT_SHADOW_STRENGTH,
+            shadow_bias = SCENE_DEFAULT_SHADOW_BIAS,
+            shadow_extent = SCENE_DEFAULT_SHADOW_EXTENT,
         },
     }
 }

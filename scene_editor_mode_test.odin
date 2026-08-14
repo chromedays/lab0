@@ -106,6 +106,8 @@ bundled_scene_fixture_loads_with_fixed_pose_metadata :: proc(t: ^testing.T) {
     testing.expect_value(t, len(scene.primitives), 7)
     testing.expect_value(t, len(scene.point_lights), 2)
     testing.expect_value(t, len(scene.spot_lights), 1)
+    testing.expect(t, scene.directional_light.casts_shadows)
+    testing.expect_value(t, scene.directional_light.shadow_extent, f32(18))
     _, pose_present := scene.models[0].animation.?
     testing.expect(t, pose_present)
 }
@@ -120,6 +122,19 @@ bundled_animated_pose_fixture_loads :: proc(t: ^testing.T) {
     if !testing.expect(t, pose_present) { return }
     testing.expect_value(t, pose.clip_index, 0)
     testing.expect_value(t, pose.frame, 24)
+}
+
+@test
+bundled_shadow_alignment_fixture_is_directional_only :: proc(t: ^testing.T) {
+    scene, load_error := load_scene("scenes/shadow-alignment.json")
+    defer destroy_scene(&scene)
+    if !testing.expect_value(t, load_error, Scene_Error.NONE) { return }
+    testing.expect_value(t, len(scene.models), 0)
+    testing.expect_value(t, len(scene.primitives), 2)
+    testing.expect_value(t, len(scene.point_lights), 0)
+    testing.expect_value(t, len(scene.spot_lights), 0)
+    testing.expect(t, scene.directional_light.casts_shadows)
+    testing.expect_value(t, scene.directional_light.shadow_extent, f32(10))
 }
 
 @test

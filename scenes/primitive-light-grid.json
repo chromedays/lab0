@@ -19,7 +19,11 @@
     "enabled": true,
     "direction": [0.35, 0.8, 0.55],
     "color": [1.0, 0.94, 0.82],
-    "intensity": 0.58
+    "intensity": 0.58,
+    "casts_shadows": true,
+    "shadow_strength": 0.72,
+    "shadow_bias": 0.00035,
+    "shadow_extent": 18.0
   },
   "models": [
     {

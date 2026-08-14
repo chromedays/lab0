@@ -4,6 +4,7 @@ in vec2 fragTexCoord;
 in vec4 fragColor;
 in vec3 fragNormal;
 in vec3 fragWorldPosition;
+in vec4 fragShadowPosition;
 
 out vec4 finalColor;
 

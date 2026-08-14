@@ -28,10 +28,14 @@ Scene_File_Camera :: struct {
 }
 
 Scene_File_Directional_Light :: struct {
-    enabled:   bool,
-    direction: [3]f32,
-    color:     [3]f32,
-    intensity: f32,
+    enabled:         bool,
+    direction:       [3]f32,
+    color:           [3]f32,
+    intensity:       f32,
+    casts_shadows:   Maybe(bool) `json:"casts_shadows,omitempty"`,
+    shadow_strength: Maybe(f32)  `json:"shadow_strength,omitempty"`,
+    shadow_bias:     Maybe(f32)  `json:"shadow_bias,omitempty"`,
+    shadow_extent:   Maybe(f32)  `json:"shadow_extent,omitempty"`,
 }
 
 Scene_File_Animation :: struct {
@@ -216,7 +220,16 @@ validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
 
     directional := &scene.directional_light
     if !scene_direction_valid(directional.direction) ||
-       !scene_light_common_valid(directional.color, directional.intensity) {
+       !scene_light_common_valid(directional.color, directional.intensity) ||
+       !scene_f32_finite(directional.shadow_strength) ||
+       directional.shadow_strength < SCENE_MIN_SHADOW_STRENGTH ||
+       directional.shadow_strength > SCENE_MAX_SHADOW_STRENGTH ||
+       !scene_f32_finite(directional.shadow_bias) ||
+       directional.shadow_bias < SCENE_MIN_SHADOW_BIAS ||
+       directional.shadow_bias > SCENE_MAX_SHADOW_BIAS ||
+       !scene_f32_finite(directional.shadow_extent) ||
+       directional.shadow_extent < SCENE_MIN_SHADOW_EXTENT ||
+       directional.shadow_extent > SCENE_MAX_SHADOW_EXTENT {
         return .INVALID_DIRECTIONAL_LIGHT
     }
 
@@ -381,7 +394,25 @@ scene_from_file :: proc(
             direction = scene_vector3_from_file(file.directional_light.direction),
             color = scene_vector3_from_file(file.directional_light.color),
             intensity = file.directional_light.intensity,
+            // Shadow members are optional so v1 scenes written before hard
+            // shadows remain valid and preserve their original unshadowed look.
+            casts_shadows = false,
+            shadow_strength = SCENE_DEFAULT_SHADOW_STRENGTH,
+            shadow_bias = SCENE_DEFAULT_SHADOW_BIAS,
+            shadow_extent = SCENE_DEFAULT_SHADOW_EXTENT,
         },
+    }
+    if value, present := file.directional_light.casts_shadows.?; present {
+        scene.directional_light.casts_shadows = value
+    }
+    if value, present := file.directional_light.shadow_strength.?; present {
+        scene.directional_light.shadow_strength = value
+    }
+    if value, present := file.directional_light.shadow_bias.?; present {
+        scene.directional_light.shadow_bias = value
+    }
+    if value, present := file.directional_light.shadow_extent.?; present {
+        scene.directional_light.shadow_extent = value
     }
     for model in file.models {
         runtime_model := Scene_Model{
@@ -499,6 +530,10 @@ scene_to_file :: proc(scene: ^Scene) -> Scene_File {
             ),
             color = scene_vector3_to_file(scene.directional_light.color),
             intensity = scene.directional_light.intensity,
+            casts_shadows = scene.directional_light.casts_shadows,
+            shadow_strength = scene.directional_light.shadow_strength,
+            shadow_bias = scene.directional_light.shadow_bias,
+            shadow_extent = scene.directional_light.shadow_extent,
         },
     }
     for model in scene.models {

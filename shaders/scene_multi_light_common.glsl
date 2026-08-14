@@ -32,6 +32,11 @@ uniform vec3 u_directional_direction;
 uniform vec3 u_directional_color;
 uniform float u_directional_intensity;
 
+uniform int u_shadow_enabled;
+uniform sampler2D u_shadow_map;
+uniform float u_shadow_strength;
+uniform float u_shadow_bias;
+
 uniform int u_point_count;
 uniform vec3 u_point_positions[SCENE_MAX_POINT_LIGHTS];
 uniform vec3 u_point_colors[SCENE_MAX_POINT_LIGHTS];
@@ -51,6 +56,7 @@ struct Scene_Light_Sample {
     float band_input;
     vec3 hue;
     float highlight_score;
+    int shadowed;
 };
 
 struct Cel_Ramp_Sample {
@@ -86,6 +92,30 @@ float scene_highlight_value(
     return max(dot(normal, half_delta / half_length), 0.0);
 }
 
+// A single nearest depth lookup deliberately produces a binary result. The
+// light projection is texel-snapped on the CPU and this classification is also
+// written to metadata, so no filtered/subpixel shadow boundary reaches the
+// logical output-pixel resolver.
+int scene_directional_shadow(vec3 normal) {
+    if (u_shadow_enabled == 0 || fragShadowPosition.w <= SCENE_EPSILON) {
+        return 0;
+    }
+    vec3 projected = fragShadowPosition.xyz / fragShadowPosition.w;
+    vec3 shadow_coordinate = projected * 0.5 + 0.5;
+    if (shadow_coordinate.x <= 0.0 || shadow_coordinate.x >= 1.0 ||
+        shadow_coordinate.y <= 0.0 || shadow_coordinate.y >= 1.0 ||
+        shadow_coordinate.z <= 0.0 || shadow_coordinate.z >= 1.0) {
+        return 0;
+    }
+    float stored_depth = texture(u_shadow_map, shadow_coordinate.xy).r;
+    float normal_alignment = max(
+        dot(normal, normalize(u_directional_direction)),
+        0.0
+    );
+    float receiver_bias = u_shadow_bias;
+    return shadow_coordinate.z - receiver_bias > stored_depth ? 1 : 0;
+}
+
 Scene_Light_Sample scene_light_sample(vec3 input_normal, vec3 world_position) {
     vec3 normal = normalize(input_normal);
     vec3 view_delta = u_view_position - world_position;
@@ -94,15 +124,19 @@ Scene_Light_Sample scene_light_sample(vec3 input_normal, vec3 world_position) {
         view_delta / view_length : vec3(0.0, 0.0, 1.0);
     vec3 energy = vec3(0.0);
     float highlight_score = 0.0;
+    int directional_shadow = scene_directional_shadow(normal);
 
     if (u_directional_enabled != 0) {
         vec3 light_direction = normalize(u_directional_direction);
         float diffuse = scene_wrapped_lambert(normal, light_direction);
-        energy += u_directional_color * u_directional_intensity * diffuse;
+        float visibility = 1.0 -
+            float(directional_shadow) * clamp(u_shadow_strength, 0.0, 1.0);
+        energy += u_directional_color *
+                  u_directional_intensity * diffuse * visibility;
         highlight_score = max(
             highlight_score,
             scene_highlight_value(normal, light_direction, view_direction) *
-                u_directional_intensity
+                u_directional_intensity * visibility
         );
     }
 
@@ -161,6 +195,7 @@ Scene_Light_Sample scene_light_sample(vec3 input_normal, vec3 world_position) {
     result.band_input = clamp(peak, 0.0, 1.0);
     result.hue = peak > SCENE_EPSILON ? energy / peak : vec3(1.0);
     result.highlight_score = highlight_score;
+    result.shadowed = directional_shadow;
     return result;
 }
 

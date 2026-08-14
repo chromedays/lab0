@@ -10,7 +10,8 @@ The following product decisions are fixed for v1:
 
 - scene files use strict JSON;
 - models may store one fixed animation clip and frame;
-- directional, point, and spot lights do not cast shadows;
+- the global directional light optionally casts pixel-hard shadows;
+- point and spot lights do not cast shadows;
 - one cel style applies to the complete scene;
 - Viewer and Game behavior and capture output must remain unchanged.
 
@@ -31,7 +32,8 @@ The first version does not provide:
 - Game mode export or integration;
 - physics, collision, navigation, triggers, or scripts;
 - parent/child transforms or a scene graph;
-- shadow maps, baked lighting, global illumination, or light cookies;
+- point/spot shadow maps, soft shadows, baked lighting, global illumination,
+  or light cookies;
 - per-object cel styles;
 - animation playback, looping, blending, or a timeline;
 - light or camera animation;
@@ -281,9 +283,10 @@ input without color-space transformation, matching the current renderer.
 Scene Editor lighting uses a new multi-light shader pair. Viewer and Game keep
 their current shader programs and single-directional-light calculations.
 
-All Scene Editor lights are world-space, direct, unshadowed lights. The complete
-scene uses one global cel style for diffuse bands, wrap lighting, alpha rules,
-rim, highlight, and outline settings.
+All Scene Editor lights are world-space direct lights. The directional light
+may additionally use the editor's pixel-hard shadow pass. The complete scene
+uses one global cel style for diffuse bands, wrap lighting, alpha rules, rim,
+highlight, and outline settings.
 
 ### Direction conventions
 
@@ -294,7 +297,8 @@ rim, highlight, and outline settings.
   normalizes it.
 
 The directional light has Enabled, Direction, Color, and Intensity values but
-no position. Point lights add Position and Range. Spot lights add Position,
+no position. It also stores Casts Shadows, Shadow Strength, Shadow Bias, and
+Shadow Extent. Point lights add Position and Range. Spot lights add Position,
 Range, Inner Angle, and Outer Angle.
 
 Light colors use normalized linear RGB components in `[0, 1]`. Intensity is a
@@ -371,13 +375,35 @@ Highlight evaluates a Blinn half vector for every contributing light and uses
 the maximum intensity-, range-, and cone-weighted score. The global cel-style
 threshold and accent color remain authoritative.
 
-The parallel metadata shader performs the identical multi-light calculation
-and continues to encode one band ID plus rim/highlight flags. Therefore the
-existing downsample, coverage, and outline passes can preserve hard bands and
-sparse accents without a new metadata format.
+The parallel metadata shader performs the identical multi-light and shadow
+calculation. It encodes one band ID, rim/highlight flags, and a binary shadow
+classification in the previously reserved blue byte. The 4x4 downsampler votes
+on that shadow state inside the winning band before color clustering, preserving
+a hard logical-pixel edge. Viewer and Game continue to write zero to the reserved
+byte and retain byte-identical captures.
 
-No light casts a shadow in v1. Occluded and unoccluded fragments at the same
-normal, position, and view inputs receive the same direct-light result.
+### Pixel-hard directional shadows
+
+When enabled, visible models and primitives both cast and receive a directional
+shadow. The pass renders directly into a sampleable 1024x1024 depth texture
+attached to a depth-only framebuffer. The receiver uses the exact view and
+projection matrices installed for that depth pass, point filtering, clamp
+addressing, one binary depth comparison, and no PCF or blur.
+
+The orthographic light camera is centered on the serialized scene-camera target.
+Its horizontal and vertical light-plane coordinates are rounded to exact shadow
+texels before the view-projection matrix is built. `shadow_extent` is the square
+world-space coverage and therefore defines one shadow texel as:
+
+```text
+world_units_per_shadow_texel = shadow_extent / 1024
+```
+
+`shadow_strength` is finite in `[0, 1]`, `shadow_bias` in `[0.00001, 0.01]`,
+and `shadow_extent` in `[1, 1000]`. The binary visibility term affects only the
+directional contribution; point and spot contributions can still illuminate a
+directionally shadowed fragment. Alpha-masked material silhouettes use the same
+global cel-style cutoff in the shadow-depth pass.
 
 ## Render pipeline
 
@@ -389,18 +415,22 @@ shaders/scene_multi_light.vs
 shaders/scene_multi_light.fs
 shaders/scene_multi_light_band.fs
 shaders/scene_multi_light_common.glsl
+shaders/scene_shadow_depth.vs
+shaders/scene_shadow_depth.fs
 ```
 
 The passes are:
 
-1. Render all visible models and primitives into the 1280x720 scene-color
+1. If directional shadows are active, render alpha-tested geometry into the
+   texel-snapped 1024x1024 depth texture and retain the exact light-pass matrix.
+2. Render all visible models and primitives into the 1280x720 scene-color
    RenderTexture using the multi-light shader.
-2. Render identical geometry and alpha rejection into the 1280x720 cel-metadata
+3. Render identical geometry and alpha rejection into the 1280x720 cel-metadata
    RenderTexture.
-3. Downsample scene color using the metadata texture.
-4. Downsample coverage.
-5. Apply the existing low-resolution outline pass.
-6. Composite the outlined low-resolution result over the serialized background
+4. Downsample scene color using the metadata texture.
+5. Downsample coverage.
+6. Apply the existing low-resolution outline pass.
+7. Composite the outlined low-resolution result over the serialized background
    and scale it across the complete 1280x720 frame with nearest filtering.
 
 Opaque draw order follows file array order: models first, then primitives. This
@@ -442,7 +472,11 @@ groups. A representative schema-version-1 document is:
     "enabled": true,
     "direction": [0.35, 0.8, 0.55],
     "color": [1.0, 1.0, 1.0],
-    "intensity": 0.7
+    "intensity": 0.7,
+    "casts_shadows": true,
+    "shadow_strength": 0.65,
+    "shadow_bias": 0.00035,
+    "shadow_extent": 20.0
   },
   "models": [
     {
@@ -505,6 +539,9 @@ switching projection preserves the previous value. Perspective rendering uses
 only the FOV, and orthographic rendering uses only the height.
 
 The optional `animation` member is omitted for a model without a fixed pose.
+The four directional-shadow members are also optional when loading older
+schema-v1 files. If absent, shadows load disabled while strength, bias, and
+extent receive their current defaults; the next save writes all four values.
 Strict JSON comments, trailing commas, NaN, infinities, hexadecimal numbers,
 and unquoted keys are rejected.
 
@@ -549,6 +586,7 @@ Validation includes:
 - supported camera projection and edge-AA strings;
 - downscale level in the existing supported range;
 - scale, color, intensity, range, and cone limits;
+- directional shadow strength, bias, and extent limits;
 - normalized or normalizable direction vectors;
 - supported primitive shape strings;
 - repository-relative existing model and style paths;
@@ -574,6 +612,7 @@ Unit tests cover:
 - global ID uniqueness across separate arrays;
 - transform matrix order and Euler normalization;
 - light direction, distance attenuation, cone attenuation, and aggregation;
+- directional shadow defaults, persistence, validation, and texel snapping;
 - fixed animation clip/frame validation and pose application;
 - editor mutations and dirty-state transitions;
 - CLI compatibility and mode-specific option rejection.
