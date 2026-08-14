@@ -5,6 +5,34 @@ import "core:testing"
 import rl "vendor:raylib"
 
 @(test)
+game_uses_the_rigged_meshy_zombie_asset :: proc(t: ^testing.T) {
+    testing.expect_value(
+        t,
+        GAME_ZOMBIE_MODEL_PATH,
+        "assets/Meshy_AI_zombie_rigged_biped_Meshy_AI_Meshy_Merged_Animations.glb",
+    )
+}
+
+@(test)
+game_uses_the_requested_meshy_zombie_animation_clips :: proc(t: ^testing.T) {
+    testing.expect_value(
+        t,
+        GAME_ZOMBIE_ATTACK_ANIMATION,
+        "Limping_Walk_3_inplace",
+    )
+    testing.expect_value(
+        t,
+        GAME_ZOMBIE_IDLE_ANIMATION,
+        "Mummy_Stagger_inplace",
+    )
+    testing.expect_value(
+        t,
+        GAME_ZOMBIE_WALK_ANIMATION,
+        "Mummy_Stagger_inplace",
+    )
+}
+
+@(test)
 game_player_animation_uses_eight_samples :: proc(t: ^testing.T) {
     playback: Animation_Playback
     game_configure_player_animation(&playback)

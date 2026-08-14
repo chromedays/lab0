@@ -25,7 +25,10 @@ GAME_CONNECTION_LIFT    :: f32(0.015)
 GAME_OVERLAY_HEIGHT     :: f32(0.06)
 GAME_OVERLAY_EMBED      :: f32(0.01)
 GAME_PLAYER_MODEL_PATH  :: "assets/Meshy_AI_lowpoly_man_rigged_biped_Meshy_AI_Meshy_Merged_Animations.glb"
-GAME_ZOMBIE_MODEL_PATH  :: "assets/godotman.glb"
+GAME_ZOMBIE_MODEL_PATH  :: "assets/Meshy_AI_zombie_rigged_biped_Meshy_AI_Meshy_Merged_Animations.glb"
+GAME_ZOMBIE_ATTACK_ANIMATION :: "Limping_Walk_3_inplace"
+GAME_ZOMBIE_IDLE_ANIMATION   :: "Mummy_Stagger_inplace"
+GAME_ZOMBIE_WALK_ANIMATION   :: "Mummy_Stagger_inplace"
 GAME_PLAYER_ANIMATION_SAMPLE_COUNT :: c.int(8)
 GAME_ZOMBIE_ANIMATION_SAMPLE_COUNT :: c.int(8)
 GAME_OCCLUSION_DEBUG_TINT :: rl.Color{255, 96, 200, 255}
@@ -513,27 +516,22 @@ game_load_assets :: proc() -> Game_Assets {
         attack_found, idle_found, walk_found: bool
         assets.zombie_attack_clip, attack_found = game_try_find_animation_clip(
             &assets.zombie_animation,
-            "attack",
+            GAME_ZOMBIE_ATTACK_ANIMATION,
         )
         assets.zombie_idle_clip, idle_found = game_try_find_animation_clip(
             &assets.zombie_animation,
-            "idle",
+            GAME_ZOMBIE_IDLE_ANIMATION,
         )
         assets.zombie_walk_clip, walk_found = game_try_find_animation_clip(
             &assets.zombie_animation,
-            "walking",
+            GAME_ZOMBIE_WALK_ANIMATION,
         )
-        if !walk_found {
-            // GodotMan currently names its locomotion clip "run". At the
-            // shamble speed it serves as the temporary zombie walk cycle.
-            assets.zombie_walk_clip, walk_found = game_try_find_animation_clip(
-                &assets.zombie_animation,
-                "run",
-            )
-        }
         assets.zombie_clips_valid = attack_found && idle_found && walk_found
         if !assets.zombie_clips_valid {
-            log.warn("GodotMan is missing a required attack, idle, or walking/run clip")
+            log.warnf(
+                "%s is missing a required in-place limping or stagger clip",
+                GAME_ZOMBIE_MODEL_PATH,
+            )
         }
     }
     return assets
@@ -1794,21 +1792,13 @@ game_draw_zombie :: proc(
     )
 
     if assets.zombie.valid && assets.zombie_clips_valid {
-        zombie_tint := rl.Color{178, 214, 162, 255}
-        switch zombie.mode {
-        case .SHAMBLING:  zombie_tint = {178, 214, 162, 255}
-        case .CHASING:    zombie_tint = {205, 227, 154, 255}
-        case .WINDUP:     zombie_tint = {255, 211, 127, 255}
-        case .LUNGING:    zombie_tint = {255, 151, 112, 255}
-        case .RECOVERING: zombie_tint = {148, 170, 158, 255}
-        }
         game_apply_zombie_animation(assets, state, zombie_index)
         game_draw_imported(
             &assets.zombie,
             zombie.position,
             1.68,
             rotation,
-            zombie_tint,
+            rl.WHITE,
         )
         return
     }
