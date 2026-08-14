@@ -25,16 +25,27 @@ Create evidence that combines headless rule checks with a human-reviewable video
    scripts/test-game.sh --video-report artifacts/game-test-report-<unique-label>
    ```
 
+   Scene Editor camera-orbit report:
+
+   ```sh
+   scripts/test-scene-editor.sh --video-report artifacts/scene-editor-test-report-<unique-label>
+   ```
+
+   Add `--scene scenes/<name>.json` to the Scene Editor runner when the request
+   names a specific authored visual-test scene.
+
    Add `--replay replays/<name>.json` when the request names a specific route or
    behavior. Use `replays/room-transition-smoke.json` to demonstrate R00→R01.
 
 4. On macOS, use the active graphical session if the hidden raylib window cannot initialize in the sandbox. Do not use desktop input or screenshots.
 
-Both runners execute the Odin suite, build a fresh uniquely named binary, and
+All runners execute the Odin suite, build a fresh uniquely named binary, and
 check a repeated PNG capture for byte determinism. The Viewer runner streams
 the full selected animation range exactly once, retimed across 5 seconds (300
 raw frames at 60 fps, with no wrap), and creates `viewer-test.mp4`; the Game runner
-streams every replay tick and creates `game-test.mp4`. Both create
+streams every replay tick and creates `game-test.mp4`. The Scene Editor runner
+streams one non-duplicated deterministic camera orbit while preserving authored
+objects, lights, and fixed poses and creates `scene-editor-test.mp4`. All create
 `contact-sheet.png`, `report.md`, and logs without creating a full PNG sequence.
 
 ## Inspect
@@ -47,13 +58,16 @@ Before reporting success:
 - Use `ffprobe` when any video metadata is missing or suspect.
 - Require the encoded frame count to equal 300 for the default 5-second Viewer report or the Game replay fixed-tick count, and confirm that the report directory has no `frames/` directory.
 - Treat asset image warnings, missing frames, dimension mismatches, or unequal deterministic PNGs as failures.
-- Keep the repeated fixed-pose/fixed-tick PNG capture, plus the versioned replay for Game, as regression truth; MP4 is a review artifact because video encoding can vary.
+- Keep the repeated fixed-pose/fixed-tick/serialized-scene PNG capture, plus the
+  versioned replay for Game or strict scene JSON for Scene Editor, as regression
+  truth; MP4 is a review artifact because video encoding can vary.
 
 ## Report in chat
 
-Lead with PASS or FAIL. Include the test count, model and frame range for Viewer
-or replay name for Game, video duration and dimensions, deterministic-capture
-result, and any warnings. Link absolute local paths so the user can open artifacts directly:
+Lead with PASS or FAIL. Include the test count, model and frame range for Viewer,
+replay name for Game, or scene path for Scene Editor, plus video duration and
+dimensions, deterministic-capture result, and any warnings. Link absolute local
+paths so the user can open artifacts directly:
 
 ```markdown
 [MP4](/absolute/path/viewer-test.mp4) · [report](/absolute/path/report.md) · [preview](/absolute/path/contact-sheet.png)

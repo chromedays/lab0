@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "name": "Animated Model Fixed Pose",
+  "style": "styles/classic.json",
+  "render": {
+    "background": [22, 24, 32, 255],
+    "downscale_level": 5,
+    "edge_aa": "coverage"
+  },
+  "camera": {
+    "projection": "perspective",
+    "position": [4.5, 3.0, 5.5],
+    "target": [0.0, 1.0, 0.0],
+    "up": [0.0, 1.0, 0.0],
+    "vertical_fov_deg": 42.0,
+    "ortho_height": 7.0
+  },
+  "directional_light": {
+    "enabled": true,
+    "direction": [0.35, 0.8, 0.55],
+    "color": [1.0, 0.96, 0.9],
+    "intensity": 0.85
+  },
+  "models": [
+    {
+      "id": "model_001",
+      "name": "Cesium Man Frame 24",
+      "visible": true,
+      "source": "assets/CesiumMan.glb",
+      "position": [0.0, 0.0, 0.0],
+      "rotation_euler_deg": [0.0, 20.0, 0.0],
+      "scale": [1.8, 1.8, 1.8],
+      "tint": [255, 255, 255, 255],
+      "animation": {
+        "clip_index": 0,
+        "frame": 24
+      }
+    }
+  ],
+  "primitives": [
+    {
+      "id": "primitive_001",
+      "name": "Floor",
+      "visible": true,
+      "shape": "plane",
+      "position": [0.0, -0.03, 0.0],
+      "rotation_euler_deg": [0.0, 0.0, 0.0],
+      "scale": [6.0, 1.0, 6.0],
+      "albedo": [92, 104, 124, 255]
+    }
+  ],
+  "point_lights": [],
+  "spot_lights": []
+}

@@ -59,6 +59,87 @@ The outline is evaluated at the active downsample resolution and is therefore
 measured in output pixels. It appears in the pixelated/blended lens and exported
 downsample PNG, while the full-resolution scene target remains unoutlined.
 
+## Visual-test Scene Editor
+
+Scene Editor is a separate visual-test authoring mode. It does not export to or
+share data with Game mode. Open the bundled all-primitives, fixed-pose, and
+multi-light fixture with:
+
+```sh
+odin run . -- \
+  --mode scene-editor \
+  --scene scenes/primitive-light-grid.json
+```
+
+Omit `--scene` to start from an empty default scene. The left hierarchy adds
+imported models, cube, sphere, plane, triangle, cylinder, cone, torus, point
+lights, and spot lights. Select an item in the hierarchy or viewport and edit
+its exact transform, color, visibility, light values, or fixed animation pose
+in the right inspector. The pinned directional-light panel controls its
+enabled state, azimuth, elevation, color, and intensity without giving it a
+scene position. Right-drag orbits the serialized camera, middle-drag pans, the
+wheel dollies, `W`/`E`/`R` select world-axis translate/rotate/scale gizmos, `F`
+frames the selection, `Delete` removes it, and `Cmd/Ctrl+S` saves.
+
+Scene files are schema-versioned strict JSON. They use repository-relative
+model and style paths, canonical two-space formatting, globally unique stable
+IDs, and an atomic sibling-temporary-file save. The editor rejects comments,
+trailing commas, non-finite numbers, invalid transforms or light values,
+missing assets, and unsupported schema versions.
+
+Scene Editor also uses the deterministic capture path while excluding editor
+panels and overlays:
+
+```sh
+odin run . -- \
+  --mode scene-editor \
+  --scene scenes/primitive-light-grid.json \
+  --capture-case primitive-light-grid \
+  --capture-target composite \
+  --capture-output artifacts/scene-editor/primitive-light-grid.png
+```
+
+Supported targets are `composite` and `scene` at 1280x720, plus `downsample`
+and `coverage-mask` at the dimensions selected by the scene's downscale level.
+
+### Scene Editor video report
+
+Scene Editor video reports preserve every authored object, light, and fixed
+animation pose while moving the serialized camera through one deterministic
+orbit around its target. The default report streams 300 raw 1280x720 RGBA
+frames directly to FFmpeg at 60 fps, covers 0 through 358.8 degrees without a
+duplicated endpoint, and does not create an intermediate PNG sequence:
+
+```sh
+scripts/test-scene-editor.sh \
+  --video-report artifacts/scene-editor-test-report-demo
+```
+
+Use `--scene path/to/scene.json` to select another scene. The runner executes
+the complete Odin suite, builds a fresh binary, requires two serialized-scene
+PNG captures to be byte-identical, and creates `scene-editor-test.mp4`,
+`contact-sheet.png`, `report.md`, the deterministic composite PNG, and logs.
+
+The underlying streaming command is also available directly:
+
+```sh
+odin run . -- \
+  --mode scene-editor \
+  --scene scenes/primitive-light-grid.json \
+  --scene-video-output artifacts/scene-editor/orbit.mp4 \
+  --scene-video-duration 5 \
+  --capture-case primitive-light-grid-video \
+  --capture-target composite
+```
+
+`--scene-video-output` requires `--scene`, `--capture-case`, and the
+`composite` target and cannot be combined with `--capture-output`. Durations
+must resolve to an exact whole frame count at 60 fps.
+
+The complete file schema, lighting equations, limits, and deterministic render
+contract are in
+[`docs/scene-editor-v1-spec.md`](docs/scene-editor-v1-spec.md).
+
 ## Traversal prototype
 
 The existing model viewer remains the default application. Start the separate
