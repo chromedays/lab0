@@ -104,6 +104,18 @@ Sequence output rules:
 - Warmup frames are rendered once before the first export. Each subsequent pose
   is applied and rendered before its PNG is exported.
 
+For a human-reviewable Viewer video report, use
+`scripts/test-viewer.sh --video-report artifacts/<unique-report-name>`. It uses
+the same deterministic animation-pose range but streams each 1280×720 composite
+RenderTexture directly to FFmpeg with `--viewer-video-output`; it does not build
+the MP4 from a PNG sequence. The runner creates `viewer-test.mp4`,
+`contact-sheet.png`, and `report.md`, plus one repeated fixed-frame PNG used as
+the regression truth. The default runner uses distinct source range 0:119
+(excluding the duplicated terminal loop keyframe 120) and
+`--viewer-video-duration 5` to retime that full range exactly once across 300
+streamed frames at 60 fps, without wrapping to frame zero. Inspect and link all
+three report artifacts by absolute local path.
+
 ## Capture targets and expected dimensions
 
 | Target | Expected output |

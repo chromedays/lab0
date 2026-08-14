@@ -40,6 +40,12 @@ Use the **Downscale level** spinner in **Camera Controls** to adjust the pixel
 downscale from 1× through 32×. The output-grid readout updates to show the
 active render-target resolution; the default remains 10× (128×72).
 
+The **Edge AA** selector beside it switches the low-resolution silhouette
+resolve between **Hard** and **Coverage**. Hard preserves the original binary
+alpha output. Coverage keeps the representative cel color while using the
+deterministic 4×4 occupancy mask as fractional alpha, with outlines composited
+behind partially covered fill pixels. The default remains Hard.
+
 The right-side **Inspector** keeps model, camera, cel shading, and background
 controls in one scrollable stack. Each section is independently collapsible;
 **Cel Shading** starts collapsed, and `C` toggles it and scrolls it into view.
@@ -269,6 +275,38 @@ are rendered once before the first export, then each requested pose is rendered
 and exported on the next frame. Without `--capture-output`, sequence files use
 `captures/<case-name>-%04d.png`.
 
+### Viewer video report
+
+Use the same inclusive animation frame range with `--viewer-video-output` to
+stream the Viewer composite directly to FFmpeg as raw RGBA. Each selected pose
+becomes one frame in a 1280×720, 60 fps H.264 MP4; no intermediate PNG sequence
+is created.
+
+```sh
+odin run . -- \
+  --capture-case cesium-viewer-video \
+  --capture-model assets/CesiumMan.glb \
+  --capture-style styles/anime.json \
+  --capture-frame-range 0:119 \
+  --capture-view isometric \
+  --capture-edge-aa coverage \
+  --capture-target composite \
+  --viewer-video-output artifacts/cesium-viewer-video.mp4 \
+  --viewer-video-duration 5
+```
+
+The video option requires `--capture-frame-range` and the `composite` target,
+accepts only `.mp4`, and cannot be combined with `--capture-output`. For a full
+duration, `--viewer-video-duration` retimes the selected range across the output
+frames exactly once and must map to a whole number of 60 fps frames. It never
+wraps to the first pose. Without it, the range is streamed once. For a full
+automated report with unit tests, a repeated deterministic still, MP4 metadata
+checks, a contact sheet, and Markdown report, use a new output directory:
+
+```sh
+scripts/test-viewer.sh --video-report artifacts/viewer-test-report-demo
+```
+
 Available options:
 
 ```text
@@ -276,11 +314,14 @@ Available options:
 --capture-output <path.png>    Output path or sequence template
 --capture-model <source>       Exact asset path or builtin:cube|sphere|triangle
 --capture-style <path.json>    Cel style preset (default: built-in Classic)
+--viewer-video-output <mp4>    Stream a Viewer frame range through FFmpeg
+--viewer-video-duration <sec>  Retime the range once to an exact duration
 --capture-view <view>          default|x|y|z|isometric
 --capture-mode <mode>          pixelated|blended|coverage-mask
+--capture-edge-aa <mode>       hard|coverage (default: hard)
 --capture-target <target>      composite|lens|scene|downsample|coverage-mask
 --capture-frame <frame>        Fixed animation frame (default: 0)
---capture-frame-range <range>  Inclusive start:end[:step] PNG sequence
+--capture-frame-range <range>  Inclusive start:end[:step] pose sequence
 --capture-warmup <frames>      Frames rendered before export (default: 2)
 --capture-show-window          Show the otherwise hidden capture window
 --capture-help                 Print capture help without opening a window
