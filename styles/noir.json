@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "name": "Noir",
+  "light": {
+    "space": "world",
+    "direction": [-0.55, 0.7, 0.2],
+    "wrap": 0.0
+  },
+  "bands": [
+    {
+      "upper_bound": 0.48,
+      "brightness": 0.08,
+      "tint": [0.02, 0.02, 0.03],
+      "tint_mix": 0.65
+    },
+    {
+      "upper_bound": 0.76,
+      "brightness": 0.52,
+      "tint": [0.32, 0.35, 0.42],
+      "tint_mix": 0.28
+    },
+    {
+      "upper_bound": 0.0,
+      "brightness": 1.15,
+      "tint": [0.92, 0.94, 1.0],
+      "tint_mix": 0.18
+    }
+  ],
+  "alpha": {
+    "mode": "mask",
+    "cutoff": 0.5
+  },
+  "rim": {
+    "enabled": false,
+    "color": [1.0, 1.0, 1.0],
+    "threshold": 0.82,
+    "strength": 0.2,
+    "preserve_samples": 2
+  },
+  "highlight": {
+    "enabled": true,
+    "color": [1.0, 1.0, 1.0],
+    "threshold": 0.94,
+    "strength": 0.7,
+    "preserve_samples": 1
+  },
+  "outline": {
+    "width": 1,
+    "color": [0, 0, 0, 255],
+    "coverage_threshold": 0.2
+  }
+}

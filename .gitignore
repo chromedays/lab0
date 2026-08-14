@@ -26,4 +26,5 @@ artifacts/
 *.tmp
 *.log
 
-docs/
+docs/*
+!docs/cel-shading-v1-spec.md

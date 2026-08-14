@@ -20,6 +20,7 @@ FS_PATH             :: "shaders/custom.fs"
 DOWNSCALE_FS_PATH   :: "shaders/downscale.fs"
 CEL_BAND_FS_PATH    :: "shaders/cel_band.fs"
 MASK_DOWNSCALE_FS_PATH :: "shaders/mask_downscale.fs"
+OUTLINE_FS_PATH        :: "shaders/outline.fs"
 ASSETS_PATH         :: "assets"
 DEFAULT_MODEL_PATH  :: "assets/CesiumMan.glb"
 ANIMATION_SAMPLE_FPS :: 60.0
@@ -1186,7 +1187,12 @@ frame_camera_to_model :: proc(
     return scene_size
 }
 
-draw_scene :: proc(shader: rl.Shader, model: rl.Model, camera: rl.Camera3D) {
+draw_scene :: proc(
+    shader: rl.Shader,
+    cel_ramp_texture: rl.Texture2D,
+    model: rl.Model,
+    camera: rl.Camera3D,
+) {
     rl.ClearBackground(rl.BLANK)
 
     rl.BeginMode3D(camera)
@@ -1200,6 +1206,8 @@ draw_scene :: proc(shader: rl.Shader, model: rl.Model, camera: rl.Camera3D) {
                 }
                 mesh_material := model.materials[material_index]
                 mesh_material.shader = shader
+                mesh_material.maps[rl.MaterialMapIndex.EMISSION].texture =
+                    cel_ramp_texture
                 rl.DrawMesh(
                     model.meshes[mesh_index],
                     mesh_material,
@@ -1212,7 +1220,8 @@ draw_scene :: proc(shader: rl.Shader, model: rl.Model, camera: rl.Camera3D) {
 }
 
 draw_model_cel_bands :: proc(
-    cel_band_material: rl.Material,
+    cel_band_shader: rl.Shader,
+    cel_ramp_texture: rl.Texture2D,
     model: rl.Model,
     camera: rl.Camera3D,
 ) {
@@ -1220,9 +1229,17 @@ draw_model_cel_bands :: proc(
     rl.BeginMode3D(camera)
         if is_model_loaded(model) {
             for mesh_index := 0; mesh_index < int(model.meshCount); mesh_index += 1 {
+                material_index := int(model.meshMaterial[mesh_index])
+                if material_index < 0 || material_index >= int(model.materialCount) {
+                    material_index = 0
+                }
+                mesh_material := model.materials[material_index]
+                mesh_material.shader = cel_band_shader
+                mesh_material.maps[rl.MaterialMapIndex.EMISSION].texture =
+                    cel_ramp_texture
                 rl.DrawMesh(
                     model.meshes[mesh_index],
-                    cel_band_material,
+                    mesh_material,
                     model.transform,
                 )
             }
@@ -1320,13 +1337,26 @@ draw_coordinate_grid_overlay :: proc(
 
 draw_model_browser :: proc(
     bounds: rl.Rectangle,
+    expanded: ^bool,
     model_assets: ^Model_Assets,
     browser: ^Model_Browser_State,
     loaded_index: c.int,
     load_failed: bool,
     requested_source_index: ^c.int,
 ) {
-    rl.GuiPanel(bounds, "MODEL ASSETS")
+    rl.GuiPanel(bounds, nil)
+    was_expanded := expanded^
+    draw_collapsible_header(
+        {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
+        "MODEL ASSETS",
+        expanded,
+    )
+    if was_expanded && !expanded^ {
+        browser.search_editing = false
+    }
+    if !expanded^ {
+        return
+    }
 
     search_bounds := rl.Rectangle{
         bounds.x + 10,
@@ -1649,6 +1679,7 @@ draw_animation_controls :: proc(
 
 draw_camera_controls :: proc(
     bounds: rl.Rectangle,
+    expanded: ^bool,
     camera: ^rl.Camera3D,
     model_center: rl.Vector3,
     scene_size: f32,
@@ -1656,7 +1687,15 @@ draw_camera_controls :: proc(
     downsample_width, downsample_height: i32,
     lens_grid_visible: bool,
 ) {
-    rl.GuiPanel(bounds, "CAMERA CONTROLS")
+    rl.GuiPanel(bounds, nil)
+    draw_collapsible_header(
+        {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
+        "CAMERA CONTROLS",
+        expanded,
+    )
+    if !expanded^ {
+        return
+    }
 
     content_x := bounds.x + 12
     content_y := bounds.y + 28
@@ -1763,17 +1802,29 @@ draw_camera_controls :: proc(
     }
     rl.GuiLabel(
         {content_x, content_y, content_width, 18},
-        rl.TextFormat("1/2/3 Lens | G Grid: %s", lens_grid_status),
+        rl.TextFormat("1/2/3 Lens | G Grid: %s | C Style", lens_grid_status),
     )
 }
 
 draw_background_controls :: proc(
     bounds: rl.Rectangle,
-    picker_bounds: rl.Rectangle,
+    expanded: ^bool,
     background_color: ^rl.Color,
     picker_open: ^bool,
 ) {
-    rl.GuiPanel(bounds, "SCENE BACKGROUND")
+    rl.GuiPanel(bounds, nil)
+    was_expanded := expanded^
+    draw_collapsible_header(
+        {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
+        "SCENE BACKGROUND",
+        expanded,
+    )
+    if was_expanded && !expanded^ {
+        picker_open^ = false
+    }
+    if !expanded^ {
+        return
+    }
 
     swatch_bounds := rl.Rectangle{
         bounds.x + 12,
@@ -1813,22 +1864,227 @@ draw_background_controls :: proc(
         ),
     )
 
-    if picker_open^ {
-        if rl.GuiWindowBox(picker_bounds, "BACKGROUND COLOR") != 0 {
-            picker_open^ = false
-            return
-        }
-        rl.GuiColorPicker(
-            {
-                picker_bounds.x + 12,
-                picker_bounds.y + 34,
-                165,
-                165,
-            },
-            nil,
-            background_color,
-        )
+}
+
+draw_background_color_picker :: proc(
+    picker_bounds: rl.Rectangle,
+    background_color: ^rl.Color,
+    picker_open: ^bool,
+) {
+    if !picker_open^ {
+        return
     }
+    if rl.GuiWindowBox(picker_bounds, "BACKGROUND COLOR") != 0 {
+        picker_open^ = false
+        return
+    }
+    rl.GuiColorPicker(
+        {
+            picker_bounds.x + 12,
+            picker_bounds.y + 34,
+            165,
+            165,
+        },
+        nil,
+        background_color,
+    )
+}
+
+inspector_section_height :: proc(expanded: bool, expanded_height: f32) -> f32 {
+    if expanded {
+        return expanded_height
+    }
+    return INSPECTOR_SECTION_HEADER_HEIGHT
+}
+
+inspector_cel_section_offset :: proc(state: ^Inspector_UI_State) -> f32 {
+    return inspector_section_height(state.model_open, 310) +
+           INSPECTOR_SECTION_GAP +
+           inspector_section_height(state.camera_open, 250) +
+           INSPECTOR_SECTION_GAP
+}
+
+inspector_content_height :: proc(
+    state: ^Inspector_UI_State,
+    cel_style_ui: ^Cel_Style_UI_State,
+    cel_style: ^Cel_Style,
+) -> f32 {
+    return inspector_cel_section_offset(state) +
+           cel_style_editor_height(cel_style_ui, cel_style) +
+           INSPECTOR_SECTION_GAP +
+           inspector_section_height(state.background_open, 120)
+}
+
+draw_inspector_scrollbar :: proc(
+    view: rl.Rectangle,
+    content_height: f32,
+    state: ^Inspector_UI_State,
+) {
+    if content_height <= view.height {
+        state.scrollbar_dragging = false
+        return
+    }
+
+    track := rl.Rectangle{
+        view.x + view.width - 10,
+        view.y,
+        10,
+        view.height,
+    }
+    max_scroll := content_height - view.height
+    thumb_height := max(f32(42), view.height * view.height / content_height)
+    thumb_travel := track.height - thumb_height
+    thumb_y := track.y
+    if max_scroll > 0 {
+        thumb_y += state.scroll_y / max_scroll * thumb_travel
+    }
+    thumb := rl.Rectangle{track.x + 2, thumb_y, track.width - 4, thumb_height}
+    mouse_position := rl.GetMousePosition()
+
+    if rl.IsMouseButtonPressed(.LEFT) {
+        if rl.CheckCollisionPointRec(mouse_position, thumb) {
+            state.scrollbar_dragging = true
+            state.scrollbar_drag_offset = mouse_position.y - thumb.y
+        } else if rl.CheckCollisionPointRec(mouse_position, track) {
+            state.scroll_y = clamp(
+                (mouse_position.y - track.y - thumb_height * 0.5) /
+                max(thumb_travel, f32(1)) * max_scroll,
+                f32(0),
+                max_scroll,
+            )
+        }
+    }
+    if state.scrollbar_dragging {
+        if rl.IsMouseButtonDown(.LEFT) {
+            state.scroll_y = clamp(
+                (mouse_position.y - track.y - state.scrollbar_drag_offset) /
+                max(thumb_travel, f32(1)) * max_scroll,
+                f32(0),
+                max_scroll,
+            )
+        } else {
+            state.scrollbar_dragging = false
+        }
+    }
+
+    rl.DrawRectangleRec(track, rl.Color{24, 24, 24, 210})
+    thumb_color := rl.Color{126, 126, 126, 255}
+    if rl.CheckCollisionPointRec(mouse_position, thumb) || state.scrollbar_dragging {
+        thumb_color = rl.Color{180, 180, 180, 255}
+    }
+    rl.DrawRectangleRec(thumb, thumb_color)
+}
+
+draw_inspector :: proc(
+    bounds: rl.Rectangle,
+    state: ^Inspector_UI_State,
+    cel_style_ui: ^Cel_Style_UI_State,
+    cel_style: ^Cel_Style,
+    model_assets: ^Model_Assets,
+    model_browser: ^Model_Browser_State,
+    loaded_model_index: c.int,
+    model_load_failed: bool,
+    requested_source_index: ^c.int,
+    camera: ^rl.Camera3D,
+    model_center: rl.Vector3,
+    scene_size: f32,
+    downscale_level: ^c.int,
+    downsample_width, downsample_height: i32,
+    lens_grid_visible: bool,
+    background_picker_bounds: rl.Rectangle,
+    background_color: ^rl.Color,
+    background_picker_open: ^bool,
+) {
+    rl.GuiPanel(bounds, "INSPECTOR")
+
+    view := rl.Rectangle{
+        bounds.x + 8,
+        bounds.y + 28,
+        bounds.width - 16,
+        bounds.height - 36,
+    }
+    content_height := inspector_content_height(state, cel_style_ui, cel_style)
+    max_scroll := max(content_height - view.height, f32(0))
+    mouse_position := rl.GetMousePosition()
+    mouse_over_view := rl.CheckCollisionPointRec(mouse_position, view)
+    if mouse_over_view && !state.scrollbar_dragging {
+        wheel_delta := rl.GetMouseWheelMove()
+        if wheel_delta != 0 {
+            state.scroll_y -= wheel_delta * 42
+        }
+    }
+    state.scroll_y = clamp(state.scroll_y, f32(0), max_scroll)
+
+    scrollbar_width: f32 = 0
+    if content_height > view.height {
+        scrollbar_width = 14
+    }
+    content_width := view.width - scrollbar_width
+    content_y := view.y - state.scroll_y
+
+    content_was_locked := rl.GuiIsLocked()
+    content_locked_here := !content_was_locked && !mouse_over_view
+    if content_locked_here {
+        rl.GuiLock()
+    }
+    rl.BeginScissorMode(
+        c.int(view.x),
+        c.int(view.y),
+        c.int(view.width),
+        c.int(view.height),
+    )
+        model_height := inspector_section_height(state.model_open, 310)
+        draw_model_browser(
+            {view.x, content_y, content_width, model_height},
+            &state.model_open,
+            model_assets,
+            model_browser,
+            loaded_model_index,
+            model_load_failed,
+            requested_source_index,
+        )
+        content_y += model_height + INSPECTOR_SECTION_GAP
+
+        camera_height := inspector_section_height(state.camera_open, 250)
+        draw_camera_controls(
+            {view.x, content_y, content_width, camera_height},
+            &state.camera_open,
+            camera,
+            model_center,
+            scene_size,
+            downscale_level,
+            downsample_width,
+            downsample_height,
+            lens_grid_visible,
+        )
+        content_y += camera_height + INSPECTOR_SECTION_GAP
+
+        cel_height := cel_style_editor_height(cel_style_ui, cel_style)
+        draw_cel_style_editor(
+            {view.x, content_y, content_width, cel_height},
+            cel_style_ui,
+            cel_style,
+        )
+        content_y += cel_height + INSPECTOR_SECTION_GAP
+
+        background_height := inspector_section_height(state.background_open, 120)
+        draw_background_controls(
+            {view.x, content_y, content_width, background_height},
+            &state.background_open,
+            background_color,
+            background_picker_open,
+        )
+    rl.EndScissorMode()
+    if content_locked_here {
+        rl.GuiUnlock()
+    }
+
+    draw_inspector_scrollbar(view, content_height, state)
+    draw_background_color_picker(
+        background_picker_bounds,
+        background_color,
+        background_picker_open,
+    )
 }
 
 draw_mouse_magnifier :: proc(
@@ -2388,6 +2644,21 @@ run_application :: proc() -> int {
     }
     capture_options := &capture_parse_result.options
 
+    cel_style := make_classic_cel_style()
+    defer destroy_cel_style(&cel_style)
+    if capture_options.enabled && len(capture_options.style_path) > 0 {
+        loaded_style, style_error := load_cel_style(capture_options.style_path)
+        if style_error != .NONE {
+            log.errorf(
+                "Failed to load capture cel style %s: %s",
+                capture_options.style_path,
+                cel_style_error_message(style_error),
+            )
+            return 2
+        }
+        replace_cel_style(&cel_style, loaded_style)
+    }
+
     model_assets := scan_model_assets(ASSETS_PATH)
     defer destroy_model_assets(&model_assets)
 
@@ -2419,6 +2690,7 @@ run_application :: proc() -> int {
     defer rl.UnloadShader(scene_shader)
     defer destroy_preprocessed_shader_program_source(&scene_shader_source)
     assert(scene_shader_loaded)
+    scene_cel_bindings := resolve_cel_shader_bindings(scene_shader)
 
     downscale_shader, downscale_shader_source, downscale_shader_loaded :=
         load_fragment_shader_with_includes(DOWNSCALE_FS_PATH)
@@ -2432,15 +2704,24 @@ run_application :: proc() -> int {
     )
     defer destroy_preprocessed_shader_program_source(&cel_band_shader_source)
     assert(cel_band_shader_loaded)
-    cel_band_material := rl.LoadMaterialDefault()
-    defer rl.UnloadMaterial(cel_band_material)
-    cel_band_material.shader = cel_band_shader
+    cel_band_bindings := resolve_cel_shader_bindings(cel_band_shader)
 
     mask_downscale_shader, mask_downscale_shader_source, mask_downscale_shader_loaded :=
         load_fragment_shader_with_includes(MASK_DOWNSCALE_FS_PATH)
     defer rl.UnloadShader(mask_downscale_shader)
     defer destroy_preprocessed_shader_source(&mask_downscale_shader_source)
     assert(mask_downscale_shader_loaded)
+
+    outline_shader, outline_shader_source, outline_shader_loaded :=
+        load_fragment_shader_with_includes(OUTLINE_FS_PATH)
+    defer rl.UnloadShader(outline_shader)
+    defer destroy_preprocessed_shader_source(&outline_shader_source)
+    assert(outline_shader_loaded)
+
+    cel_ramp_texture := load_cel_ramp_texture(&cel_style)
+    defer rl.UnloadTexture(cel_ramp_texture)
+    assert(rl.IsTextureValid(cel_ramp_texture))
+    applied_cel_ramp_revision := cel_style.revision
 
     active_model: rl.Model
     animation_playback: Animation_Playback
@@ -2618,9 +2899,15 @@ run_application :: proc() -> int {
         downsample_height,
     )
     rl.SetTextureFilter(coverage_mask_render_target.texture, .POINT)
+    outlined_render_target := rl.LoadRenderTexture(
+        downsample_width,
+        downsample_height,
+    )
+    rl.SetTextureFilter(outlined_render_target.texture, .POINT)
     defer {
         rl.UnloadRenderTexture(downsample_render_target)
         rl.UnloadRenderTexture(coverage_mask_render_target)
+        rl.UnloadRenderTexture(outlined_render_target)
     }
     composite_render_target := rl.LoadRenderTexture(screen_width, screen_height)
     defer rl.UnloadRenderTexture(composite_render_target)
@@ -2647,6 +2934,14 @@ run_application :: proc() -> int {
         downscale_shader,
         "u_color_cluster_threshold",
     )
+    downscale_rim_preserve_samples_location := rl.GetShaderLocation(
+        downscale_shader,
+        "u_rim_preserve_samples",
+    )
+    downscale_highlight_preserve_samples_location := rl.GetShaderLocation(
+        downscale_shader,
+        "u_highlight_preserve_samples",
+    )
     mask_downscale_source_resolution_location := rl.GetShaderLocation(
         mask_downscale_shader,
         "u_source_resolution",
@@ -2656,6 +2951,26 @@ run_application :: proc() -> int {
         "u_target_resolution",
     )
     color_cluster_threshold := f32(DEFAULT_COLOR_CLUSTER_THRESHOLD)
+    outline_target_resolution_location := rl.GetShaderLocation(
+        outline_shader,
+        "u_target_resolution",
+    )
+    outline_coverage_texture_location := rl.GetShaderLocation(
+        outline_shader,
+        "u_coverage_texture",
+    )
+    outline_width_location := rl.GetShaderLocation(
+        outline_shader,
+        "u_outline_width",
+    )
+    outline_color_location := rl.GetShaderLocation(
+        outline_shader,
+        "u_outline_color",
+    )
+    outline_coverage_threshold_location := rl.GetShaderLocation(
+        outline_shader,
+        "u_coverage_threshold",
+    )
 
     lens_mode := Lens_Mode.PIXELATED
     if capture_options.enabled {
@@ -2664,20 +2979,23 @@ run_application :: proc() -> int {
     lens_grid_visible := true
     scene_background_color := rl.BLACK
     background_picker_open := false
-    model_browser_bounds := rl.Rectangle{f32(screen_width) - 280, 10, 270, 310}
-    camera_controls_bounds := rl.Rectangle{f32(screen_width) - 280, 330, 270, 250}
-    background_controls_bounds := rl.Rectangle{
-        f32(screen_width) - 280,
-        590,
-        270,
-        120,
+    inspector_bounds := rl.Rectangle{
+        f32(screen_width) - 340,
+        10,
+        330,
+        f32(screen_height) - 20,
     }
     background_picker_bounds := rl.Rectangle{
-        f32(screen_width) - 510,
+        inspector_bounds.x - 230,
         360,
         220,
         212,
     }
+    inspector_ui := Inspector_UI_State{
+        model_open = true,
+        camera_open = true,
+    }
+    cel_style_ui: Cel_Style_UI_State
     animation_controls_bounds := rl.Rectangle{10, 190, 280, 190}
     magnifier_bounds := rl.Rectangle{10, f32(screen_height) - 194, 148, 184}
     coverage_alpha: f32 = -1
@@ -2720,14 +3038,22 @@ run_application :: proc() -> int {
                 requested_width,
                 requested_height,
             )
+            replacement_outline_target := rl.LoadRenderTexture(
+                requested_width,
+                requested_height,
+            )
             if rl.IsRenderTextureValid(replacement_downsample_target) &&
-               rl.IsRenderTextureValid(replacement_mask_target) {
+               rl.IsRenderTextureValid(replacement_mask_target) &&
+               rl.IsRenderTextureValid(replacement_outline_target) {
                 rl.SetTextureFilter(replacement_downsample_target.texture, .POINT)
                 rl.SetTextureFilter(replacement_mask_target.texture, .POINT)
+                rl.SetTextureFilter(replacement_outline_target.texture, .POINT)
                 rl.UnloadRenderTexture(downsample_render_target)
                 rl.UnloadRenderTexture(coverage_mask_render_target)
+                rl.UnloadRenderTexture(outlined_render_target)
                 downsample_render_target = replacement_downsample_target
                 coverage_mask_render_target = replacement_mask_target
+                outlined_render_target = replacement_outline_target
                 downsample_width = requested_width
                 downsample_height = requested_height
                 downsample_resolution = {
@@ -2748,6 +3074,9 @@ run_application :: proc() -> int {
                 }
                 if rl.IsRenderTextureValid(replacement_mask_target) {
                     rl.UnloadRenderTexture(replacement_mask_target)
+                }
+                if rl.IsRenderTextureValid(replacement_outline_target) {
+                    rl.UnloadRenderTexture(replacement_outline_target)
                 }
                 downscale_level = applied_downscale_level
                 log.errorf(
@@ -2783,31 +3112,25 @@ run_application :: proc() -> int {
         }
 
         ui_mouse_position := rl.GetMousePosition()
-        mouse_over_model_browser := rl.CheckCollisionPointRec(
+        mouse_over_inspector := rl.CheckCollisionPointRec(
             ui_mouse_position,
-            model_browser_bounds,
+            inspector_bounds,
         )
-        mouse_over_camera_controls := rl.CheckCollisionPointRec(
-            ui_mouse_position,
-            camera_controls_bounds,
-        )
-        mouse_over_background_controls := rl.CheckCollisionPointRec(
-            ui_mouse_position,
-            background_controls_bounds,
-        )
+        mouse_over_background_picker := background_picker_open &&
+            rl.CheckCollisionPointRec(ui_mouse_position, background_picker_bounds)
         mouse_over_animation_controls := has_playable_animations(
             &animation_playback,
         ) && rl.CheckCollisionPointRec(
             ui_mouse_position,
             animation_controls_bounds,
         )
-        mouse_over_ui := mouse_over_model_browser ||
-                         mouse_over_camera_controls ||
-                         mouse_over_background_controls ||
+        mouse_over_ui := mouse_over_inspector ||
+                         mouse_over_background_picker ||
                          mouse_over_animation_controls
         ui_captures_camera_input := background_picker_open ||
                                     animation_playback.dropdown_open ||
-                                    model_browser.search_editing
+                                    model_browser.search_editing ||
+                                    cel_style_ui.color_target != .NONE
         left_mouse_down := rl.IsMouseButtonDown(.LEFT)
         middle_mouse_down := rl.IsMouseButtonDown(.MIDDLE)
         camera_drag_for_frame, next_camera_mouse_drag :=
@@ -2853,6 +3176,19 @@ run_application :: proc() -> int {
 
         export_requested := false
         if window_focused && !model_browser.search_editing {
+            if rl.IsKeyPressed(.C) {
+                cel_style_ui.open = !cel_style_ui.open
+                if cel_style_ui.open {
+                    background_picker_open = false
+                    animation_playback.dropdown_open = false
+                    sync_cel_style_light_angles(&cel_style_ui, &cel_style)
+                    inspector_ui.scroll_y = inspector_cel_section_offset(
+                        &inspector_ui,
+                    )
+                } else {
+                    cel_style_ui.color_target = .NONE
+                }
+            }
             if rl.IsKeyPressed(.ONE) || rl.IsKeyPressed(.KP_1) {
                 lens_mode = .PIXELATED
                 log.info("Lens mode: pixelated")
@@ -2886,12 +3222,14 @@ run_application :: proc() -> int {
         update_animation_playback(&animation_playback, active_model)
 
         if !capture_options.enabled {
-            _ = reload_shader_with_includes(
+            if reload_shader_with_includes(
                 VS_PATH,
                 FS_PATH,
                 &scene_shader,
                 &scene_shader_source,
-            )
+            ) {
+                scene_cel_bindings = resolve_cel_shader_bindings(scene_shader)
+            }
 
             if reload_shader_with_includes(
                 VS_PATH,
@@ -2899,7 +3237,7 @@ run_application :: proc() -> int {
                 &cel_band_shader,
                 &cel_band_shader_source,
             ) {
-                cel_band_material.shader = cel_band_shader
+                cel_band_bindings = resolve_cel_shader_bindings(cel_band_shader)
             }
 
             if reload_fragment_shader_with_includes(
@@ -2923,6 +3261,14 @@ run_application :: proc() -> int {
                     downscale_shader,
                     "u_color_cluster_threshold",
                 )
+                downscale_rim_preserve_samples_location = rl.GetShaderLocation(
+                    downscale_shader,
+                    "u_rim_preserve_samples",
+                )
+                downscale_highlight_preserve_samples_location = rl.GetShaderLocation(
+                    downscale_shader,
+                    "u_highlight_preserve_samples",
+                )
             }
 
             if reload_fragment_shader_with_includes(
@@ -2939,6 +3285,49 @@ run_application :: proc() -> int {
                     "u_target_resolution",
                 )
             }
+
+            if reload_fragment_shader_with_includes(
+                OUTLINE_FS_PATH,
+                &outline_shader,
+                &outline_shader_source,
+            ) {
+                outline_target_resolution_location = rl.GetShaderLocation(
+                    outline_shader,
+                    "u_target_resolution",
+                )
+                outline_coverage_texture_location = rl.GetShaderLocation(
+                    outline_shader,
+                    "u_coverage_texture",
+                )
+                outline_width_location = rl.GetShaderLocation(
+                    outline_shader,
+                    "u_outline_width",
+                )
+                outline_color_location = rl.GetShaderLocation(
+                    outline_shader,
+                    "u_outline_color",
+                )
+                outline_coverage_threshold_location = rl.GetShaderLocation(
+                    outline_shader,
+                    "u_coverage_threshold",
+                )
+            }
+        }
+
+        if cel_style.revision != applied_cel_ramp_revision {
+            update_cel_ramp_texture(cel_ramp_texture, &cel_style)
+            applied_cel_ramp_revision = cel_style.revision
+        }
+        rim_preserve_samples := c.int(cel_style.rim.preserve_samples)
+        highlight_preserve_samples := c.int(
+            cel_style.highlight.preserve_samples,
+        )
+        outline_width := c.int(cel_style.outline.width)
+        outline_color := [4]f32{
+            f32(cel_style.outline.color.r) / 255,
+            f32(cel_style.outline.color.g) / 255,
+            f32(cel_style.outline.color.b) / 255,
+            f32(cel_style.outline.color.a) / 255,
         }
 
         rl.SetShaderValue(
@@ -2960,10 +3349,46 @@ run_application :: proc() -> int {
             .FLOAT,
         )
         rl.SetShaderValue(
+            downscale_shader,
+            downscale_rim_preserve_samples_location,
+            &rim_preserve_samples,
+            .INT,
+        )
+        rl.SetShaderValue(
+            downscale_shader,
+            downscale_highlight_preserve_samples_location,
+            &highlight_preserve_samples,
+            .INT,
+        )
+        rl.SetShaderValue(
             mask_downscale_shader,
             mask_downscale_source_resolution_location,
             &scene_resolution,
             .VEC2,
+        )
+        rl.SetShaderValue(
+            outline_shader,
+            outline_target_resolution_location,
+            &downsample_resolution,
+            .VEC2,
+        )
+        rl.SetShaderValue(
+            outline_shader,
+            outline_width_location,
+            &outline_width,
+            .INT,
+        )
+        rl.SetShaderValue(
+            outline_shader,
+            outline_color_location,
+            &outline_color,
+            .VEC4,
+        )
+        rl.SetShaderValue(
+            outline_shader,
+            outline_coverage_threshold_location,
+            &cel_style.outline.coverage_threshold,
+            .FLOAT,
         )
         rl.SetShaderValue(
             mask_downscale_shader,
@@ -2973,11 +3398,35 @@ run_application :: proc() -> int {
         )
 
         rl.BeginTextureMode(scene_render_target)
-            draw_scene(scene_shader, active_model, render_camera)
+            apply_cel_style_to_shader(
+                scene_shader,
+                &scene_cel_bindings,
+                &cel_style,
+                render_camera,
+                active_model.transform,
+            )
+            draw_scene(
+                scene_shader,
+                cel_ramp_texture,
+                active_model,
+                render_camera,
+            )
         rl.EndTextureMode()
 
         rl.BeginTextureMode(cel_band_render_target)
-            draw_model_cel_bands(cel_band_material, active_model, render_camera)
+            apply_cel_style_to_shader(
+                cel_band_shader,
+                &cel_band_bindings,
+                &cel_style,
+                render_camera,
+                active_model.transform,
+            )
+            draw_model_cel_bands(
+                cel_band_shader,
+                cel_ramp_texture,
+                active_model,
+                render_camera,
+            )
         rl.EndTextureMode()
 
         flipped_scene_source_bounds := rl.Rectangle{
@@ -3011,6 +3460,31 @@ run_application :: proc() -> int {
                 rl.DrawTexturePro(
                     cel_band_render_target.texture,
                     flipped_scene_source_bounds,
+                    {0, 0, f32(downsample_width), f32(downsample_height)},
+                    {},
+                    0,
+                    rl.WHITE,
+                )
+            rl.EndShaderMode()
+            rl.EndBlendMode()
+        rl.EndTextureMode()
+
+        flipped_downsample_source_bounds := rl.Rectangle{
+            width = f32(downsample_width),
+            height = -f32(downsample_height),
+        }
+        rl.BeginTextureMode(outlined_render_target)
+            rl.ClearBackground(rl.BLANK)
+            rl.BeginBlendMode(.ALPHA_PREMULTIPLY)
+            rl.BeginShaderMode(outline_shader)
+                rl.SetShaderValueTexture(
+                    outline_shader,
+                    outline_coverage_texture_location,
+                    coverage_mask_render_target.texture,
+                )
+                rl.DrawTexturePro(
+                    downsample_render_target.texture,
+                    flipped_downsample_source_bounds,
                     {0, 0, f32(downsample_width), f32(downsample_height)},
                     {},
                     0,
@@ -3086,7 +3560,7 @@ run_application :: proc() -> int {
             if lens_mode == .BLENDED {
                 lens_tint.a = 128
             }
-            active_lens_texture := downsample_render_target.texture
+            active_lens_texture := outlined_render_target.texture
             if lens_mode == .COVERAGE_MASK {
                 active_lens_texture = coverage_mask_render_target.texture
             }
@@ -3164,20 +3638,20 @@ run_application :: proc() -> int {
                     export_status,
                 )
             }
-            draw_model_browser(
-                model_browser_bounds,
+            draw_animation_controls(
+                animation_controls_bounds,
+                &animation_playback,
+            )
+            draw_inspector(
+                inspector_bounds,
+                &inspector_ui,
+                &cel_style_ui,
+                &cel_style,
                 &model_assets,
                 &model_browser,
                 loaded_model_index,
                 model_load_failed,
                 &model_active_index,
-            )
-            draw_animation_controls(
-                animation_controls_bounds,
-                &animation_playback,
-            )
-            draw_camera_controls(
-                camera_controls_bounds,
                 &control_camera,
                 model_center,
                 scene_size,
@@ -3185,9 +3659,6 @@ run_application :: proc() -> int {
                 downsample_width,
                 downsample_height,
                 lens_grid_visible,
-            )
-            draw_background_controls(
-                background_controls_bounds,
                 background_picker_bounds,
                 &scene_background_color,
                 &background_picker_open,
@@ -3203,7 +3674,7 @@ run_application :: proc() -> int {
                 last_export_path = ""
             }
             last_export_path, last_export_succeeded = export_lens_downsample_png(
-                downsample_render_target.texture,
+                outlined_render_target.texture,
                 lens_bounds,
                 applied_downscale_level,
                 &next_export_index,
@@ -3253,7 +3724,7 @@ run_application :: proc() -> int {
                     capture_output_path,
                     composite_render_target,
                     scene_render_target,
-                    downsample_render_target,
+                    outlined_render_target,
                     coverage_mask_render_target,
                     lens_bounds,
                 )

@@ -56,6 +56,21 @@ Fixed animation pose:
   --capture-output /tmp/lab0-worker-a/runner-frame-24.png
 ```
 
+Style preset capture:
+
+```sh
+/tmp/lab0-capture-worker-a \
+  --capture-case anime-sphere \
+  --capture-model builtin:sphere \
+  --capture-style styles/anime.json \
+  --capture-view isometric \
+  --capture-target downsample \
+  --capture-output /tmp/lab0-worker-a/anime-sphere.png
+```
+
+Without `--capture-style`, captures use the built-in Classic style. Invalid or
+unreadable style files exit with status 2 before rendering.
+
 Relative paths such as `assets/CesiumMan.glb` and exact absolute asset paths
 are both supported.
 
@@ -96,7 +111,7 @@ Sequence output rules:
 | `composite` | 1280x720 scene, active lens, overlays, and control panels |
 | `lens` | 400x400 crop of the active lens |
 | `scene` | 1280x720 raw scene RenderTexture |
-| `downsample` | 128x72 raw pixel-downsample RenderTexture |
+| `downsample` | 128x72 final pixel-downsample RenderTexture, including the configured outline |
 | `coverage-mask` | 128x72 raw coverage-mask RenderTexture |
 
 The composite deliberately excludes the cursor-dependent magnifier so captures

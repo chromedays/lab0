@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "name": "Anime",
+  "light": {
+    "space": "camera",
+    "direction": [0.3, 0.8, 0.5],
+    "wrap": 0.08
+  },
+  "bands": [
+    {
+      "upper_bound": 0.38,
+      "brightness": 0.42,
+      "tint": [0.18, 0.2, 0.38],
+      "tint_mix": 0.22
+    },
+    {
+      "upper_bound": 0.74,
+      "brightness": 0.78,
+      "tint": [0.62, 0.66, 0.9],
+      "tint_mix": 0.08
+    },
+    {
+      "upper_bound": 0.0,
+      "brightness": 1.05,
+      "tint": [1.0, 0.94, 0.78],
+      "tint_mix": 0.08
+    }
+  ],
+  "alpha": {
+    "mode": "mask",
+    "cutoff": 0.5
+  },
+  "rim": {
+    "enabled": true,
+    "color": [0.62, 0.78, 1.0],
+    "threshold": 0.76,
+    "strength": 0.3,
+    "preserve_samples": 2
+  },
+  "highlight": {
+    "enabled": true,
+    "color": [1.0, 0.96, 0.82],
+    "threshold": 0.9,
+    "strength": 0.45,
+    "preserve_samples": 1
+  },
+  "outline": {
+    "width": 1,
+    "color": [24, 24, 42, 255],
+    "coverage_threshold": 0.25
+  }
+}

@@ -9,6 +9,8 @@ uniform vec4 colDiffuse;
 uniform vec2 u_source_resolution;
 uniform vec2 u_target_resolution;
 uniform float u_color_cluster_threshold;
+uniform int u_rim_preserve_samples;
+uniform int u_highlight_preserve_samples;
 
 out vec4 finalColor;
 
@@ -22,6 +24,7 @@ float color_distance_squared(vec3 first_color, vec3 second_color) {
 void main() {
     vec2 sample_uvs[DOWNSAMPLE_SAMPLE_COUNT];
     int sample_bands[DOWNSAMPLE_SAMPLE_COUNT];
+    int sample_accents[DOWNSAMPLE_SAMPLE_COUNT];
 
     for (int sample_index = 0;
          sample_index < DOWNSAMPLE_SAMPLE_COUNT;
@@ -34,6 +37,9 @@ void main() {
         );
         sample_uvs[sample_index] = sample_uv;
         sample_bands[sample_index] = decode_cel_band(
+            texture(u_cel_band_texture, sample_uv)
+        );
+        sample_accents[sample_index] = decode_cel_accents(
             texture(u_cel_band_texture, sample_uv)
         );
     }
@@ -85,6 +91,39 @@ void main() {
         return;
     }
 
+    const int CEL_ACCENT_RIM = 1;
+    const int CEL_ACCENT_HIGHLIGHT = 2;
+    int rim_votes = 0;
+    int highlight_votes = 0;
+    for (int sample_index = 0;
+         sample_index < DOWNSAMPLE_SAMPLE_COUNT;
+         sample_index++) {
+        if (sample_bands[sample_index] != winning_band) {
+            continue;
+        }
+        if ((sample_accents[sample_index] & CEL_ACCENT_RIM) != 0) {
+            rim_votes++;
+        }
+        if ((sample_accents[sample_index] & CEL_ACCENT_HIGHLIGHT) != 0) {
+            highlight_votes++;
+        }
+    }
+
+    int winning_accent = 0;
+    if (highlight_votes >= clamp(
+            u_highlight_preserve_samples,
+            1,
+            DOWNSAMPLE_SAMPLE_COUNT
+        )) {
+        winning_accent = CEL_ACCENT_HIGHLIGHT;
+    } else if (rim_votes >= clamp(
+                   u_rim_preserve_samples,
+                   1,
+                   DOWNSAMPLE_SAMPLE_COUNT
+               )) {
+        winning_accent = CEL_ACCENT_RIM;
+    }
+
     // Within the dominant band, find the actual source color with the densest
     // neighborhood. Returning an existing sample avoids inventing a blended
     // color at hard albedo boundaries.
@@ -92,7 +131,9 @@ void main() {
     for (int sample_index = 0;
          sample_index < DOWNSAMPLE_SAMPLE_COUNT;
          sample_index++) {
-        if (sample_bands[sample_index] == winning_band) {
+        bool accent_matches = winning_accent == 0 ||
+            (sample_accents[sample_index] & winning_accent) != 0;
+        if (sample_bands[sample_index] == winning_band && accent_matches) {
             sample_colors[sample_index] = texture(
                 texture0,
                 sample_uvs[sample_index]
@@ -112,7 +153,10 @@ void main() {
     for (int candidate_index = 0;
          candidate_index < DOWNSAMPLE_SAMPLE_COUNT;
          candidate_index++) {
-        if (sample_bands[candidate_index] != winning_band) {
+        bool candidate_accent_matches = winning_accent == 0 ||
+            (sample_accents[candidate_index] & winning_accent) != 0;
+        if (sample_bands[candidate_index] != winning_band ||
+            !candidate_accent_matches) {
             continue;
         }
 
@@ -120,7 +164,10 @@ void main() {
         for (int sample_index = 0;
              sample_index < DOWNSAMPLE_SAMPLE_COUNT;
              sample_index++) {
+            bool sample_accent_matches = winning_accent == 0 ||
+                (sample_accents[sample_index] & winning_accent) != 0;
             if (sample_bands[sample_index] == winning_band &&
+                sample_accent_matches &&
                 color_distance_squared(
                     sample_colors[candidate_index],
                     sample_colors[sample_index]
