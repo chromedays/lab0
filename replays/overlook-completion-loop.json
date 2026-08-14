@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "start_room": "R00",
+  "segments": [
+    {"ticks": 140, "move": [1.0, 0.0], "dash_on_first": false},
+    {"ticks": 25, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 295, "move": [1.0, 0.0], "dash_on_first": false},
+    {"ticks": 25, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 165, "move": [1.0, 0.0], "dash_on_first": false},
+    {"ticks": 140, "move": [0.0, -1.0], "dash_on_first": false},
+    {"ticks": 25, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 58, "move": [0.0, -1.0], "dash_on_first": false},
+    {"ticks": 1, "move": [0.0, -1.0], "dash_on_first": true},
+    {"ticks": 11, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 45, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 28, "move": [0.0, -1.0], "dash_on_first": false},
+    {"ticks": 115, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 25, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 50, "move": [0.0, 1.0], "dash_on_first": false},
+    {"ticks": 92, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 50, "move": [0.0, -1.0], "dash_on_first": false},
+    {"ticks": 138, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 25, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 218, "move": [0.0, 1.0], "dash_on_first": false},
+    {"ticks": 162, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 38, "move": [0.0, 1.0], "dash_on_first": false},
+    {"ticks": 25, "move": [0.0, 0.0], "dash_on_first": false}
+  ]
+}

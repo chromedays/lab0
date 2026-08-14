@@ -159,6 +159,7 @@ Game_State :: struct {
     elapsed_time:       f32,
     dash_count:         int,
     zombie_hits:        int,
+    reset_count:        int,
     tick:               u64,
     debug_visible:      bool,
     particle_system:    Game_Particle_System,
@@ -347,6 +348,7 @@ game_state_init :: proc(start_room: Game_Room_ID = .R00_START_FOREST) -> Game_St
 
 game_reset_current_room :: proc(state: ^Game_State) {
     room := game_room(state.current_room)
+    state.reset_count += 1
     facing := state.player.facing
     state.player = {
         position = room.spawn,

@@ -2839,6 +2839,7 @@ run_game_mode :: proc(arguments: []string) -> int {
     capture_succeeded := false
     recorded_frames := 0
     replay_player: Game_Replay_Player
+    replay_stats: Game_Replay_Stats
     replay_complete := false
     background_color := GAME_ROOM_BACKGROUND_COLORS[int(state.current_room)]
 
@@ -2904,7 +2905,26 @@ run_game_mode :: proc(arguments: []string) -> int {
                 tick_input = frame_input
                 tick_input.dash_pressed = pending_dash
             }
+            room_before_tick := state.current_room
+            dashes_before_tick := state.dash_count
+            hits_before_tick := state.zombie_hits
+            resets_before_tick := state.reset_count
             game_fixed_update(&state, tick_input, GAME_FIXED_DT)
+            if replay_enabled {
+                game_replay_stats_observe_tick(
+                    &replay_stats,
+                    room_before_tick,
+                    dashes_before_tick,
+                    hits_before_tick,
+                    resets_before_tick,
+                    &state,
+                )
+                if replay_player.ticks_played >= replay.total_ticks &&
+                   !replay_stats.printed {
+                    game_replay_stats_print(&replay_stats, replay.total_ticks)
+                    replay_stats.printed = true
+                }
+            }
             pending_dash = false
             accumulator -= GAME_FIXED_DT
             ticks_run += 1

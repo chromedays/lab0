@@ -49,10 +49,10 @@ fi
 run_id=$$
 binary="/tmp/lab0-game-autotest-${run_id}"
 output_dir="/tmp/lab0-game-autotest-${run_id}-captures"
-capture_a="${output_dir}/dash-tick-5-a.png"
-capture_b="${output_dir}/dash-tick-5-b.png"
-log_a="${output_dir}/dash-tick-5-a.log"
-log_b="${output_dir}/dash-tick-5-b.log"
+capture_a="${output_dir}/determinism-a.png"
+capture_b="${output_dir}/determinism-b.png"
+log_a="${output_dir}/determinism-a.log"
+log_b="${output_dir}/determinism-b.log"
 unit_log="${output_dir}/odin-test.log"
 
 if [ "$video_report" = true ] && [ -z "$report_dir" ]; then
@@ -76,42 +76,49 @@ fi
 echo "[2/4] Fresh game binary"
 odin build . -out:"$binary"
 
-echo "[3/4] Repeated replay capture at fixed tick 5"
-"$binary" \
-    --mode game \
-    --game-replay "$replay_path" \
-    --game-capture-tick 5 \
-    --capture-case traversal-dash-tick-5-a \
-    --capture-target composite \
-    --capture-output "$capture_a" >"$log_a" 2>&1
-"$binary" \
-    --mode game \
-    --game-replay "$replay_path" \
-    --game-capture-tick 5 \
-    --capture-case traversal-dash-tick-5-b \
-    --capture-target composite \
-    --capture-output "$capture_b" >"$log_b" 2>&1
+run_determinism_check() {
+    determinism_tick=$1
+    "$binary" \
+        --mode game \
+        --game-replay "$replay_path" \
+        --game-capture-tick "$determinism_tick" \
+        --capture-case replay-determinism-a \
+        --capture-target composite \
+        --capture-output "$capture_a" >"$log_a" 2>&1
+    "$binary" \
+        --mode game \
+        --game-replay "$replay_path" \
+        --game-capture-tick "$determinism_tick" \
+        --capture-case replay-determinism-b \
+        --capture-target composite \
+        --capture-output "$capture_b" >"$log_b" 2>&1
 
-if rg -q "WARNING: IMAGE|Game asset could not be loaded" "$log_a" "$log_b"; then
-    echo "error: capture log contains an asset-image warning" >&2
-    exit 1
+    if rg -q "WARNING: IMAGE|Game asset could not be loaded" "$log_a" "$log_b"; then
+        echo "error: capture log contains an asset-image warning" >&2
+        exit 1
+    fi
+
+    file_a=$(file "$capture_a")
+    file_b=$(file "$capture_b")
+    case "$file_a" in
+        *"PNG image data, 1280 x 720"*) ;;
+        *) echo "error: unexpected first capture: $file_a" >&2; exit 1 ;;
+    esac
+    case "$file_b" in
+        *"PNG image data, 1280 x 720"*) ;;
+        *) echo "error: unexpected second capture: $file_b" >&2; exit 1 ;;
+    esac
+
+    cmp -s "$capture_a" "$capture_b"
+    shasum -a 256 "$capture_a" "$capture_b"
+}
+
+if [ "$video_report" = false ]; then
+    echo "[3/4] Repeated replay capture at fixed tick 5"
+    run_determinism_check 5
+    echo "[4/4] Byte determinism passed"
+    echo "Game automation passed. Artifacts: $output_dir"
 fi
-
-file_a=$(file "$capture_a")
-file_b=$(file "$capture_b")
-case "$file_a" in
-    *"PNG image data, 1280 x 720"*) ;;
-    *) echo "error: unexpected first capture: $file_a" >&2; exit 1 ;;
-esac
-case "$file_b" in
-    *"PNG image data, 1280 x 720"*) ;;
-    *) echo "error: unexpected second capture: $file_b" >&2; exit 1 ;;
-esac
-
-echo "[4/4] Byte determinism"
-cmp -s "$capture_a" "$capture_b"
-shasum -a 256 "$capture_a" "$capture_b"
-echo "Game automation passed. Artifacts: $output_dir"
 
 if [ "$video_report" = true ]; then
     if ! command -v ffmpeg >/dev/null 2>&1 ||
@@ -126,7 +133,7 @@ if [ "$video_report" = true ]; then
     report_path="${report_dir}/report.md"
     mkdir -p "$report_dir"
 
-    echo "[video 1/3] Stream every deterministic replay tick to FFmpeg"
+    echo "[video 1/4] Stream every deterministic replay tick to FFmpeg"
     if "$binary" \
         --mode game \
         --game-replay "$replay_path" \
@@ -156,6 +163,37 @@ if [ "$video_report" = true ]; then
         exit 1
     fi
 
+    total_metric=$(rg '^GAME_REPLAY_TOTAL_METRIC ' "$recording_log" | tail -n 1 || true)
+    if [ -z "$total_metric" ]; then
+        echo "error: recording log has no replay completion metrics" >&2
+        exit 1
+    fi
+    metric_value() {
+        metric_key=$1
+        printf '%s\n' "$total_metric" | awk -v key="$metric_key" '{
+            for (field_index = 2; field_index <= NF; field_index += 1) {
+                split($field_index, pair, "=")
+                if (pair[1] == key) {
+                    print pair[2]
+                    exit
+                }
+            }
+        }'
+    }
+    replay_completed=$(metric_value completed)
+    completion_tick=$(metric_value completion_tick)
+    completion_seconds=$(metric_value completion_seconds)
+    total_dashes=$(metric_value dashes)
+    total_hits=$(metric_value hits)
+    total_resets=$(metric_value resets)
+    determinism_tick=$streamed_frame_count
+    if [ "$replay_completed" = true ] && [ "$completion_tick" -gt 0 ]; then
+        determinism_tick=$completion_tick
+    fi
+
+    echo "[video 2/4] Repeated deterministic capture at tick $determinism_tick"
+    run_determinism_check "$determinism_tick"
+
     video_dimensions=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$video_path")
     video_frame_rate=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 "$video_path")
     frame_count=$(ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of default=noprint_wrappers=1:nokey=1 "$video_path")
@@ -182,7 +220,7 @@ if [ "$video_report" = true ]; then
         exit 1
     fi
 
-    echo "[video 2/3] Build visual summary"
+    echo "[video 3/4] Build visual summary and room metrics"
     sample_1=$((frame_count / 3))
     sample_2=$((frame_count * 2 / 3))
     sample_3=$((frame_count - 1))
@@ -194,13 +232,31 @@ if [ "$video_report" = true ]; then
 
     video_sha_line=$(shasum -a 256 "$video_path")
     video_sha=${video_sha_line%% *}
+    png_sha_line=$(shasum -a 256 "$capture_a")
+    png_sha=${png_sha_line%% *}
     test_summary=$(rg "Finished [0-9]+ tests" "$unit_log" | tail -n 1)
     generated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    room_metrics_markdown="${output_dir}/room-metrics.md"
+    awk '
+        $1 == "GAME_REPLAY_ROOM_METRIC" {
+            for (field_index = 2; field_index <= NF; field_index += 1) {
+                split($field_index, pair, "=")
+                value[pair[1]] = pair[2]
+            }
+            printf "| `%s` | `%s` | `%s` | `%s` | `%s` | `%s` |\n", \
+                value["code"], value["ticks"], value["seconds"], \
+                value["dashes"], value["hits"], value["resets"]
+        }
+    ' "$recording_log" >"$room_metrics_markdown"
+    if [ ! -s "$room_metrics_markdown" ]; then
+        echo "error: recording log has no per-room replay metrics" >&2
+        exit 1
+    fi
 
     cp "$unit_log" "${report_dir}/odin-test.log"
     cp "$log_a" "${report_dir}/determinism-a.log"
     cp "$log_b" "${report_dir}/determinism-b.log"
-    cp "$capture_a" "${report_dir}/dash-tick-5.png"
+    cp "$capture_a" "${report_dir}/deterministic-completion.png"
 
     {
         printf '# Lab0 automated game-test report\n\n'
@@ -212,14 +268,24 @@ if [ "$video_report" = true ]; then
         printf -- '- Replay fixed ticks: `%s`\n' "$streamed_frame_count"
         printf -- '- Video: `%s`, `%s seconds`, `%s frames at 60 fps`\n' "$video_dimensions" "$video_duration" "$frame_count"
         printf -- '- MP4 SHA-256: `%s`\n' "$video_sha"
-        printf -- '- Fixed-tick PNG determinism: **byte-identical**\n'
+        printf -- '- Replay completed: **%s**\n' "$replay_completed"
+        printf -- '- Total completion time: **%s seconds** at tick `%s`\n' "$completion_seconds" "$completion_tick"
+        printf -- '- Totals: `%s dashes`, `%s hits`, `%s resets`\n' "$total_dashes" "$total_hits" "$total_resets"
+        printf -- '- Fixed-tick PNG determinism at tick `%s`: **byte-identical**\n' "$determinism_tick"
+        printf -- '- Deterministic PNG SHA-256: `%s`\n' "$png_sha"
         printf -- '- Asset image warnings: **none**\n\n'
+        printf '## Per-room completion metrics\n\n'
+        printf '| Room | Ticks | Seconds | Dashes | Hits | Resets |\n'
+        printf '| --- | ---: | ---: | ---: | ---: | ---: |\n'
+        sed -n '1,120p' "$room_metrics_markdown"
+        printf '\nTicks are charged to the room active at the start of each fixed update and stop at the first completed tick.\n\n'
         printf '[Open MP4](./game-test.mp4)\n\n'
-        printf '![One-second interval contact sheet](./contact-sheet.png)\n\n'
+        printf '[Open deterministic completion PNG](./deterministic-completion.png)\n\n'
+        printf '![Route-quartile contact sheet](./contact-sheet.png)\n\n'
         printf 'Detailed logs: [Odin tests](./odin-test.log), [recording](./recording.log), [capture A](./determinism-a.log), [capture B](./determinism-b.log).\n'
     } >"$report_path"
 
-    echo "[video 3/3] Streaming video report passed"
+    echo "[video 4/4] Streaming video report passed"
     echo "MP4: $video_path"
     echo "Preview: $contact_sheet"
     echo "Report: $report_path"

@@ -311,11 +311,28 @@ scripts/test-game.sh \
   --replay replays/room-transition-smoke.json
 ```
 
+The completion-loop fixture walks the authored route from R00 through the
+overlook, takes the one-way drop to R06, and returns to R00. One command runs
+the full suite, streams the replay to MP4, builds a contact sheet, and captures
+the exact completion tick twice for a byte-deterministic PNG:
+
+```sh
+scripts/test-game.sh \
+  --video-report artifacts/overlook-completion-loop-report \
+  --replay replays/overlook-completion-loop.json
+```
+
+Its Markdown report includes per-room fixed ticks and dwell seconds, per-room
+dash, hit, and reset counts, total completion time, video metadata and hashes.
+Room time is charged to the room active at the start of each 60 Hz update and
+stops at the first completed tick, even if the replay keeps a few trailing
+ticks so the completed state remains visible.
+
 The generated directory contains `game-test.mp4`, `contact-sheet.png`,
-`report.md`, the repeated fixed-tick determinism PNG, and the test and capture
-logs. It does not contain a full PNG frame sequence. `ffmpeg` and `ffprobe` must
-be available. The versioned replay and repeated fixed-tick PNG capture remain
-the regression source of truth; the MP4 is optimized for remote review.
+`report.md`, `deterministic-completion.png`, and the test and capture logs. It
+does not contain a full PNG frame sequence. `ffmpeg` and `ffprobe` must be
+available. The versioned replay and repeated fixed-tick PNG capture remain the
+regression source of truth; the MP4 is optimized for remote review.
 
 Versioned replay JSON stores compact fixed-tick input segments. Use the bundled
 dash replay to render the exact same dynamic state on every run; capture ticks

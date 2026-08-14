@@ -321,6 +321,7 @@ game_zombie_lunge_resets_the_room_after_a_hit :: proc(t: ^testing.T) {
         game_fixed_update(&state, {}, GAME_FIXED_DT)
     }
     testing.expect_value(t, state.zombie_hits, 1)
+    testing.expect_value(t, state.reset_count, 1)
     testing.expect_value(t, state.player.position, game_room(.R03_WIDE_GROVE).spawn)
     testing.expect_value(t, state.zombies[zombie_index].position, GAME_ZOMBIE_SPAWNS[zombie_index].position)
 }

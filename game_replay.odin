@@ -5,6 +5,7 @@ package main
 // exact Game_Input delivered to every 60 Hz simulation tick.
 
 import "core:encoding/json"
+import "core:fmt"
 import "core:math"
 import "core:os"
 
@@ -50,6 +51,102 @@ Game_Replay_Player :: struct {
     segment_index: int,
     segment_tick:  int,
     ticks_played:  u64,
+}
+
+Game_Replay_Room_Stats :: struct {
+    ticks:  u64,
+    dashes: int,
+    hits:   int,
+    resets: int,
+}
+
+// Statistics stop at the first completed tick, so trailing celebration input
+// cannot inflate room dwell times or event counts in the completion report.
+Game_Replay_Stats :: struct {
+    rooms:           [len(GAME_ROOMS)]Game_Replay_Room_Stats,
+    observed_ticks:  u64,
+    completion_tick: u64,
+    dashes:          int,
+    hits:            int,
+    resets:          int,
+    completed:       bool,
+    printed:         bool,
+}
+
+game_room_code :: proc(room_id: Game_Room_ID) -> string {
+    switch room_id {
+    case .R00_START_FOREST:    return "R00"
+    case .R01_FOREST_PASSAGE:  return "R01"
+    case .R02_CENTRAL_RUIN:    return "R02"
+    case .R03_WIDE_GROVE:      return "R03"
+    case .R04_RAVINE_CROSSING: return "R04"
+    case .R05_OVERLOOK:        return "R05"
+    case .R06_LOWER_TRAIL:     return "R06"
+    case .TEST_OCCLUSION:      return "T00"
+    case .TEST_PIXEL_SNAP:     return "T01"
+    }
+    return "UNKNOWN"
+}
+
+game_replay_stats_observe_tick :: proc(
+    stats: ^Game_Replay_Stats,
+    room_before_tick: Game_Room_ID,
+    dashes_before_tick, hits_before_tick, resets_before_tick: int,
+    state: ^Game_State,
+) {
+    if stats.completed {
+        return
+    }
+
+    room_stats := &stats.rooms[int(room_before_tick)]
+    room_stats.ticks += 1
+    dash_delta := max(state.dash_count - dashes_before_tick, 0)
+    hit_delta := max(state.zombie_hits - hits_before_tick, 0)
+    reset_delta := max(state.reset_count - resets_before_tick, 0)
+    room_stats.dashes += dash_delta
+    room_stats.hits += hit_delta
+    room_stats.resets += reset_delta
+    stats.dashes += dash_delta
+    stats.hits += hit_delta
+    stats.resets += reset_delta
+    stats.observed_ticks += 1
+
+    if state.completed {
+        stats.completed = true
+        stats.completion_tick = state.tick
+    }
+}
+
+// These stable, machine-readable lines are converted into the Markdown table
+// by scripts/test-game.sh and stay legible in the raw recording log.
+game_replay_stats_print :: proc(stats: ^Game_Replay_Stats, replay_ticks: u64) {
+    for room_id in Game_Room_ID {
+        room_stats := stats.rooms[int(room_id)]
+        if room_stats.ticks == 0 && room_stats.dashes == 0 &&
+           room_stats.hits == 0 && room_stats.resets == 0 {
+            continue
+        }
+        fmt.printf(
+            "GAME_REPLAY_ROOM_METRIC code=%s ticks=%d seconds=%.3f dashes=%d hits=%d resets=%d\n",
+            game_room_code(room_id),
+            room_stats.ticks,
+            f64(room_stats.ticks) / 60.0,
+            room_stats.dashes,
+            room_stats.hits,
+            room_stats.resets,
+        )
+    }
+    fmt.printf(
+        "GAME_REPLAY_TOTAL_METRIC completed=%v completion_tick=%d completion_seconds=%.3f replay_ticks=%d observed_ticks=%d dashes=%d hits=%d resets=%d\n",
+        stats.completed,
+        stats.completion_tick,
+        f64(stats.completion_tick) / 60.0,
+        replay_ticks,
+        stats.observed_ticks,
+        stats.dashes,
+        stats.hits,
+        stats.resets,
+    )
 }
 
 game_replay_error_message :: proc(error: Game_Replay_Error) -> string {

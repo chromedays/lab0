@@ -134,6 +134,79 @@ game_room_transition_replay_enters_r01_through_the_real_exit :: proc(t: ^testing
 }
 
 @(test)
+game_overlook_completion_replay_finishes_the_authored_loop :: proc(t: ^testing.T) {
+    replay, replay_error := load_game_replay("replays/overlook-completion-loop.json")
+    testing.expect_value(t, replay_error, Game_Replay_Error.NONE)
+    if replay_error != .NONE { return }
+    defer destroy_game_replay(&replay)
+
+    expected_rooms := [?]Game_Room_ID{
+        .R00_START_FOREST,
+        .R01_FOREST_PASSAGE,
+        .R02_CENTRAL_RUIN,
+        .R04_RAVINE_CROSSING,
+        .R05_OVERLOOK,
+        .R06_LOWER_TRAIL,
+        .R00_START_FOREST,
+    }
+    expected_room_index := 0
+    state := game_state_init(replay.start_room)
+    stats: Game_Replay_Stats
+    player: Game_Replay_Player
+    for {
+        input, available := game_replay_next_input(&replay, &player)
+        if !available { break }
+        room_before_tick := state.current_room
+        dashes_before_tick := state.dash_count
+        hits_before_tick := state.zombie_hits
+        resets_before_tick := state.reset_count
+        game_fixed_update(&state, input, GAME_FIXED_DT)
+        game_replay_stats_observe_tick(
+            &stats,
+            room_before_tick,
+            dashes_before_tick,
+            hits_before_tick,
+            resets_before_tick,
+            &state,
+        )
+        if state.current_room != expected_rooms[expected_room_index] {
+            expected_room_index += 1
+            testing.expectf(
+                t,
+                expected_room_index < len(expected_rooms),
+                "completion replay entered an unexpected extra room %s",
+                game_room(state.current_room).name,
+            )
+            if expected_room_index >= len(expected_rooms) { return }
+            testing.expect_value(
+                t,
+                state.current_room,
+                expected_rooms[expected_room_index],
+            )
+        }
+    }
+
+    testing.expect_value(t, replay.total_ticks, u64(1_896))
+    testing.expect_value(t, expected_room_index, len(expected_rooms) - 1)
+    testing.expect(t, state.overlook_reached)
+    testing.expect(t, state.completed)
+    testing.expect(t, stats.completed)
+    testing.expect_value(t, stats.completion_tick, u64(1_873))
+    testing.expect_value(t, stats.observed_ticks, stats.completion_tick)
+    room_tick_sum: u64
+    for room_stats in stats.rooms {
+        room_tick_sum += room_stats.ticks
+    }
+    testing.expect_value(t, room_tick_sum, stats.completion_tick)
+    testing.expect_value(t, stats.dashes, 1)
+    testing.expect_value(t, stats.hits, 0)
+    testing.expect_value(t, stats.resets, 0)
+    testing.expect_value(t, state.dash_count, 1)
+    testing.expect_value(t, state.zombie_hits, 0)
+    testing.expect_value(t, state.reset_count, 0)
+}
+
+@(test)
 game_zombie_encounter_replay_commits_to_one_dodge :: proc(t: ^testing.T) {
     replay, replay_error := load_game_replay("replays/zombie-encounter-smoke.json")
     testing.expect_value(t, replay_error, Game_Replay_Error.NONE)
@@ -141,15 +214,31 @@ game_zombie_encounter_replay_commits_to_one_dodge :: proc(t: ^testing.T) {
     defer destroy_game_replay(&replay)
 
     state := game_state_init(replay.start_room)
+    stats: Game_Replay_Stats
     player: Game_Replay_Player
     for {
         input, available := game_replay_next_input(&replay, &player)
         if !available { break }
+        room_before_tick := state.current_room
+        dashes_before_tick := state.dash_count
+        hits_before_tick := state.zombie_hits
+        resets_before_tick := state.reset_count
         game_fixed_update(&state, input, GAME_FIXED_DT)
+        game_replay_stats_observe_tick(
+            &stats,
+            room_before_tick,
+            dashes_before_tick,
+            hits_before_tick,
+            resets_before_tick,
+            &state,
+        )
     }
     testing.expect_value(t, state.tick, u64(90))
     testing.expect_value(t, state.dash_count, 1)
     testing.expect_value(t, state.zombie_hits, 0)
+    testing.expect_value(t, stats.dashes, 1)
+    testing.expect_value(t, stats.hits, 0)
+    testing.expect_value(t, stats.resets, 0)
     testing.expectf(
         t,
         state.player.position.z > 2.5,
@@ -167,6 +256,7 @@ game_zombie_gauntlet_replay_runs_thirty_seconds_of_active_evasion :: proc(
     defer destroy_game_replay(&replay)
 
     state := game_state_init(replay.start_room)
+    stats: Game_Replay_Stats
     player: Game_Replay_Player
     windup_ticks := 0
     lunge_ticks := 0
@@ -176,7 +266,19 @@ game_zombie_gauntlet_replay_runs_thirty_seconds_of_active_evasion :: proc(
     for {
         input, available := game_replay_next_input(&replay, &player)
         if !available { break }
+        room_before_tick := state.current_room
+        dashes_before_tick := state.dash_count
+        hits_before_tick := state.zombie_hits
+        resets_before_tick := state.reset_count
         game_fixed_update(&state, input, GAME_FIXED_DT)
+        game_replay_stats_observe_tick(
+            &stats,
+            room_before_tick,
+            dashes_before_tick,
+            hits_before_tick,
+            resets_before_tick,
+            &state,
+        )
         if first_hit_tick == 0 && state.zombie_hits > 0 {
             first_hit_tick = state.tick
         }
@@ -203,6 +305,11 @@ game_zombie_gauntlet_replay_runs_thirty_seconds_of_active_evasion :: proc(
     testing.expect_value(t, state.tick, u64(1_800))
     testing.expect_value(t, state.dash_count, 39)
     testing.expect_value(t, state.zombie_hits, 3)
+    testing.expect_value(t, state.reset_count, 3)
+    testing.expect_value(t, stats.observed_ticks, replay.total_ticks)
+    testing.expect_value(t, stats.dashes, 39)
+    testing.expect_value(t, stats.hits, 3)
+    testing.expect_value(t, stats.resets, 3)
     testing.expectf(
         t,
         state.current_room == .R03_WIDE_GROVE,
