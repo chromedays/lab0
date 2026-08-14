@@ -24,9 +24,11 @@ ASSETS_PATH         :: "assets"
 DEFAULT_MODEL_PATH  :: "assets/CesiumMan.glb"
 ANIMATION_SAMPLE_FPS :: 60.0
 
-PIXEL_SCALE :: 10
-LENS_WIDTH  :: 400
-LENS_HEIGHT :: 400
+DEFAULT_DOWNSCALE_LEVEL :: 10
+MIN_DOWNSCALE_LEVEL     :: 1
+MAX_DOWNSCALE_LEVEL     :: 32
+LENS_WIDTH              :: 400
+LENS_HEIGHT             :: 400
 DEFAULT_COLOR_CLUSTER_THRESHOLD :: 0.10
 MODEL_SEARCH_TEXT_CAPACITY :: 128
 
@@ -65,6 +67,18 @@ BUILTIN_MODEL_SOURCES := [?]Builtin_Model_Source{
     {.CUBE,     "builtin:cube",     "Built-in / Cube"},
     {.SPHERE,   "builtin:sphere",   "Built-in / Sphere"},
     {.TRIANGLE, "builtin:triangle", "Built-in / Triangle"},
+}
+
+get_downsample_dimension :: proc(
+    source_dimension, downscale_level: c.int,
+) -> c.int {
+    if source_dimension <= 0 {
+        return 1
+    }
+    if downscale_level <= 0 {
+        return source_dimension
+    }
+    return max(source_dimension / downscale_level, 1)
 }
 
 Model_Assets :: struct {
@@ -1376,6 +1390,7 @@ draw_camera_controls :: proc(
     camera: ^rl.Camera3D,
     model_center: rl.Vector3,
     scene_size: f32,
+    downscale_level: ^c.int,
     downsample_width, downsample_height: i32,
     lens_grid_visible: bool,
 ) {
@@ -1447,19 +1462,38 @@ draw_camera_controls :: proc(
         )
         log.info("Camera reset to isometric view")
     }
-    content_y += 26
+    content_y += 30
 
-    rl.GuiLabel({content_x, content_y, content_width, 18}, "LMB drag       Orbit around target")
+    rl.GuiLabel({content_x, content_y, 104, 22}, "Downscale level")
+    rl.GuiSpinner(
+        {content_x + 108, content_y, content_width - 108, 22},
+        nil,
+        downscale_level,
+        MIN_DOWNSCALE_LEVEL,
+        MAX_DOWNSCALE_LEVEL,
+        false,
+    )
+    downscale_level^ = clamp(
+        downscale_level^,
+        MIN_DOWNSCALE_LEVEL,
+        MAX_DOWNSCALE_LEVEL,
+    )
+    content_y += 24
+    rl.GuiLabel(
+        {content_x, content_y, content_width, 18},
+        rl.TextFormat(
+            "Output grid: %d x %d",
+            downsample_width,
+            downsample_height,
+        ),
+    )
     content_y += line_height
-    rl.GuiLabel({content_x, content_y, content_width, 18}, "MMB drag       Screen-plane pan")
+
+    rl.GuiLabel({content_x, content_y, content_width, 18}, "LMB orbit | MMB drag pan")
     content_y += line_height
-    rl.GuiLabel({content_x, content_y, content_width, 18}, "WASD / Arrows  Screen-plane pan")
+    rl.GuiLabel({content_x, content_y, content_width, 18}, "WASD / Arrows pan | Q / E zoom")
     content_y += line_height
-    rl.GuiLabel({content_x, content_y, content_width, 18}, "Q / E          Zoom out / in")
-    content_y += line_height
-    rl.GuiLabel({content_x, content_y, content_width, 18}, "Mouse wheel    Zoom")
-    content_y += line_height
-    rl.GuiLabel({content_x, content_y, content_width, 18}, "Shift          Faster keyboard")
+    rl.GuiLabel({content_x, content_y, content_width, 18}, "Wheel zoom | Shift faster")
     content_y += line_height
     lens_grid_status: cstring = "OFF"
     if lens_grid_visible {
@@ -1467,16 +1501,7 @@ draw_camera_controls :: proc(
     }
     rl.GuiLabel(
         {content_x, content_y, content_width, 18},
-        rl.TextFormat("1/2/3 Lens mode | G Grid: %s", lens_grid_status),
-    )
-    content_y += line_height
-    rl.GuiLabel(
-        {content_x, content_y, content_width, 18},
-        rl.TextFormat(
-            "Pan + zoom snap: %d x %d",
-            downsample_width,
-            downsample_height,
-        ),
+        rl.TextFormat("1/2/3 Lens | G Grid: %s", lens_grid_status),
     )
 }
 
@@ -1909,6 +1934,7 @@ draw_orthographic_snap_debug :: proc(
     camera: ^rl.Camera3D,
     snap_anchor: rl.Vector3,
     pixel_target_height: i32,
+    pixel_scale: int,
     lens_bounds: rl.Rectangle,
     lens_mode: Lens_Mode,
     lens_grid_visible: bool,
@@ -1993,11 +2019,11 @@ draw_orthographic_snap_debug :: proc(
     }
 
     if lens_grid_visible {
-        grid_column_count := int(lens_bounds.width) / PIXEL_SCALE
-        grid_row_count := int(lens_bounds.height) / PIXEL_SCALE
+        grid_column_count := int(lens_bounds.width) / pixel_scale
+        grid_row_count := int(lens_bounds.height) / pixel_scale
 
         for column_index := 0; column_index <= grid_column_count; column_index += 1 {
-            grid_line_x := lens_bounds.x + f32(column_index * PIXEL_SCALE)
+            grid_line_x := lens_bounds.x + f32(column_index * pixel_scale)
             grid_line_color := rl.Color{255, 255, 255, 45}
             if column_index % 5 == 0 {
                 grid_line_color = rl.Color{255, 230, 80, 100}
@@ -2010,7 +2036,7 @@ draw_orthographic_snap_debug :: proc(
         }
 
         for row_index := 0; row_index <= grid_row_count; row_index += 1 {
-            grid_line_y := lens_bounds.y + f32(row_index * PIXEL_SCALE)
+            grid_line_y := lens_bounds.y + f32(row_index * pixel_scale)
             grid_line_color := rl.Color{255, 255, 255, 45}
             if row_index % 5 == 0 {
                 grid_line_color = rl.Color{255, 230, 80, 100}
@@ -2262,20 +2288,24 @@ run_application :: proc() -> int {
     rl.SetTextureFilter(cel_band_render_target.texture, .POINT)
     rl.SetTextureWrap(cel_band_render_target.texture, .CLAMP)
 
-    downsample_width := screen_width / PIXEL_SCALE
-    downsample_height := screen_height / PIXEL_SCALE
+    downscale_level := c.int(DEFAULT_DOWNSCALE_LEVEL)
+    applied_downscale_level := downscale_level
+    downsample_width := get_downsample_dimension(screen_width, downscale_level)
+    downsample_height := get_downsample_dimension(screen_height, downscale_level)
     downsample_render_target := rl.LoadRenderTexture(
         downsample_width,
         downsample_height,
     )
-    defer rl.UnloadRenderTexture(downsample_render_target)
     rl.SetTextureFilter(downsample_render_target.texture, .POINT)
     coverage_mask_render_target := rl.LoadRenderTexture(
         downsample_width,
         downsample_height,
     )
-    defer rl.UnloadRenderTexture(coverage_mask_render_target)
     rl.SetTextureFilter(coverage_mask_render_target.texture, .POINT)
+    defer {
+        rl.UnloadRenderTexture(downsample_render_target)
+        rl.UnloadRenderTexture(coverage_mask_render_target)
+    }
     composite_render_target := rl.LoadRenderTexture(screen_width, screen_height)
     defer rl.UnloadRenderTexture(composite_render_target)
     rl.SetTextureFilter(composite_render_target.texture, .POINT)
@@ -2351,6 +2381,67 @@ run_application :: proc() -> int {
     captured_sequence_frames := 0
 
     for !rl.WindowShouldClose() && !capture_complete {
+        if downscale_level != applied_downscale_level {
+            requested_downscale_level := clamp(
+                downscale_level,
+                c.int(MIN_DOWNSCALE_LEVEL),
+                c.int(MAX_DOWNSCALE_LEVEL),
+            )
+            requested_width := get_downsample_dimension(
+                screen_width,
+                requested_downscale_level,
+            )
+            requested_height := get_downsample_dimension(
+                screen_height,
+                requested_downscale_level,
+            )
+            replacement_downsample_target := rl.LoadRenderTexture(
+                requested_width,
+                requested_height,
+            )
+            replacement_mask_target := rl.LoadRenderTexture(
+                requested_width,
+                requested_height,
+            )
+            if rl.IsRenderTextureValid(replacement_downsample_target) &&
+               rl.IsRenderTextureValid(replacement_mask_target) {
+                rl.SetTextureFilter(replacement_downsample_target.texture, .POINT)
+                rl.SetTextureFilter(replacement_mask_target.texture, .POINT)
+                rl.UnloadRenderTexture(downsample_render_target)
+                rl.UnloadRenderTexture(coverage_mask_render_target)
+                downsample_render_target = replacement_downsample_target
+                coverage_mask_render_target = replacement_mask_target
+                downsample_width = requested_width
+                downsample_height = requested_height
+                downsample_resolution = {
+                    f32(downsample_width),
+                    f32(downsample_height),
+                }
+                downscale_level = requested_downscale_level
+                applied_downscale_level = requested_downscale_level
+                log.infof(
+                    "Downscale level: %dx (%d x %d)",
+                    applied_downscale_level,
+                    downsample_width,
+                    downsample_height,
+                )
+            } else {
+                if rl.IsRenderTextureValid(replacement_downsample_target) {
+                    rl.UnloadRenderTexture(replacement_downsample_target)
+                }
+                if rl.IsRenderTextureValid(replacement_mask_target) {
+                    rl.UnloadRenderTexture(replacement_mask_target)
+                }
+                downscale_level = applied_downscale_level
+                log.errorf(
+                    "Failed to create %d x %d downsample render targets; keeping level %d",
+                    requested_width,
+                    requested_height,
+                    applied_downscale_level,
+                )
+            }
+        }
+
         window_focused := rl.IsWindowFocused()
         if capture_options.enabled {
             // A capture never consumes live desktop input, even when its
@@ -2614,25 +2705,32 @@ run_application :: proc() -> int {
             }
 
             lens_texture_source_bounds := rl.Rectangle{
-                x      = lens_bounds.x / PIXEL_SCALE,
+                x      = lens_bounds.x / f32(applied_downscale_level),
                 y      = f32(downsample_height) -
-                         (lens_bounds.y + lens_bounds.height) / PIXEL_SCALE,
-                width  = lens_bounds.width / PIXEL_SCALE,
-                height = -lens_bounds.height / PIXEL_SCALE,
+                         (lens_bounds.y + lens_bounds.height) /
+                         f32(applied_downscale_level),
+                width  = lens_bounds.width / f32(applied_downscale_level),
+                height = -lens_bounds.height / f32(applied_downscale_level),
             }
             coverage_alpha = -1
             lens_mouse_position := rl.GetMousePosition()
             if lens_mode == .COVERAGE_MASK &&
                rl.CheckCollisionPointRec(lens_mouse_position, lens_bounds) {
                 lens_column := c.int(
-                    (lens_mouse_position.x - lens_bounds.x) / f32(PIXEL_SCALE),
+                    (lens_mouse_position.x - lens_bounds.x) /
+                    f32(applied_downscale_level),
                 )
                 lens_row := c.int(
-                    (lens_mouse_position.y - lens_bounds.y) / f32(PIXEL_SCALE),
+                    (lens_mouse_position.y - lens_bounds.y) /
+                    f32(applied_downscale_level),
                 )
-                mask_pixel_x := c.int(lens_bounds.x / f32(PIXEL_SCALE)) +
+                mask_pixel_x := c.int(
+                    lens_bounds.x / f32(applied_downscale_level),
+                ) +
                                 lens_column
-                mask_pixel_y := c.int(lens_bounds.y / f32(PIXEL_SCALE)) +
+                mask_pixel_y := c.int(
+                    lens_bounds.y / f32(applied_downscale_level),
+                ) +
                                 lens_row
                 mask_readback := rl.LoadImageFromTexture(
                     coverage_mask_render_target.texture,
@@ -2681,6 +2779,7 @@ run_application :: proc() -> int {
                 &render_camera,
                 model_center,
                 downsample_height,
+                int(applied_downscale_level),
                 lens_bounds,
                 lens_mode,
                 lens_grid_visible,
@@ -2698,8 +2797,12 @@ run_application :: proc() -> int {
                 export_button_bounds,
                 rl.TextFormat(
                     "EXPORT %d x %d TRANSPARENT PNG [P]",
-                    c.int(LENS_WIDTH / PIXEL_SCALE),
-                    c.int(LENS_HEIGHT / PIXEL_SCALE),
+                    c.int(math.round(
+                        LENS_WIDTH / f32(applied_downscale_level),
+                    )),
+                    c.int(math.round(
+                        LENS_HEIGHT / f32(applied_downscale_level),
+                    )),
                 ),
             ) {
                 export_requested = true
@@ -2740,6 +2843,7 @@ run_application :: proc() -> int {
                 &control_camera,
                 model_center,
                 scene_size,
+                &downscale_level,
                 downsample_width,
                 downsample_height,
                 lens_grid_visible,
@@ -2760,7 +2864,7 @@ run_application :: proc() -> int {
             last_export_path, last_export_succeeded = export_lens_downsample_png(
                 downsample_render_target.texture,
                 lens_bounds,
-                PIXEL_SCALE,
+                applied_downscale_level,
                 &next_export_index,
             )
             last_export_time = rl.GetTime()

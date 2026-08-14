@@ -13,6 +13,10 @@ Run commands from the repository root because model and shader paths are relativ
 Press `G` to toggle the pixel grid over the lens. The camera controls panel
 shows whether the grid is currently on or off.
 
+Use the **Downscale level** spinner in **Camera Controls** to adjust the pixel
+downscale from 1× through 32×. The output-grid readout updates to show the
+active render-target resolution; the default remains 10× (128×72).
+
 ## Non-interactive capture mode
 
 Capture mode initializes a hidden graphics window, fixes the requested render state, renders a small number of warmup frames, exports an internal render texture to PNG, and exits. It does not use desktop screenshots or live mouse and keyboard input.
