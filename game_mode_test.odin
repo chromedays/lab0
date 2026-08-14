@@ -94,6 +94,16 @@ game_run_options_parse_room_and_debug_independently_of_capture_flags :: proc(
 }
 
 @(test)
+game_run_options_accept_game_help :: proc(t: ^testing.T) {
+    options, valid, error_argument := parse_game_run_options([]string{
+        "--mode", "game",
+        "--game-help",
+    })
+    testing.expect(t, valid, error_argument)
+    testing.expect(t, options.help_requested)
+}
+
+@(test)
 game_run_options_reject_an_unknown_room :: proc(t: ^testing.T) {
     _, valid, error_argument := parse_game_run_options([]string{
         "--mode", "game",

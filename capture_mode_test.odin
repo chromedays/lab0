@@ -19,6 +19,15 @@ capture_options_are_disabled_without_capture_arguments :: proc(t: ^testing.T) {
     testing.expect(t, !result.options.enabled)
 }
 
+// Conventional help aliases are recognized independently of the active mode.
+@test
+standard_help_aliases_are_recognized :: proc(t: ^testing.T) {
+    testing.expect(t, standard_help_requested({"--help"}))
+    testing.expect(t, standard_help_requested({"--mode", "game", "-h"}))
+    testing.expect(t, !standard_help_requested({"--capture-help"}))
+    testing.expect(t, cli_argument_present({"--game-help"}, "--game-help"))
+}
+
 // A case without an explicit output receives a stable single-frame PNG path.
 @test
 capture_options_build_a_deterministic_default_output :: proc(t: ^testing.T) {

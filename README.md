@@ -10,6 +10,21 @@ odin run .
 
 Run commands from the repository root because model and shader paths are relative to the working directory.
 
+### Command-line help
+
+Use the conventional `--help` or `-h` flag to print help without opening a
+window. Help follows the selected mode:
+
+```sh
+odin run . -- --help
+odin run . -- --mode scene-editor --help
+odin run . -- --mode game --help
+```
+
+The existing focused flags remain available as `--capture-help` and
+`--scene-help`; Game mode also provides `--game-help`. Focused help flags do
+not require a matching `--mode` argument.
+
 ### Keyboard shortcuts
 
 Press `F1` or `?` for the complete in-app shortcut reference. `Tab` and

@@ -33,6 +33,7 @@ GAME_OCCLUSION_DEBUG_TINT :: rl.Color{255, 96, 200, 255}
 Game_Run_Options :: struct {
     start_room:          Game_Room_ID,
     start_room_explicit: bool,
+    help_requested:      bool,
     debug_visible:       bool,
     replay_path:         string,
     capture_tick:        u64,
@@ -323,6 +324,10 @@ parse_game_run_options :: proc(arguments: []string) -> (
     for index < len(arguments) {
         argument := arguments[index]
         index += 1
+        if argument == "--game-help" {
+            options.help_requested = true
+            continue
+        }
         if argument == "--game-debug" {
             options.debug_visible = true
             continue
@@ -395,16 +400,29 @@ parse_game_run_options :: proc(arguments: []string) -> (
 print_game_usage :: proc() {
     fmt.println("Lab0 traversal prototype")
     fmt.println("")
+    fmt.println("Usage:")
+    fmt.println("  lab0 --mode game [options]")
+    fmt.println("")
+    fmt.println("Options:")
+    fmt.println("  -h, --help                 Print help for the traversal prototype")
     fmt.println("  --mode game                 Run the traversal prototype")
+    fmt.println("  --game-help                Print traversal prototype help")
     fmt.println("  --game-room <R00..R06|T00|T01>  Start in a room or diagnostic scene")
     fmt.println("  --game-debug                Show collision and camera diagnostics")
     fmt.println("  --game-replay <path>        Drive the 60 Hz simulation from replay JSON")
     fmt.println("  --game-capture-tick <tick>  Capture the exact replay tick (1-based)")
     fmt.println("  --game-record-dir <path>    Export every replay tick as frame-%06d.png")
     fmt.println("  --game-video-output <mp4>   Stream every replay tick through FFmpeg")
+    fmt.println("")
+    fmt.println("Capture options:")
     fmt.println("  --capture-case <name>       Capture a deterministic game frame")
-    fmt.println("  --capture-output <path>     Select the PNG output path")
+    fmt.println("  --capture-output <path.png> Select the PNG output path")
+    fmt.println("  --capture-style <path.json> Override the Game cel style")
+    fmt.println("  --capture-edge-aa <mode>    hard|coverage (default: hard)")
     fmt.println("  --capture-target <target>   composite|scene|downsample|coverage-mask")
+    fmt.println("  --capture-warmup <frames>   Frames rendered before export (default: 2)")
+    fmt.println("  --capture-show-window       Show the otherwise hidden capture window")
+    fmt.println("  --capture-help              Print the complete Viewer capture reference")
 }
 
 game_load_imported_model :: proc(path: string) -> Game_Imported_Model {
@@ -2649,6 +2667,12 @@ run_game_mode :: proc(arguments: []string) -> int {
     defer log.destroy_console_logger(console_logger)
     context.logger = console_logger
 
+    if standard_help_requested(arguments) ||
+       cli_argument_present(arguments, "--game-help") {
+        print_game_usage()
+        return 0
+    }
+
     run_options, run_options_valid, bad_game_argument := parse_game_run_options(arguments)
     if !run_options_valid {
         log.errorf("Invalid game room or missing value: %s", bad_game_argument)
@@ -2658,10 +2682,12 @@ run_game_mode :: proc(arguments: []string) -> int {
 
     capture_result := parse_capture_options(arguments)
     defer destroy_capture_options(&capture_result.options)
-    if capture_result.options.help_requested {
+    if run_options.help_requested || capture_result.options.help_requested {
         print_game_usage()
-        fmt.println("")
-        print_capture_usage()
+        if capture_result.options.help_requested {
+            fmt.println("")
+            print_capture_usage()
+        }
         return 0
     }
     if capture_result.error != .NONE {

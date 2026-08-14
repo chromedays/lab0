@@ -464,6 +464,41 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
     return result
 }
 
+// cli_argument_present supports early, allocation-free checks for flags that
+// must take effect before a mode parser or raylib initialization.
+cli_argument_present :: proc(arguments: []string, requested: string) -> bool {
+    for argument in arguments {
+        if argument == requested { return true }
+    }
+    return false
+}
+
+// standard_help_requested recognizes the conventional process-wide aliases.
+standard_help_requested :: proc(arguments: []string) -> bool {
+    return cli_argument_present(arguments, "--help") ||
+           cli_argument_present(arguments, "-h")
+}
+
+// print_viewer_usage is the top-level help shown for the default Viewer mode.
+// It advertises the alternate modes before appending the complete capture CLI.
+print_viewer_usage :: proc() {
+    fmt.println("Lab0 model viewer")
+    fmt.println("")
+    fmt.println("Usage:")
+    fmt.println("  lab0                              Open the interactive Viewer")
+    fmt.println("  lab0 [capture options]            Run a deterministic Viewer capture")
+    fmt.println("  lab0 --mode scene-editor [options]")
+    fmt.println("  lab0 --mode game [options]")
+    fmt.println("")
+    fmt.println("Global options:")
+    fmt.println("  -h, --help                        Print help for the selected mode")
+    fmt.println("  --mode <viewer|scene-editor|game> Select the application mode")
+    fmt.println("  --scene-help                      Print Scene Editor help")
+    fmt.println("  --game-help                       Print traversal prototype help")
+    fmt.println("")
+    print_capture_usage()
+}
+
 // print_capture_usage writes the capture-only help text without initializing
 // raylib, which keeps --capture-help usable in non-graphical environments.
 print_capture_usage :: proc() {

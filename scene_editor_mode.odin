@@ -98,23 +98,27 @@ parse_scene_run_options :: proc(arguments: []string) -> (
     return
 }
 
-scene_argument_present :: proc(arguments: []string, requested: string) -> bool {
-    for argument in arguments {
-        if argument == requested { return true }
-    }
-    return false
-}
-
 print_scene_editor_usage :: proc() {
     fmt.println("Lab0 Scene Editor")
+    fmt.println("")
+    fmt.println("Usage:")
+    fmt.println("  lab0 --mode scene-editor [options]")
+    fmt.println("")
+    fmt.println("Options:")
+    fmt.println("  -h, --help                  Print help for Scene Editor")
     fmt.println("  --mode scene-editor          Run the visual-test scene editor")
     fmt.println("  --scene <path.json>          Open a strict-JSON scene file")
     fmt.println("  --scene-video-output <mp4>  Stream one camera orbit through FFmpeg")
     fmt.println("  --scene-video-duration <s>  Orbit duration at 60 fps (default: 5)")
     fmt.println("  --scene-help                 Print Scene Editor help")
     fmt.println("")
-    fmt.println("Capture uses --capture-case, --capture-output, --capture-warmup,")
-    fmt.println("--capture-show-window, and target composite|scene|downsample|coverage-mask.")
+    fmt.println("Capture options:")
+    fmt.println("  --capture-case <name>        Enable deterministic scene capture")
+    fmt.println("  --capture-output <path.png>  Select the PNG output path")
+    fmt.println("  --capture-target <target>    composite|scene|downsample|coverage-mask")
+    fmt.println("  --capture-warmup <frames>    Frames rendered before export (default: 2)")
+    fmt.println("  --capture-show-window        Show the otherwise hidden capture window")
+    fmt.println("  --capture-help               Print the complete Viewer capture reference")
 }
 
 validate_scene_capture_options :: proc(
@@ -135,7 +139,7 @@ validate_scene_capture_options :: proc(
        len(capture.style_path) > 0 ||
        len(capture.video_output) > 0 ||
        capture.video_frame_count > 0 ||
-       scene_argument_present(arguments, "--capture-edge-aa") {
+        cli_argument_present(arguments, "--capture-edge-aa") {
         return false
     }
     return true
@@ -145,6 +149,12 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     console_logger := log.create_console_logger()
     defer log.destroy_console_logger(console_logger)
     context.logger = console_logger
+
+    if standard_help_requested(arguments) ||
+       cli_argument_present(arguments, "--scene-help") {
+        print_scene_editor_usage()
+        return 0
+    }
 
     run_options, run_options_valid, bad_scene_argument :=
         parse_scene_run_options(arguments)
