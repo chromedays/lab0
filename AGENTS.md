@@ -225,12 +225,13 @@ files use schema version 1 and compact input segments (`ticks`, `move`, and
 the repository root and leaves its uniquely named artifacts under `/tmp`.
 
 Use `scripts/test-game.sh --video-report artifacts/<unique-report-name>` when
-the user needs remote review evidence in chat. It additionally records every
-replay tick in one process with `--game-record-dir`, encodes `game-test.mp4`,
-creates `contact-sheet.png`, and writes `report.md` plus logs. Inspect the
+the user needs remote review evidence in chat. It renders every replay tick in
+one process and streams raw RGBA frames directly to FFmpeg with
+`--game-video-output`; it does not create a full PNG sequence. The runner creates
+`game-test.mp4`, `contact-sheet.png`, and `report.md` plus logs. Inspect the
 contact sheet, read the report, and link the MP4, report, and preview by absolute
 local path in the final response. Never treat MP4 bytes as regression truth;
-the deterministic PNG captures and fixed-tick input replay remain authoritative.
+the repeated fixed-tick PNG captures and input replay remain authoritative.
 
 ## macOS graphics-session constraint
 

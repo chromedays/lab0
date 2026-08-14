@@ -30,6 +30,7 @@ Game_Run_Options :: struct {
     capture_tick:        u64,
     capture_tick_set:    bool,
     record_directory:    string,
+    video_output:        string,
 }
 
 Game_Camera_State :: struct {
@@ -268,6 +269,17 @@ parse_game_run_options :: proc(arguments: []string) -> (
             }
             continue
         }
+        if argument == "--game-video-output" {
+            if index >= len(arguments) {
+                return options, false, argument
+            }
+            options.video_output = arguments[index]
+            index += 1
+            if len(options.video_output) == 0 {
+                return options, false, argument
+            }
+            continue
+        }
         if argument != "--game-room" {
             continue
         }
@@ -295,6 +307,7 @@ print_game_usage :: proc() {
     fmt.println("  --game-replay <path>        Drive the 60 Hz simulation from replay JSON")
     fmt.println("  --game-capture-tick <tick>  Capture the exact replay tick (1-based)")
     fmt.println("  --game-record-dir <path>    Export every replay tick as frame-%06d.png")
+    fmt.println("  --game-video-output <mp4>   Stream every replay tick through FFmpeg")
     fmt.println("  --capture-case <name>       Capture a deterministic game frame")
     fmt.println("  --capture-output <path>     Select the PNG output path")
     fmt.println("  --capture-target <target>   composite|scene|downsample|coverage-mask")
@@ -1707,6 +1720,27 @@ run_game_mode :: proc(arguments: []string) -> int {
             return 2
         }
     }
+    video_enabled := len(run_options.video_output) > 0
+    video_options_error := validate_game_video_options(&run_options, capture)
+    if video_options_error != .NONE {
+        log.error(game_video_options_error_message(video_options_error))
+        return 2
+    }
+
+    video_encoder: Game_Video_Encoder
+    defer destroy_game_video_encoder(&video_encoder)
+    if video_enabled {
+        video_start_error := start_game_video_encoder(
+            &video_encoder,
+            run_options.video_output,
+        )
+        if video_start_error == .FFMPEG_NOT_FOUND {
+            return 2
+        }
+        if video_start_error != .NONE {
+            return 1
+        }
+    }
 
     style := make_game_cel_style()
     defer destroy_cel_style(&style)
@@ -1768,6 +1802,21 @@ run_game_mode :: proc(arguments: []string) -> int {
     replay_player: Game_Replay_Player
     replay_complete := false
     background_color := GAME_ROOM_BACKGROUND_COLORS[int(state.current_room)]
+
+    if video_enabled {
+        // Warm the normal GPU pipeline before consuming the first replay input.
+        // These renders are deliberately not written to the video stream.
+        for _ in 0 ..< capture.warmup_frames {
+            game_renderer_render(
+                &renderer,
+                &assets,
+                &state,
+                &style,
+                camera,
+                background_color,
+            )
+        }
+    }
 
     for !rl.WindowShouldClose() && !capture_complete && !replay_complete {
         frame_dt := min(rl.GetFrameTime(), f32(0.25))
@@ -1869,7 +1918,34 @@ run_game_mode :: proc(arguments: []string) -> int {
         rl.EndDrawing()
 
         if capture.enabled {
-            if recording_enabled && ticks_run > 0 {
+            if video_enabled && ticks_run > 0 {
+                if ticks_run != 1 {
+                    log.errorf(
+                        "Game video rendered %d fixed ticks into one frame",
+                        ticks_run,
+                    )
+                    capture_complete = true
+                    capture_succeeded = false
+                } else if !game_video_write_render_texture(
+                    &video_encoder,
+                    renderer.composite_target.texture,
+                ) {
+                    log.errorf(
+                        "Failed to stream game case %s at tick %d",
+                        capture.case_name,
+                        int(state.tick),
+                    )
+                    capture_complete = true
+                    capture_succeeded = false
+                } else if replay_player.ticks_played >= replay.total_ticks {
+                    capture_complete = true
+                    capture_succeeded = finish_game_video_encoder(
+                        &video_encoder,
+                        run_options.video_output,
+                        replay.total_ticks,
+                    )
+                }
+            } else if recording_enabled && ticks_run > 0 {
                 capture_texture := game_capture_texture(&renderer, capture.target)
                 frame_path := fmt.aprintf(
                     "%s/frame-%06d.png",
@@ -1902,7 +1978,7 @@ run_game_mode :: proc(arguments: []string) -> int {
                         )
                     }
                 }
-            } else if !recording_enabled {
+            } else if !recording_enabled && !video_enabled {
                 tick_ready := !run_options.capture_tick_set ||
                               state.tick == run_options.capture_tick
                 if tick_ready {

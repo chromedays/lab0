@@ -120,44 +120,69 @@ if [ "$video_report" = true ]; then
         exit 2
     fi
 
-    frames_dir="${report_dir}/frames"
     recording_log="${report_dir}/recording.log"
     video_path="${report_dir}/game-test.mp4"
     contact_sheet="${report_dir}/contact-sheet.png"
     report_path="${report_dir}/report.md"
-    mkdir -p "$frames_dir"
+    mkdir -p "$report_dir"
 
-    echo "[video 1/4] Record every deterministic replay tick"
-    "$binary" \
+    echo "[video 1/3] Stream every deterministic replay tick to FFmpeg"
+    if "$binary" \
         --mode game \
         --game-replay "$replay_path" \
-        --game-record-dir "$frames_dir" \
+        --game-video-output "$video_path" \
         --capture-case traversal-video-report \
-        --capture-target composite >"$recording_log" 2>&1
+        --capture-target composite >"$recording_log" 2>&1; then
+        :
+    else
+        sed -n '1,240p' "$recording_log" >&2
+        exit 1
+    fi
 
     if rg -q "WARNING: IMAGE|Game asset could not be loaded" "$recording_log"; then
         echo "error: recording log contains an asset-image warning" >&2
         exit 1
     fi
-    frame_count=$(find "$frames_dir" -type f -name 'frame-*.png' | wc -l | tr -d ' ')
-    if [ "$frame_count" -le 0 ]; then
-        echo "error: replay recording produced no PNG frames" >&2
+    if [ -d "${report_dir}/frames" ]; then
+        echo "error: streaming video report unexpectedly created a frames directory" >&2
+        exit 1
+    fi
+    streamed_frame_count=$(rg -o "Streamed [0-9]+ fixed-tick frames" "$recording_log" | tail -n 1 | rg -o '[0-9]+' || true)
+    case "$streamed_frame_count" in
+        ''|*[!0-9]*) echo "error: recording log has no streamed frame count" >&2; exit 1 ;;
+    esac
+    if [ "$streamed_frame_count" -le 0 ]; then
+        echo "error: replay streamed no video frames" >&2
         exit 1
     fi
 
-    echo "[video 2/4] Encode review MP4"
-    ffmpeg -hide_banner -loglevel error -y \
-        -framerate 60 \
-        -start_number 1 \
-        -i "${frames_dir}/frame-%06d.png" \
-        -c:v libx264 \
-        -preset medium \
-        -crf 18 \
-        -pix_fmt yuv420p \
-        -movflags +faststart \
-        "$video_path"
+    video_dimensions=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$video_path")
+    video_frame_rate=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 "$video_path")
+    frame_count=$(ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of default=noprint_wrappers=1:nokey=1 "$video_path")
+    video_duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$video_path")
+    if [ "$video_dimensions" != "1280x720" ]; then
+        echo "error: unexpected video dimensions: $video_dimensions" >&2
+        exit 1
+    fi
+    if [ "$video_frame_rate" != "60/1" ]; then
+        echo "error: unexpected video frame rate: $video_frame_rate" >&2
+        exit 1
+    fi
+    if [ "$frame_count" != "$streamed_frame_count" ]; then
+        echo "error: encoded frame count $frame_count does not match streamed count $streamed_frame_count" >&2
+        exit 1
+    fi
+    if ! awk -v duration="$video_duration" -v frames="$frame_count" 'BEGIN {
+        expected = frames / 60.0
+        delta = duration - expected
+        if (delta < 0) delta = -delta
+        exit(delta <= (1.0 / 60.0 + 0.000001) ? 0 : 1)
+    }'; then
+        echo "error: video duration $video_duration does not match $frame_count frames at 60 fps" >&2
+        exit 1
+    fi
 
-    echo "[video 3/4] Build visual summary"
+    echo "[video 2/3] Build visual summary"
     sample_1=$((frame_count / 3))
     sample_2=$((frame_count * 2 / 3))
     sample_3=$((frame_count - 1))
@@ -167,8 +192,6 @@ if [ "$video_report" = true ]; then
         -frames:v 1 \
         "$contact_sheet"
 
-    video_duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$video_path")
-    video_dimensions=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$video_path")
     video_sha_line=$(shasum -a 256 "$video_path")
     video_sha=${video_sha_line%% *}
     test_summary=$(rg "Finished [0-9]+ tests" "$unit_log" | tail -n 1)
@@ -185,6 +208,8 @@ if [ "$video_report" = true ]; then
         printf -- '- Generated: `%s`\n' "$generated_at"
         printf -- '- Unit/scenario suite: `%s`\n' "$test_summary"
         printf -- '- Recorded replay: `%s`\n' "$replay_path"
+        printf -- '- Video encoding: `raw RGBA streamed through FFmpeg stdin`\n'
+        printf -- '- Replay fixed ticks: `%s`\n' "$streamed_frame_count"
         printf -- '- Video: `%s`, `%s seconds`, `%s frames at 60 fps`\n' "$video_dimensions" "$video_duration" "$frame_count"
         printf -- '- MP4 SHA-256: `%s`\n' "$video_sha"
         printf -- '- Fixed-tick PNG determinism: **byte-identical**\n'
@@ -194,7 +219,7 @@ if [ "$video_report" = true ]; then
         printf 'Detailed logs: [Odin tests](./odin-test.log), [recording](./recording.log), [capture A](./determinism-a.log), [capture B](./determinism-b.log).\n'
     } >"$report_path"
 
-    echo "[video 4/4] Video report passed"
+    echo "[video 3/3] Streaming video report passed"
     echo "MP4: $video_path"
     echo "Preview: $contact_sheet"
     echo "Report: $report_path"

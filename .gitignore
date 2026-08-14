@@ -29,3 +29,4 @@ artifacts/
 docs/*
 !docs/cel-shading-v1-spec.md
 !docs/traversal-prototype-spec.md
+!docs/video-report-streaming-spec.md

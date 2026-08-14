@@ -22,7 +22,7 @@ Create evidence that combines headless rule checks with a human-reviewable video
 
 4. On macOS, use the active graphical session if the hidden raylib window cannot initialize in the sandbox. Do not use desktop input or screenshots.
 
-The runner executes the Odin suite, builds a fresh uniquely named binary, checks a repeated fixed-tick capture for byte determinism, records every replay tick to PNG, encodes `game-test.mp4`, creates `contact-sheet.png`, and writes `report.md` plus logs.
+The runner executes the Odin suite, builds a fresh uniquely named binary, checks a repeated fixed-tick PNG capture for byte determinism, streams every replay tick as raw RGBA through an FFmpeg child process, creates `game-test.mp4` and `contact-sheet.png`, and writes `report.md` plus logs. The video path does not create a full PNG sequence.
 
 ## Inspect
 
@@ -32,8 +32,9 @@ Before reporting success:
 - Read `report.md` and confirm the reported test count, frame count, dimensions, duration, and SHA-256.
 - Inspect `contact-sheet.png` with the local image viewer.
 - Use `ffprobe` when any video metadata is missing or suspect.
+- Require the encoded frame count to equal the replay's streamed fixed-tick count and confirm that the report directory has no `frames/` directory.
 - Treat asset image warnings, missing frames, dimension mismatches, or unequal deterministic PNGs as failures.
-- Keep PNG frames as regression truth; MP4 is a review artifact because video encoding can vary.
+- Keep the versioned replay and repeated fixed-tick PNG capture as regression truth; MP4 is a review artifact because video encoding can vary.
 
 ## Report in chat
 

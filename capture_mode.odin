@@ -72,6 +72,7 @@ Capture_Options :: struct {
     case_name:           string,
     output_path:         string,
     output_path_owned:   bool,
+    output_path_explicit: bool,
     model_source:        string,
     style_path:          string,
     lens_mode:           Lens_Mode,
@@ -196,6 +197,7 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
                 return result
             }
             result.options.output_path = value
+            result.options.output_path_explicit = true
 
         case "--capture-model":
             if len(value) == 0 {

@@ -115,9 +115,10 @@ scripts/test-game.sh
 ```
 
 For a remote, human-reviewable run, add `--video-report` and a new output
-directory. This records all 180 fixed replay ticks through the normal GPU
-pipeline, encodes a 1280×720 MP4, creates a contact sheet, and writes a Markdown
-summary with hashes and links to the detailed logs:
+directory. This renders all 180 fixed replay ticks through the normal GPU
+pipeline, streams raw RGBA frames directly to FFmpeg, creates a 1280×720 MP4
+and contact sheet, and writes a Markdown summary with hashes and links to the
+detailed logs:
 
 ```sh
 scripts/test-game.sh --video-report artifacts/game-test-report-demo
@@ -133,9 +134,10 @@ scripts/test-game.sh \
 ```
 
 The generated directory contains `game-test.mp4`, `contact-sheet.png`,
-`report.md`, the deterministic source PNGs under `frames/`, and the test and
-capture logs. `ffmpeg` and `ffprobe` must be available. The PNGs remain the
-regression source of truth; the MP4 is optimized for remote review.
+`report.md`, the repeated fixed-tick determinism PNG, and the test and capture
+logs. It does not contain a full PNG frame sequence. `ffmpeg` and `ffprobe` must
+be available. The versioned replay and repeated fixed-tick PNG capture remain
+the regression source of truth; the MP4 is optimized for remote review.
 
 Versioned replay JSON stores compact fixed-tick input segments. Use the bundled
 dash replay to render the exact same dynamic state on every run; capture ticks
@@ -156,6 +158,9 @@ The replay's `start_room` owns the initial state. Supplying a conflicting
 capture case and fails before opening a window when the tick is out of range.
 `--game-record-dir` requires a replay and capture case and exports one
 `frame-%06d.png` for every fixed simulation tick in a single process.
+`--game-video-output` requires a replay and capture case, supports only the
+`composite` target, and streams one raw RGBA frame per fixed simulation tick to
+an FFmpeg child process without creating intermediate PNG files.
 
 ## Non-interactive capture mode
 
