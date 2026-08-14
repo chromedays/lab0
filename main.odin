@@ -1705,18 +1705,38 @@ export_lens_downsample_png :: proc(
     return
 }
 
+Camera_Input_Permissions :: struct {
+    keyboard: bool,
+    mouse:    bool,
+}
+
+camera_input_permissions :: proc(
+    window_focused: bool,
+    ui_captures_input: bool,
+    mouse_over_ui: bool,
+) -> Camera_Input_Permissions {
+    if !window_focused || ui_captures_input {
+        return {}
+    }
+
+    // Hover only owns pointer input. Keyboard camera controls remain available
+    // unless a UI control is actively capturing input (for example, search).
+    return {
+        keyboard = true,
+        mouse    = !mouse_over_ui,
+    }
+}
+
 update_camera_controls :: proc(
     camera: ^rl.Camera3D,
     scene_size: f32,
     orbit_pivot: rl.Vector3,
+    allow_keyboard_input: bool,
+    allow_mouse_input: bool,
 ) -> bool {
     frame_time := rl.GetFrameTime()
     move_speed := scene_size * 2.0
     camera_changed := false
-    if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
-        move_speed *= 4.0
-    }
-    move_distance := move_speed * frame_time
 
     camera_forward := rl.GetCameraForward(camera)
     camera_right := rl.GetCameraRight(camera)
@@ -1724,38 +1744,49 @@ update_camera_controls :: proc(
         rl.Vector3CrossProduct(camera_right, camera_forward),
     )
 
-    // WASD and arrows now have one unambiguous meaning: translation in the
-    // visible camera plane. Q/E are reserved for orthographic zoom.
-    pan_delta: rl.Vector3
-    if rl.IsKeyDown(.W) || rl.IsKeyDown(.UP) {
-        pan_delta += camera_up * move_distance
-    }
-    if rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN) {
-        pan_delta -= camera_up * move_distance
-    }
-    if rl.IsKeyDown(.A) || rl.IsKeyDown(.LEFT) {
-        pan_delta -= camera_right * move_distance
-    }
-    if rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT) {
-        pan_delta += camera_right * move_distance
-    }
-    if pan_delta.x != 0 || pan_delta.y != 0 || pan_delta.z != 0 {
-        camera.position += pan_delta
-        camera.target += pan_delta
-        camera_changed = true
+    if allow_keyboard_input {
+        if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
+            move_speed *= 4.0
+        }
+        move_distance := move_speed * frame_time
+
+        // WASD and arrows now have one unambiguous meaning: translation in the
+        // visible camera plane. Q/E are reserved for orthographic zoom.
+        pan_delta: rl.Vector3
+        if rl.IsKeyDown(.W) || rl.IsKeyDown(.UP) {
+            pan_delta += camera_up * move_distance
+        }
+        if rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN) {
+            pan_delta -= camera_up * move_distance
+        }
+        if rl.IsKeyDown(.A) || rl.IsKeyDown(.LEFT) {
+            pan_delta -= camera_right * move_distance
+        }
+        if rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT) {
+            pan_delta += camera_right * move_distance
+        }
+        if pan_delta.x != 0 || pan_delta.y != 0 || pan_delta.z != 0 {
+            camera.position += pan_delta
+            camera.target += pan_delta
+            camera_changed = true
+        }
+
+        keyboard_zoom_factor := 1.0 + frame_time * 1.5
+        if rl.IsKeyDown(.Q) {
+            camera.fovy *= keyboard_zoom_factor
+            camera_changed = true
+        }
+        if rl.IsKeyDown(.E) {
+            camera.fovy = max(
+                camera.fovy / keyboard_zoom_factor,
+                scene_size * 0.05,
+            )
+            camera_changed = true
+        }
     }
 
-    keyboard_zoom_factor := 1.0 + frame_time * 1.5
-    if rl.IsKeyDown(.Q) {
-        camera.fovy *= keyboard_zoom_factor
-        camera_changed = true
-    }
-    if rl.IsKeyDown(.E) {
-        camera.fovy = max(
-            camera.fovy / keyboard_zoom_factor,
-            scene_size * 0.05,
-        )
-        camera_changed = true
+    if !allow_mouse_input {
+        return camera_changed
     }
 
     mouse_delta := rl.GetMouseDelta()
@@ -2350,15 +2381,26 @@ run_application :: proc() -> int {
             ui_mouse_position,
             animation_controls_bounds,
         )
-        if window_focused &&
-           !background_picker_open &&
-           !animation_playback.dropdown_open &&
-           !model_browser.search_editing &&
-           !mouse_over_model_browser &&
-           !mouse_over_camera_controls &&
-           !mouse_over_background_controls &&
-           !mouse_over_animation_controls {
-            update_camera_controls(&control_camera, scene_size, model_center)
+        mouse_over_ui := mouse_over_model_browser ||
+                         mouse_over_camera_controls ||
+                         mouse_over_background_controls ||
+                         mouse_over_animation_controls
+        ui_captures_camera_input := background_picker_open ||
+                                    animation_playback.dropdown_open ||
+                                    model_browser.search_editing
+        camera_input := camera_input_permissions(
+            window_focused,
+            ui_captures_camera_input,
+            mouse_over_ui,
+        )
+        if camera_input.keyboard || camera_input.mouse {
+            update_camera_controls(
+                &control_camera,
+                scene_size,
+                model_center,
+                camera_input.keyboard,
+                camera_input.mouse,
+            )
         }
         render_camera = control_camera
         snap_orthographic_zoom_to_pixel_grid(
