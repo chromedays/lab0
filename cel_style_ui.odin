@@ -178,6 +178,20 @@ save_selected_cel_style_preset :: proc(
     return true
 }
 
+reset_cel_style_to_classic :: proc(
+    state: ^Cel_Style_UI_State,
+    style: ^Cel_Style,
+) {
+    replacement := make_classic_cel_style()
+    replace_cel_style(style, replacement)
+    state.preset_index = 0
+    state.selected_band = 0
+    state.dirty = true
+    state.color_target = .NONE
+    sync_cel_style_light_angles(state, style)
+    set_cel_style_ui_status(state, .RESET)
+}
+
 add_cel_band_after :: proc(style: ^Cel_Style, selected_band: int) -> bool {
     if style.band_count >= MAX_CEL_BANDS {
         return false
@@ -225,6 +239,7 @@ remove_cel_band :: proc(style: ^Cel_Style, selected_band: int) -> bool {
 }
 
 draw_collapsible_header :: proc(
+    id: UI_Focus_ID,
     bounds: rl.Rectangle,
     title: cstring,
     expanded: ^bool,
@@ -235,7 +250,8 @@ draw_collapsible_header :: proc(
     } else {
         label = rl.TextFormat("+  %s", title)
     }
-    if rl.GuiButton(
+    if ui_gui_button(
+        id,
         {bounds.x + 3, bounds.y + 3, bounds.width - 6, bounds.height - 6},
         label,
     ) {
@@ -244,10 +260,12 @@ draw_collapsible_header :: proc(
 }
 
 draw_cel_style_slider :: proc(
+    id: UI_Focus_ID,
     x, y, width: f32,
     label: cstring,
     value: ^f32,
     minimum, maximum: f32,
+    step, coarse_step: f32,
 ) -> bool {
     label_width := min(f32(104), width * 0.38)
     value_width: f32 = 48
@@ -255,22 +273,26 @@ draw_cel_style_slider :: proc(
     slider_width := max(width - label_width - value_width - 8, f32(24))
     rl.GuiLabel({x, y, label_width, 20}, label)
     previous := value^
-    rl.GuiSliderBar(
+    changed := ui_gui_slider_bar(
+        id,
         {slider_x, y, slider_width, 20},
         nil,
         nil,
         value,
         minimum,
         maximum,
+        step,
+        coarse_step,
     )
     rl.GuiLabel(
         {x + width - value_width, y, value_width, 20},
         rl.TextFormat("%.2f", value^),
     )
-    return value^ != previous
+    return changed || value^ != previous
 }
 
 draw_cel_color_swatch :: proc(
+    id: UI_Focus_ID,
     x, y, width: f32,
     label: cstring,
     color: rl.Color,
@@ -279,11 +301,18 @@ draw_cel_color_swatch :: proc(
 ) {
     rl.GuiLabel({x, y, 104, 22}, label)
     swatch_bounds := rl.Rectangle{x + 108, y, 52, 22}
-    if rl.GuiButton(swatch_bounds, nil) {
+    if ui_gui_button(id, swatch_bounds, nil) {
         if state.color_target == target {
             state.color_target = .NONE
         } else {
             state.color_target = target
+            switch target {
+            case .BAND_TINT: ui_keyboard_set_focus(.CEL_BAND_TINT_PICKER)
+            case .RIM:       ui_keyboard_set_focus(.CEL_RIM_PICKER)
+            case .HIGHLIGHT: ui_keyboard_set_focus(.CEL_HIGHLIGHT_PICKER)
+            case .OUTLINE:   ui_keyboard_set_focus(.CEL_OUTLINE_PICKER)
+            case .NONE:
+            }
         }
     }
     rl.DrawRectangleRec(
@@ -422,10 +451,12 @@ draw_cel_style_light_content :: proc(
     rl.GuiLabel({x, cursor_y, 104, 22}, "Light space")
     light_space := c.int(style.light_space)
     previous_light_space := light_space
-    rl.GuiComboBox(
+    _ = ui_gui_combo_box(
+        .CEL_LIGHT_SPACE,
         {x + 108, cursor_y, width - 108, 22},
         "World;Camera;Model",
         &light_space,
+        3,
     )
     if light_space != previous_light_space {
         style.light_space = Cel_Light_Space(light_space)
@@ -433,21 +464,24 @@ draw_cel_style_light_content :: proc(
     }
     cursor_y += 30
     if draw_cel_style_slider(
-        x, cursor_y, width, "Azimuth", &state.light_azimuth, -180, 180,
+        .CEL_LIGHT_AZIMUTH,
+        x, cursor_y, width, "Azimuth", &state.light_azimuth, -180, 180, 1, 10,
     ) {
         update_cel_style_direction_from_angles(state, style)
         changed = true
     }
     cursor_y += 28
     if draw_cel_style_slider(
-        x, cursor_y, width, "Elevation", &state.light_elevation, -89, 89,
+        .CEL_LIGHT_ELEVATION,
+        x, cursor_y, width, "Elevation", &state.light_elevation, -89, 89, 1, 10,
     ) {
         update_cel_style_direction_from_angles(state, style)
         changed = true
     }
     cursor_y += 28
     changed = draw_cel_style_slider(
-        x, cursor_y, width, "Wrap lighting", &style.wrap_lighting, 0, 1,
+        .CEL_LIGHT_WRAP,
+        x, cursor_y, width, "Wrap lighting", &style.wrap_lighting, 0, 1, 0.01, 0.1,
     ) || changed
     cursor_y += 28
     rl.GuiLabel(
@@ -472,23 +506,31 @@ draw_cel_style_bands_content :: proc(
 
     rl.GuiLabel({x, cursor_y, 38, 22}, "Band")
     selected_display := state.selected_band + 1
-    rl.GuiSpinner(
+    _ = ui_gui_spinner(
+        .CEL_BAND_SELECT,
         {x + 40, cursor_y, 62, 22},
         nil,
         &selected_display,
         1,
         c.int(style.band_count),
+        1,
+        1,
         false,
     )
     state.selected_band = selected_display - 1
     add_width := (width - 110) * 0.5
-    if rl.GuiButton({x + 108, cursor_y, add_width, 22}, "Add after") {
+    if ui_gui_button(
+        .CEL_BAND_ADD,
+        {x + 108, cursor_y, add_width, 22},
+        "Add after",
+    ) {
         if add_cel_band_after(style, int(state.selected_band)) {
             state.selected_band += 1
             changed = true
         }
     }
-    if rl.GuiButton(
+    if ui_gui_button(
+        .CEL_BAND_REMOVE,
         {x + 112 + add_width, cursor_y, width - 112 - add_width, 22},
         "Remove",
     ) {
@@ -521,6 +563,7 @@ draw_cel_style_bands_content :: proc(
                           CEL_BOUNDARY_MINIMUM_GAP
         }
         changed = draw_cel_style_slider(
+            .CEL_BAND_UPPER_BOUND,
             x,
             cursor_y,
             width,
@@ -528,20 +571,25 @@ draw_cel_style_bands_content :: proc(
             &band.upper_bound,
             lower_bound,
             upper_bound,
+            0.01,
+            0.1,
         ) || changed
         cursor_y += 28
     }
     changed = draw_cel_style_slider(
-        x, cursor_y, width, "Brightness", &band.brightness, 0, 2,
+        .CEL_BAND_BRIGHTNESS,
+        x, cursor_y, width, "Brightness", &band.brightness, 0, 2, 0.05, 0.25,
     ) || changed
     cursor_y += 28
     changed = draw_cel_style_slider(
-        x, cursor_y, width, "Tint mix", &band.tint_mix, 0, 1,
+        .CEL_BAND_TINT_MIX,
+        x, cursor_y, width, "Tint mix", &band.tint_mix, 0, 1, 0.01, 0.1,
     ) || changed
     cursor_y += 28
 
     tint_color := cel_vector_color_to_raylib(band.tint)
     draw_cel_color_swatch(
+        .CEL_BAND_TINT_SWATCH,
         x,
         cursor_y,
         width,
@@ -553,7 +601,12 @@ draw_cel_style_bands_content :: proc(
     cursor_y += 28
     if state.color_target == .BAND_TINT {
         previous_tint_color := tint_color
-        rl.GuiColorPicker({x, cursor_y, 150, 150}, nil, &tint_color)
+        _ = ui_gui_color_picker(
+            .CEL_BAND_TINT_PICKER,
+            {x, cursor_y, 150, 150},
+            &tint_color,
+            false,
+        )
         if tint_color != previous_tint_color {
             band.tint = cel_raylib_color_to_vector(tint_color)
             changed = true
@@ -564,10 +617,12 @@ draw_cel_style_bands_content :: proc(
     rl.GuiLabel({x, cursor_y, 104, 22}, "Alpha")
     alpha_mode := c.int(style.alpha_mode)
     previous_alpha_mode := alpha_mode
-    rl.GuiComboBox(
+    _ = ui_gui_combo_box(
+        .CEL_ALPHA_MODE,
         {x + 108, cursor_y, width - 108, 22},
         "Opaque;Mask",
         &alpha_mode,
+        2,
     )
     if alpha_mode != previous_alpha_mode {
         style.alpha_mode = Cel_Alpha_Mode(alpha_mode)
@@ -576,7 +631,8 @@ draw_cel_style_bands_content :: proc(
     cursor_y += 30
     if style.alpha_mode == .MASK {
         changed = draw_cel_style_slider(
-            x, cursor_y, width, "Cutoff", &style.alpha_cutoff, 0, 1,
+            .CEL_ALPHA_CUTOFF,
+            x, cursor_y, width, "Cutoff", &style.alpha_cutoff, 0, 1, 0.01, 0.1,
         ) || changed
     }
     return changed
@@ -591,28 +647,52 @@ draw_cel_accent_content :: proc(
 ) -> bool {
     changed := false
     cursor_y := y
+    enabled_focus := UI_Focus_ID.CEL_RIM_ENABLED
+    threshold_focus := UI_Focus_ID.CEL_RIM_THRESHOLD
+    strength_focus := UI_Focus_ID.CEL_RIM_STRENGTH
+    samples_focus := UI_Focus_ID.CEL_RIM_SAMPLES
+    swatch_focus := UI_Focus_ID.CEL_RIM_SWATCH
+    picker_focus := UI_Focus_ID.CEL_RIM_PICKER
+    if target == .HIGHLIGHT {
+        enabled_focus = .CEL_HIGHLIGHT_ENABLED
+        threshold_focus = .CEL_HIGHLIGHT_THRESHOLD
+        strength_focus = .CEL_HIGHLIGHT_STRENGTH
+        samples_focus = .CEL_HIGHLIGHT_SAMPLES
+        swatch_focus = .CEL_HIGHLIGHT_SWATCH
+        picker_focus = .CEL_HIGHLIGHT_PICKER
+    }
     previous_enabled := accent.enabled
-    rl.GuiCheckBox({x, cursor_y + 2, 18, 18}, nil, &accent.enabled)
+    _ = ui_gui_check_box(
+        enabled_focus,
+        {x, cursor_y + 2, 18, 18},
+        nil,
+        &accent.enabled,
+    )
     rl.GuiLabel({x + 24, cursor_y, width - 24, 22}, label)
     changed = accent.enabled != previous_enabled
     cursor_y += 22
     changed = draw_cel_style_slider(
-        x, cursor_y, width, "Threshold", &accent.threshold, 0, 1,
+        threshold_focus,
+        x, cursor_y, width, "Threshold", &accent.threshold, 0, 1, 0.01, 0.1,
     ) || changed
     cursor_y += 28
     changed = draw_cel_style_slider(
-        x, cursor_y, width, "Strength", &accent.strength, 0, 2,
+        strength_focus,
+        x, cursor_y, width, "Strength", &accent.strength, 0, 2, 0.05, 0.25,
     ) || changed
     cursor_y += 28
     rl.GuiLabel({x, cursor_y, 104, 22}, "Keep samples")
     preserve_samples := c.int(accent.preserve_samples)
     previous_samples := preserve_samples
-    rl.GuiSpinner(
+    _ = ui_gui_spinner(
+        samples_focus,
         {x + 108, cursor_y, width - 108, 22},
         nil,
         &preserve_samples,
         1,
         16,
+        1,
+        4,
         false,
     )
     if preserve_samples != previous_samples {
@@ -621,11 +701,25 @@ draw_cel_accent_content :: proc(
     }
     cursor_y += 30
     color := cel_vector_color_to_raylib(accent.color)
-    draw_cel_color_swatch(x, cursor_y, width, "Color", color, target, state)
+    draw_cel_color_swatch(
+        swatch_focus,
+        x,
+        cursor_y,
+        width,
+        "Color",
+        color,
+        target,
+        state,
+    )
     cursor_y += 32
     if state.color_target == target {
         previous_color := color
-        rl.GuiColorPicker({x, cursor_y, 126, 126}, nil, &color)
+        _ = ui_gui_color_picker(
+            picker_focus,
+            {x, cursor_y, 126, 126},
+            &color,
+            false,
+        )
         if color != previous_color {
             accent.color = cel_raylib_color_to_vector(color)
             changed = true
@@ -666,12 +760,15 @@ draw_cel_style_outline_content :: proc(
     rl.GuiLabel({x, cursor_y, 104, 22}, "Width (pixels)")
     outline_width := c.int(style.outline.width)
     previous_width := outline_width
-    rl.GuiSpinner(
+    _ = ui_gui_spinner(
+        .CEL_OUTLINE_WIDTH,
         {x + 108, cursor_y, width - 108, 22},
         nil,
         &outline_width,
         0,
         3,
+        1,
+        1,
         false,
     )
     if outline_width != previous_width {
@@ -680,6 +777,7 @@ draw_cel_style_outline_content :: proc(
     }
     cursor_y += 32
     changed = draw_cel_style_slider(
+        .CEL_OUTLINE_COVERAGE,
         x,
         cursor_y,
         width,
@@ -687,11 +785,14 @@ draw_cel_style_outline_content :: proc(
         &style.outline.coverage_threshold,
         0,
         1,
+        0.01,
+        0.1,
     ) || changed
     cursor_y += 28
 
     outline_color := style.outline.color
     draw_cel_color_swatch(
+        .CEL_OUTLINE_SWATCH,
         x,
         cursor_y,
         width,
@@ -703,7 +804,12 @@ draw_cel_style_outline_content :: proc(
     cursor_y += 32
     if state.color_target == .OUTLINE {
         previous_color := outline_color
-        rl.GuiColorPicker({x, cursor_y, 160, 160}, nil, &outline_color)
+        _ = ui_gui_color_picker(
+            .CEL_OUTLINE_PICKER,
+            {x, cursor_y, 160, 160},
+            &outline_color,
+            false,
+        )
         if outline_color != previous_color {
             style.outline.color.r = outline_color.r
             style.outline.color.g = outline_color.g
@@ -716,7 +822,8 @@ draw_cel_style_outline_content :: proc(
     alpha := f32(style.outline.color.a) / 255
     previous_alpha := alpha
     changed = draw_cel_style_slider(
-        x, cursor_y, width, "Alpha", &alpha, 0, 1,
+        .CEL_OUTLINE_ALPHA,
+        x, cursor_y, width, "Alpha", &alpha, 0, 1, 0.01, 0.1,
     ) || changed
     if alpha != previous_alpha {
         style.outline.color.a = cel_color_component_to_byte(alpha)
@@ -725,12 +832,14 @@ draw_cel_style_outline_content :: proc(
 }
 
 draw_cel_subsection :: proc(
+    id: UI_Focus_ID,
     x, y, width: f32,
     title: cstring,
     open: ^bool,
 ) {
     rl.GuiPanel({x, y, width, CEL_SUBSECTION_HEADER_HEIGHT}, nil)
     draw_collapsible_header(
+        id,
         {x, y, width, CEL_SUBSECTION_HEADER_HEIGHT},
         title,
         open,
@@ -745,6 +854,7 @@ draw_cel_style_editor :: proc(
     rl.GuiPanel(bounds, nil)
     was_open := state.open
     draw_collapsible_header(
+        .CEL_HEADER,
         {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
         "CEL SHADING [C]",
         &state.open,
@@ -766,32 +876,27 @@ draw_cel_style_editor :: proc(
     save_width: f32 = 44
     reset_width := width - combo_width - reload_width - save_width - button_gap * 3
     previous_preset := state.preset_index
-    rl.GuiComboBox(
+    _ = ui_gui_combo_box(
+        .CEL_PRESET,
         {x, y, combo_width, 24},
         CEL_STYLE_PRESET_OPTIONS,
         &state.preset_index,
+        3,
     )
     if state.preset_index != previous_preset {
         _ = load_selected_cel_style_preset(state, style)
     }
     button_x := x + combo_width + button_gap
-    if rl.GuiButton({button_x, y, reload_width, 24}, "Reload") {
+    if ui_gui_button(.CEL_RELOAD, {button_x, y, reload_width, 24}, "Reload") {
         _ = load_selected_cel_style_preset(state, style)
     }
     button_x += reload_width + button_gap
-    if rl.GuiButton({button_x, y, save_width, 24}, "Save") {
+    if ui_gui_button(.CEL_SAVE, {button_x, y, save_width, 24}, "Save") {
         _ = save_selected_cel_style_preset(state, style)
     }
     button_x += save_width + button_gap
-    if rl.GuiButton({button_x, y, reset_width, 24}, "Reset") {
-        replacement := make_classic_cel_style()
-        replace_cel_style(style, replacement)
-        state.preset_index = 0
-        state.selected_band = 0
-        state.dirty = true
-        state.color_target = .NONE
-        sync_cel_style_light_angles(state, style)
-        set_cel_style_ui_status(state, .RESET)
+    if ui_gui_button(.CEL_RESET, {button_x, y, reset_width, 24}, "Reset") {
+        reset_cel_style_to_classic(state, style)
     }
     y += 30
 
@@ -811,7 +916,14 @@ draw_cel_style_editor :: proc(
     changed := false
 
     light_was_open := state.light_open
-    draw_cel_subsection(x, y, width, "LIGHT", &state.light_open)
+    draw_cel_subsection(
+        .CEL_LIGHT_HEADER,
+        x,
+        y,
+        width,
+        "LIGHT",
+        &state.light_open,
+    )
     if state.light_open {
         changed = draw_cel_style_light_content(
             x + 8,
@@ -830,7 +942,14 @@ draw_cel_style_editor :: proc(
     ) + INSPECTOR_SECTION_GAP
 
     bands_was_open := state.bands_open
-    draw_cel_subsection(x, y, width, "BANDS & ALPHA", &state.bands_open)
+    draw_cel_subsection(
+        .CEL_BANDS_HEADER,
+        x,
+        y,
+        width,
+        "BANDS & ALPHA",
+        &state.bands_open,
+    )
     if bands_was_open && !state.bands_open && state.color_target == .BAND_TINT {
         state.color_target = .NONE
     }
@@ -849,7 +968,14 @@ draw_cel_style_editor :: proc(
     ) + INSPECTOR_SECTION_GAP
 
     accents_was_open := state.accents_open
-    draw_cel_subsection(x, y, width, "ACCENTS", &state.accents_open)
+    draw_cel_subsection(
+        .CEL_ACCENTS_HEADER,
+        x,
+        y,
+        width,
+        "ACCENTS",
+        &state.accents_open,
+    )
     if accents_was_open && !state.accents_open &&
        (state.color_target == .RIM || state.color_target == .HIGHLIGHT) {
         state.color_target = .NONE
@@ -869,7 +995,14 @@ draw_cel_style_editor :: proc(
     ) + INSPECTOR_SECTION_GAP
 
     outline_was_open := state.outline_open
-    draw_cel_subsection(x, y, width, "OUTLINE", &state.outline_open)
+    draw_cel_subsection(
+        .CEL_OUTLINE_HEADER,
+        x,
+        y,
+        width,
+        "OUTLINE",
+        &state.outline_open,
+    )
     if outline_was_open && !state.outline_open && state.color_target == .OUTLINE {
         state.color_target = .NONE
     }

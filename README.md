@@ -10,6 +10,29 @@ odin run .
 
 Run commands from the repository root because model and shader paths are relative to the working directory.
 
+### Keyboard shortcuts
+
+Press `F1` or `?` for the complete in-app shortcut reference. `Tab` and
+`Shift+Tab` move keyboard focus through every visible interactive control;
+focused buttons and checkboxes use `Enter`/`Space`, while sliders, spinners,
+combos, lists, and color channels use the arrow keys. Hold `Shift` for coarse
+numeric or color adjustment. `Escape` closes the active search, dropdown,
+color picker, or shortcut reference, and `Cmd+Q`/`Ctrl+Q` exits the viewer.
+
+Global accelerators include:
+
+| Area | Shortcuts |
+| --- | --- |
+| Model and inspector | `Cmd/Ctrl+F` search; `Cmd/Ctrl+1..4` toggle inspector sections; `PageUp/PageDown` scroll |
+| Lens and camera | `1/2/3` lens modes; `G` grid; `P` export; `X/Y/Z/I` views; `-`/`=` downscale |
+| Animation | `Space` play/pause; `Home` first frame; `,/.` step; `[/]` clip; `L` loop; `K` sampled playback |
+| Cel style | `C` toggle; `Alt+1..3` preset; `Cmd/Ctrl+R` reload; `Cmd/Ctrl+S` save; `Cmd/Ctrl+Shift+R` reset |
+| Background | `B` color picker; `Shift+B` reset to black |
+
+Live shortcuts are disabled in non-interactive capture mode. Modified commands
+are consumed before camera input, so combinations such as `Cmd/Ctrl+S` never
+leak into WASD camera movement.
+
 Press `G` to toggle the pixel grid over the lens. The camera controls panel
 shows whether the grid is currently on or off.
 

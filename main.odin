@@ -963,6 +963,63 @@ get_animation_pose_frame :: proc(
     )
 }
 
+animation_reset_to_first_frame :: proc(playback: ^Animation_Playback) {
+    playback.current_frame = 0
+    playback.is_playing = false
+    playback.pose_dirty = true
+}
+
+animation_step_frame :: proc(
+    playback: ^Animation_Playback,
+    direction: int,
+) -> bool {
+    animation, animation_found := get_active_animation(playback)
+    if !animation_found || direction == 0 {
+        return false
+    }
+    if playback.sampled_playback {
+        sample_index := get_sample_index_for_frame(
+            animation,
+            playback.sample_count,
+            playback.current_frame,
+        )
+        playback.current_frame = get_sampled_frame_at_index(
+            animation,
+            playback.sample_count,
+            sample_index + c.int(direction),
+        )
+    } else {
+        last_frame := f32(max(animation.keyframeCount - 1, 0))
+        playback.current_frame = clamp(
+            playback.current_frame + f32(direction),
+            f32(0),
+            last_frame,
+        )
+    }
+    playback.is_playing = false
+    playback.pose_dirty = true
+    return true
+}
+
+animation_cycle_clip :: proc(
+    playback: ^Animation_Playback,
+    direction: int,
+) -> bool {
+    clip_count := c.int(len(playback.valid_indices))
+    if clip_count <= 1 || direction == 0 {
+        return false
+    }
+    playback.active_index = clamp(
+        playback.active_index + c.int(direction),
+        c.int(0),
+        clip_count - 1,
+    )
+    playback.current_frame = 0
+    playback.is_playing = false
+    playback.pose_dirty = true
+    return true
+}
+
 update_animation_playback :: proc(
     playback: ^Animation_Playback,
     model: rl.Model,
@@ -1347,6 +1404,7 @@ draw_model_browser :: proc(
     rl.GuiPanel(bounds, nil)
     was_expanded := expanded^
     draw_collapsible_header(
+        .MODEL_HEADER,
         {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
         "MODEL ASSETS",
         expanded,
@@ -1371,7 +1429,8 @@ draw_model_browser :: proc(
         24,
     }
     search_was_editing := browser.search_editing
-    if rl.GuiTextBox(
+    if ui_gui_text_box(
+        .MODEL_SEARCH,
         search_bounds,
         cstring(&browser.search_text[0]),
         MODEL_SEARCH_TEXT_CAPACITY,
@@ -1394,13 +1453,18 @@ draw_model_browser :: proc(
             ),
         )
     }
-    if rl.GuiButton(clear_bounds, rl.GuiIconText(.ICON_CROSS_SMALL, nil)) {
+    if ui_gui_button(
+        .MODEL_CLEAR,
+        clear_bounds,
+        rl.GuiIconText(.ICON_CROSS_SMALL, nil),
+    ) {
         browser.search_text = {}
         browser.search_editing = true
     }
 
     search_keyboard_active := search_was_editing || browser.search_editing
-    enter_pressed := search_keyboard_active &&
+    list_has_keyboard_focus := ui_keyboard.focused == .MODEL_LIST
+    enter_pressed := (search_keyboard_active || list_has_keyboard_focus) &&
                      (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.KP_ENTER))
     if search_keyboard_active && rl.IsKeyPressed(.ESCAPE) {
         if len(search_query) > 0 {
@@ -1413,7 +1477,8 @@ draw_model_browser :: proc(
         rebuild_model_search_results(model_assets, browser)
     }
 
-    if search_keyboard_active && len(browser.results) > 0 {
+    if (search_keyboard_active || list_has_keyboard_focus) &&
+       len(browser.results) > 0 {
         if rl.IsKeyPressed(.DOWN) {
             browser.active_index = min(
                 browser.active_index + 1,
@@ -1422,6 +1487,23 @@ draw_model_browser :: proc(
         }
         if rl.IsKeyPressed(.UP) {
             browser.active_index = max(browser.active_index - 1, 0)
+        }
+
+        page_size: c.int = 8
+        if rl.IsKeyPressed(.PAGE_DOWN) {
+            browser.active_index = min(
+                browser.active_index + page_size,
+                c.int(len(browser.results) - 1),
+            )
+        }
+        if rl.IsKeyPressed(.PAGE_UP) {
+            browser.active_index = max(browser.active_index - page_size, 0)
+        }
+        if rl.IsKeyPressed(.HOME) {
+            browser.active_index = 0
+        }
+        if rl.IsKeyPressed(.END) {
+            browser.active_index = c.int(len(browser.results) - 1)
         }
 
         visible_result_count: c.int = 8
@@ -1440,6 +1522,7 @@ draw_model_browser :: proc(
         bounds.height - 92,
     }
     if len(browser.result_labels) > 0 {
+        list_focused := ui_register_control(.MODEL_LIST, list_bounds)
         rl.GuiListViewEx(
             list_bounds,
             raw_data(browser.result_labels[:]),
@@ -1448,6 +1531,7 @@ draw_model_browser :: proc(
             &browser.active_index,
             &browser.focus_index,
         )
+        ui_draw_focus(list_bounds, list_focused)
         result_clicked := !rl.GuiIsLocked() && rl.CheckCollisionPointRec(
             rl.GetMousePosition(),
             list_bounds,
@@ -1514,29 +1598,20 @@ draw_animation_controls :: proc(
     step_width: f32 = 40
     play_width := content_width - reset_width - step_width * 2 - button_gap * 3
 
-    if rl.GuiButton({content_x, transport_y, reset_width, 24}, "|<") {
-        playback.current_frame = 0
-        playback.is_playing = false
-        playback.pose_dirty = true
+    if ui_gui_button(
+        .ANIMATION_FIRST,
+        {content_x, transport_y, reset_width, 24},
+        "|<",
+    ) {
+        animation_reset_to_first_frame(playback)
     }
     previous_button_x := content_x + reset_width + button_gap
-    if rl.GuiButton({previous_button_x, transport_y, step_width, 24}, "<") {
-        if playback.sampled_playback {
-            sample_index := get_sample_index_for_frame(
-                animation,
-                playback.sample_count,
-                playback.current_frame,
-            )
-            playback.current_frame = get_sampled_frame_at_index(
-                animation,
-                playback.sample_count,
-                sample_index - 1,
-            )
-        } else {
-            playback.current_frame = max(playback.current_frame - 1, 0)
-        }
-        playback.is_playing = false
-        playback.pose_dirty = true
+    if ui_gui_button(
+        .ANIMATION_PREVIOUS,
+        {previous_button_x, transport_y, step_width, 24},
+        "<",
+    ) {
+        _ = animation_step_frame(playback, -1)
     }
 
     play_button_x := previous_button_x + step_width + button_gap
@@ -1544,29 +1619,22 @@ draw_animation_controls :: proc(
     if playback.is_playing {
         play_label = "Pause [Space]"
     }
-    if rl.GuiButton({play_button_x, transport_y, play_width, 24}, play_label) {
+    if ui_gui_button(
+        .ANIMATION_PLAY,
+        {play_button_x, transport_y, play_width, 24},
+        play_label,
+    ) {
         playback.is_playing = !playback.is_playing
     }
 
     next_button_x := play_button_x + play_width + button_gap
     last_frame := f32(max(animation.keyframeCount - 1, 0))
-    if rl.GuiButton({next_button_x, transport_y, step_width, 24}, ">") {
-        if playback.sampled_playback {
-            sample_index := get_sample_index_for_frame(
-                animation,
-                playback.sample_count,
-                playback.current_frame,
-            )
-            playback.current_frame = get_sampled_frame_at_index(
-                animation,
-                playback.sample_count,
-                sample_index + 1,
-            )
-        } else {
-            playback.current_frame = min(playback.current_frame + 1, last_frame)
-        }
-        playback.is_playing = false
-        playback.pose_dirty = true
+    if ui_gui_button(
+        .ANIMATION_NEXT,
+        {next_button_x, transport_y, step_width, 24},
+        ">",
+    ) {
+        _ = animation_step_frame(playback, 1)
     }
 
     timeline_label_y := bounds.y + 88
@@ -1580,13 +1648,16 @@ draw_animation_controls :: proc(
         ),
     )
     previous_frame := playback.current_frame
-    rl.GuiSliderBar(
+    _ = ui_gui_slider_bar(
+        .ANIMATION_TIMELINE,
         {content_x, bounds.y + 108, content_width, 18},
         nil,
         nil,
         &playback.current_frame,
         0,
         last_frame,
+        1,
+        10,
     )
     if playback.current_frame != previous_frame {
         if playback.sampled_playback {
@@ -1601,24 +1672,33 @@ draw_animation_controls :: proc(
 
     options_y := bounds.y + 136
     rl.GuiLabel({content_x, options_y, 40, 18}, "Speed")
-    rl.GuiSliderBar(
+    _ = ui_gui_slider_bar(
+        .ANIMATION_SPEED,
         {content_x + 42, options_y, 105, 18},
         nil,
         nil,
         &playback.speed,
         0.25,
         2.0,
+        0.05,
+        0.25,
     )
     rl.GuiLabel(
         {content_x + 152, options_y, 48, 18},
         rl.TextFormat("%.2fx", playback.speed),
     )
-    rl.GuiCheckBox({content_x + 202, options_y + 1, 16, 16}, nil, &playback.loop)
+    _ = ui_gui_check_box(
+        .ANIMATION_LOOP,
+        {content_x + 202, options_y + 1, 16, 16},
+        nil,
+        &playback.loop,
+    )
     rl.GuiLabel({content_x + 222, options_y, 36, 18}, "Loop")
 
     sample_options_y := bounds.y + 162
     previous_sampled_playback := playback.sampled_playback
-    rl.GuiCheckBox(
+    _ = ui_gui_check_box(
+        .ANIMATION_SAMPLED,
         {content_x, sample_options_y + 1, 16, 16},
         nil,
         &playback.sampled_playback,
@@ -1626,12 +1706,15 @@ draw_animation_controls :: proc(
     rl.GuiLabel({content_x + 20, sample_options_y, 66, 18}, "Sampled")
     rl.GuiLabel({content_x + 91, sample_options_y, 42, 18}, "Count")
     previous_sample_count := playback.sample_count
-    rl.GuiSpinner(
+    _ = ui_gui_spinner(
+        .ANIMATION_SAMPLE_COUNT,
         {content_x + 136, sample_options_y - 2, content_width - 136, 22},
         nil,
         &playback.sample_count,
         1,
         get_max_sample_count(animation),
+        1,
+        4,
         false,
     )
     if playback.sampled_playback != previous_sampled_playback ||
@@ -1658,13 +1741,18 @@ draw_animation_controls :: proc(
         rl.GuiLabel(clip_bounds, playback.clip_options)
     } else {
         previous_active_index := playback.active_index
-        if rl.GuiDropdownBox(
+        if ui_gui_dropdown_box(
+            .ANIMATION_CLIP,
             clip_bounds,
             playback.clip_options,
             &playback.active_index,
+            c.int(len(playback.valid_indices)),
             playback.dropdown_open,
         ) {
             playback.dropdown_open = !playback.dropdown_open
+            if playback.dropdown_open {
+                ui_keyboard_set_focus(.ANIMATION_CLIP)
+            }
         }
         if playback.active_index != previous_active_index {
             playback.current_frame = 0
@@ -1689,6 +1777,7 @@ draw_camera_controls :: proc(
 ) {
     rl.GuiPanel(bounds, nil)
     draw_collapsible_header(
+        .CAMERA_HEADER,
         {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
         "CAMERA CONTROLS",
         expanded,
@@ -1710,7 +1799,11 @@ draw_camera_controls :: proc(
 
     button_gap: f32 = 6
     button_width := (content_width - button_gap * 2) / 3
-    if rl.GuiButton({content_x, content_y, button_width, 24}, "X") {
+    if ui_gui_button(
+        .CAMERA_X,
+        {content_x, content_y, button_width, 24},
+        "X",
+    ) {
         reset_camera_to_axis_view(
             camera,
             model_center,
@@ -1720,7 +1813,8 @@ draw_camera_controls :: proc(
         )
         log.info("Camera reset to +X axis view")
     }
-    if rl.GuiButton(
+    if ui_gui_button(
+        .CAMERA_Y,
         {content_x + button_width + button_gap, content_y, button_width, 24},
         "Y",
     ) {
@@ -1733,7 +1827,8 @@ draw_camera_controls :: proc(
         )
         log.info("Camera reset to +Y axis view")
     }
-    if rl.GuiButton(
+    if ui_gui_button(
+        .CAMERA_Z,
         {
             content_x + (button_width + button_gap) * 2,
             content_y,
@@ -1753,7 +1848,11 @@ draw_camera_controls :: proc(
     }
     content_y += 28
 
-    if rl.GuiButton({content_x, content_y, content_width, 24}, "Isometric") {
+    if ui_gui_button(
+        .CAMERA_ISOMETRIC,
+        {content_x, content_y, content_width, 24},
+        "Isometric [I]",
+    ) {
         reset_camera_to_axis_view(
             camera,
             model_center,
@@ -1766,12 +1865,15 @@ draw_camera_controls :: proc(
     content_y += 30
 
     rl.GuiLabel({content_x, content_y, 104, 22}, "Downscale level")
-    rl.GuiSpinner(
+    _ = ui_gui_spinner(
+        .CAMERA_DOWNSCALE,
         {content_x + 108, content_y, content_width - 108, 22},
         nil,
         downscale_level,
         MIN_DOWNSCALE_LEVEL,
         MAX_DOWNSCALE_LEVEL,
+        1,
+        4,
         false,
     )
     downscale_level^ = clamp(
@@ -1802,7 +1904,7 @@ draw_camera_controls :: proc(
     }
     rl.GuiLabel(
         {content_x, content_y, content_width, 18},
-        rl.TextFormat("1/2/3 Lens | G Grid: %s | C Style", lens_grid_status),
+        rl.TextFormat("1/2/3 Lens | G Grid:%s | F1 Help", lens_grid_status),
     )
 }
 
@@ -1815,6 +1917,7 @@ draw_background_controls :: proc(
     rl.GuiPanel(bounds, nil)
     was_expanded := expanded^
     draw_collapsible_header(
+        .BACKGROUND_HEADER,
         {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
         "SCENE BACKGROUND",
         expanded,
@@ -1841,13 +1944,18 @@ draw_background_controls :: proc(
     if picker_open^ {
         picker_button_text = "Close color picker"
     }
-    if rl.GuiButton(
+    if ui_gui_button(
+        .BACKGROUND_PICKER_TOGGLE,
         {button_x, bounds.y + 30, button_width, 25},
         picker_button_text,
     ) {
         picker_open^ = !picker_open^
+        if picker_open^ {
+            ui_keyboard_set_focus(.BACKGROUND_PICKER)
+        }
     }
-    if rl.GuiButton(
+    if ui_gui_button(
+        .BACKGROUND_RESET,
         {button_x, bounds.y + 59, button_width, 25},
         "Reset to black",
     ) {
@@ -1878,15 +1986,16 @@ draw_background_color_picker :: proc(
         picker_open^ = false
         return
     }
-    rl.GuiColorPicker(
+    _ = ui_gui_color_picker(
+        .BACKGROUND_PICKER,
         {
             picker_bounds.x + 12,
             picker_bounds.y + 34,
             165,
             165,
         },
-        nil,
         background_color,
+        false,
     )
 }
 
@@ -1940,6 +2049,28 @@ draw_inspector_scrollbar :: proc(
     }
     thumb := rl.Rectangle{track.x + 2, thumb_y, track.width - 4, thumb_height}
     mouse_position := rl.GetMousePosition()
+    scrollbar_focused := ui_register_control(.INSPECTOR_SCROLLBAR, track)
+
+    if scrollbar_focused {
+        if ui_key_pressed_or_repeat(.UP) {
+            state.scroll_y = max(state.scroll_y - 42, f32(0))
+        }
+        if ui_key_pressed_or_repeat(.DOWN) {
+            state.scroll_y = min(state.scroll_y + 42, max_scroll)
+        }
+        if rl.IsKeyPressed(.PAGE_UP) {
+            state.scroll_y = max(state.scroll_y - 210, f32(0))
+        }
+        if rl.IsKeyPressed(.PAGE_DOWN) {
+            state.scroll_y = min(state.scroll_y + 210, max_scroll)
+        }
+        if rl.IsKeyPressed(.HOME) {
+            state.scroll_y = 0
+        }
+        if rl.IsKeyPressed(.END) {
+            state.scroll_y = max_scroll
+        }
+    }
 
     if rl.IsMouseButtonPressed(.LEFT) {
         if rl.CheckCollisionPointRec(mouse_position, thumb) {
@@ -1973,6 +2104,7 @@ draw_inspector_scrollbar :: proc(
         thumb_color = rl.Color{180, 180, 180, 255}
     }
     rl.DrawRectangleRec(thumb, thumb_color)
+    ui_draw_focus(track, scrollbar_focused)
 }
 
 draw_inspector :: proc(
@@ -2033,6 +2165,7 @@ draw_inspector :: proc(
         c.int(view.width),
         c.int(view.height),
     )
+        ui_keyboard_set_focus_clip(view)
         model_height := inspector_section_height(state.model_open, 310)
         draw_model_browser(
             {view.x, content_y, content_width, model_height},
@@ -2074,6 +2207,7 @@ draw_inspector :: proc(
             background_color,
             background_picker_open,
         )
+        ui_keyboard_clear_focus_clip()
     rl.EndScissorMode()
     if content_locked_here {
         rl.GuiUnlock()
@@ -2622,6 +2756,245 @@ draw_orthographic_snap_debug :: proc(
     }
 }
 
+App_UI_Command_Context :: struct {
+    quit_requested:          ^bool,
+    shortcuts_help_open:     ^bool,
+    export_requested:        ^bool,
+    lens_mode:               ^Lens_Mode,
+    lens_grid_visible:       ^bool,
+    downscale_level:         ^c.int,
+    inspector:               ^Inspector_UI_State,
+    inspector_max_scroll:    f32,
+    model_browser:           ^Model_Browser_State,
+    cel_ui:                  ^Cel_Style_UI_State,
+    cel_style:               ^Cel_Style,
+    animation:               ^Animation_Playback,
+    camera:                  ^rl.Camera3D,
+    model_center:            rl.Vector3,
+    scene_size:              f32,
+    background_color:        ^rl.Color,
+    background_picker_open:  ^bool,
+}
+
+execute_ui_command :: proc(
+    command: UI_Command,
+    command_context: ^App_UI_Command_Context,
+) {
+    #partial switch command {
+    case .TOGGLE_HELP:
+        command_context.shortcuts_help_open^ =
+            !command_context.shortcuts_help_open^
+        if command_context.shortcuts_help_open^ {
+            ui_keyboard_set_focus(.HELP_CLOSE)
+        } else {
+            ui_keyboard_clear_focus()
+        }
+    case .QUIT:
+        command_context.quit_requested^ = true
+    case .FOCUS_MODEL_SEARCH:
+        command_context.inspector.model_open = true
+        command_context.inspector.scroll_y = 0
+        command_context.model_browser.search_editing = true
+        command_context.animation.dropdown_open = false
+        command_context.background_picker_open^ = false
+        command_context.cel_ui.color_target = .NONE
+        ui_keyboard_set_focus(.MODEL_SEARCH)
+        // Prevent the shortcut key from becoming search text.
+        for rl.GetCharPressed() != 0 {}
+    case .TOGGLE_MODEL_SECTION:
+        command_context.inspector.model_open =
+            !command_context.inspector.model_open
+        if command_context.inspector.model_open {
+            command_context.inspector.scroll_y = 0
+        }
+        if !command_context.inspector.model_open {
+            command_context.model_browser.search_editing = false
+        }
+    case .TOGGLE_CAMERA_SECTION:
+        command_context.inspector.camera_open =
+            !command_context.inspector.camera_open
+        if command_context.inspector.camera_open {
+            command_context.inspector.scroll_y = inspector_section_height(
+                command_context.inspector.model_open,
+                310,
+            ) + INSPECTOR_SECTION_GAP
+        }
+    case .TOGGLE_CEL_SECTION:
+        command_context.cel_ui.open = !command_context.cel_ui.open
+        if command_context.cel_ui.open {
+            command_context.background_picker_open^ = false
+            command_context.animation.dropdown_open = false
+            sync_cel_style_light_angles(
+                command_context.cel_ui,
+                command_context.cel_style,
+            )
+            command_context.inspector.scroll_y = inspector_cel_section_offset(
+                command_context.inspector,
+            )
+            ui_keyboard_set_focus(.CEL_HEADER)
+        } else {
+            command_context.cel_ui.color_target = .NONE
+        }
+    case .TOGGLE_BACKGROUND_SECTION:
+        command_context.inspector.background_open =
+            !command_context.inspector.background_open
+        if command_context.inspector.background_open {
+            command_context.inspector.scroll_y =
+                command_context.inspector_max_scroll
+        }
+        if !command_context.inspector.background_open {
+            command_context.background_picker_open^ = false
+        }
+    case .INSPECTOR_PAGE_UP:
+        command_context.inspector.scroll_y = max(
+            command_context.inspector.scroll_y - 210,
+            f32(0),
+        )
+    case .INSPECTOR_PAGE_DOWN:
+        command_context.inspector.scroll_y = min(
+            command_context.inspector.scroll_y + 210,
+            command_context.inspector_max_scroll,
+        )
+    case .INSPECTOR_HOME:
+        command_context.inspector.scroll_y = 0
+    case .INSPECTOR_END:
+        command_context.inspector.scroll_y = command_context.inspector_max_scroll
+    case .LENS_PIXELATED:
+        command_context.lens_mode^ = .PIXELATED
+        log.info("Lens mode: pixelated")
+    case .LENS_BLENDED:
+        command_context.lens_mode^ = .BLENDED
+        log.info("Lens mode: blended 50/50")
+    case .LENS_COVERAGE:
+        command_context.lens_mode^ = .COVERAGE_MASK
+        log.info("Lens mode: 16-sample coverage mask")
+    case .TOGGLE_LENS_GRID:
+        command_context.lens_grid_visible^ =
+            !command_context.lens_grid_visible^
+        if command_context.lens_grid_visible^ {
+            log.info("Lens grid: on")
+        } else {
+            log.info("Lens grid: off")
+        }
+    case .EXPORT_PNG:
+        command_context.export_requested^ = true
+    case .CAMERA_X:
+        reset_camera_to_axis_view(
+            command_context.camera,
+            command_context.model_center,
+            {1, 0, 0},
+            {0, 1, 0},
+            command_context.scene_size,
+        )
+    case .CAMERA_Y:
+        reset_camera_to_axis_view(
+            command_context.camera,
+            command_context.model_center,
+            {0, 1, 0},
+            {0, 0, 1},
+            command_context.scene_size,
+        )
+    case .CAMERA_Z:
+        reset_camera_to_axis_view(
+            command_context.camera,
+            command_context.model_center,
+            {0, 0, 1},
+            {0, 1, 0},
+            command_context.scene_size,
+        )
+    case .CAMERA_ISOMETRIC:
+        reset_camera_to_axis_view(
+            command_context.camera,
+            command_context.model_center,
+            rl.Vector3Normalize({1, 1, 1}),
+            {0, 1, 0},
+            command_context.scene_size,
+        )
+    case .DOWNSCALE_DECREASE:
+        command_context.downscale_level^ = max(
+            command_context.downscale_level^ - 1,
+            c.int(MIN_DOWNSCALE_LEVEL),
+        )
+    case .DOWNSCALE_INCREASE:
+        command_context.downscale_level^ = min(
+            command_context.downscale_level^ + 1,
+            c.int(MAX_DOWNSCALE_LEVEL),
+        )
+    case .ANIMATION_PLAY_PAUSE:
+        if has_playable_animations(command_context.animation) {
+            command_context.animation.is_playing =
+                !command_context.animation.is_playing
+        }
+    case .ANIMATION_FIRST_FRAME:
+        if has_playable_animations(command_context.animation) {
+            animation_reset_to_first_frame(command_context.animation)
+        }
+    case .ANIMATION_PREVIOUS_FRAME:
+        _ = animation_step_frame(command_context.animation, -1)
+    case .ANIMATION_NEXT_FRAME:
+        _ = animation_step_frame(command_context.animation, 1)
+    case .ANIMATION_PREVIOUS_CLIP:
+        _ = animation_cycle_clip(command_context.animation, -1)
+    case .ANIMATION_NEXT_CLIP:
+        _ = animation_cycle_clip(command_context.animation, 1)
+    case .ANIMATION_TOGGLE_LOOP:
+        if has_playable_animations(command_context.animation) {
+            command_context.animation.loop = !command_context.animation.loop
+        }
+    case .ANIMATION_TOGGLE_SAMPLED:
+        if animation, found := get_active_animation(command_context.animation);
+           found {
+            command_context.animation.sampled_playback =
+                !command_context.animation.sampled_playback
+            if command_context.animation.sampled_playback {
+                command_context.animation.current_frame = get_animation_pose_frame(
+                    command_context.animation,
+                    animation,
+                )
+            }
+            command_context.animation.pose_dirty = true
+        }
+    case .CEL_PRESET_CLASSIC, .CEL_PRESET_ANIME, .CEL_PRESET_NOIR:
+        preset_index: c.int
+        if command == .CEL_PRESET_ANIME {
+            preset_index = 1
+        } else if command == .CEL_PRESET_NOIR {
+            preset_index = 2
+        }
+        command_context.cel_ui.preset_index = preset_index
+        _ = load_selected_cel_style_preset(
+            command_context.cel_ui,
+            command_context.cel_style,
+        )
+    case .CEL_RELOAD:
+        _ = load_selected_cel_style_preset(
+            command_context.cel_ui,
+            command_context.cel_style,
+        )
+    case .CEL_SAVE:
+        _ = save_selected_cel_style_preset(
+            command_context.cel_ui,
+            command_context.cel_style,
+        )
+    case .CEL_RESET:
+        reset_cel_style_to_classic(
+            command_context.cel_ui,
+            command_context.cel_style,
+        )
+    case .TOGGLE_BACKGROUND_PICKER:
+        command_context.inspector.background_open = true
+        command_context.background_picker_open^ =
+            !command_context.background_picker_open^
+        if command_context.background_picker_open^ {
+            command_context.cel_ui.color_target = .NONE
+            command_context.animation.dropdown_open = false
+            ui_keyboard_set_focus(.BACKGROUND_PICKER)
+        }
+    case .RESET_BACKGROUND:
+        command_context.background_color^ = rl.BLACK
+    }
+}
+
 run_application :: proc() -> int {
     console_logger := log.create_console_logger()
     defer log.destroy_console_logger(console_logger)
@@ -2676,6 +3049,7 @@ run_application :: proc() -> int {
     }
     rl.InitWindow(1280, 720, "Lab0")
     defer rl.CloseWindow();
+	rl.SetExitKey(.KEY_NULL)
 	if capture_options.enabled {
 		// Keep raygui hover and the coverage probe independent of the desktop's
 		// shared cursor while a deterministic capture is running.
@@ -3014,8 +3388,10 @@ run_application :: proc() -> int {
     capture_sequence_frame := capture_options.frame_range_start
     captured_sequence_frames := 0
     camera_mouse_drag := Camera_Mouse_Drag.NONE
+    quit_requested := false
+    shortcuts_help_open := false
 
-    for !rl.WindowShouldClose() && !capture_complete {
+    for !rl.WindowShouldClose() && !capture_complete && !quit_requested {
         if downscale_level != applied_downscale_level {
             requested_downscale_level := clamp(
                 downscale_level,
@@ -3101,15 +3477,84 @@ run_application :: proc() -> int {
             }
         }
 
-        search_shortcut_modifier := rl.IsKeyDown(.LEFT_CONTROL) ||
-                                    rl.IsKeyDown(.RIGHT_CONTROL) ||
-                                    rl.IsKeyDown(.LEFT_SUPER) ||
-                                    rl.IsKeyDown(.RIGHT_SUPER)
-        if window_focused && search_shortcut_modifier && rl.IsKeyPressed(.F) {
-            model_browser.search_editing = true
-            // Do not let the shortcut's F leak into the newly focused field.
-            for rl.GetCharPressed() != 0 {}
+        export_requested := false
+        active_modal := shortcuts_help_open || background_picker_open ||
+                        animation_playback.dropdown_open ||
+                        model_browser.search_editing ||
+                        cel_style_ui.color_target != .NONE
+        ui_keyboard_begin_frame(window_focused, active_modal)
+        if shortcuts_help_open {
+            ui_keyboard_set_focus(.HELP_CLOSE)
+        } else if model_browser.search_editing {
+            ui_keyboard_set_focus(.MODEL_SEARCH)
+        } else if animation_playback.dropdown_open {
+            ui_keyboard_set_focus(.ANIMATION_CLIP)
+        } else if background_picker_open {
+            ui_keyboard_set_focus(.BACKGROUND_PICKER)
+        } else {
+            switch cel_style_ui.color_target {
+            case .BAND_TINT: ui_keyboard_set_focus(.CEL_BAND_TINT_PICKER)
+            case .RIM:       ui_keyboard_set_focus(.CEL_RIM_PICKER)
+            case .HIGHLIGHT: ui_keyboard_set_focus(.CEL_HIGHLIGHT_PICKER)
+            case .OUTLINE:   ui_keyboard_set_focus(.CEL_OUTLINE_PICKER)
+            case .NONE:
+            }
         }
+
+        if window_focused && rl.IsKeyPressed(.ESCAPE) {
+            if shortcuts_help_open {
+                shortcuts_help_open = false
+                ui_keyboard_clear_focus()
+            } else if animation_playback.dropdown_open {
+                animation_playback.dropdown_open = false
+                ui_keyboard_set_focus(.ANIMATION_CLIP)
+            } else if background_picker_open {
+                background_picker_open = false
+                ui_keyboard_set_focus(.BACKGROUND_PICKER_TOGGLE)
+            } else if cel_style_ui.color_target != .NONE {
+                cel_style_ui.color_target = .NONE
+            } else if !model_browser.search_editing {
+                ui_keyboard_clear_focus()
+            }
+        }
+
+        shortcut_command := ui_keyboard_shortcut_command(
+            window_focused,
+            false,
+        )
+        if ui_keyboard_has_focus() &&
+           ui_command_conflicts_with_focused_control(shortcut_command) {
+            shortcut_command = .NONE
+        }
+        if active_modal && shortcut_command != .TOGGLE_HELP &&
+           shortcut_command != .QUIT {
+            shortcut_command = .NONE
+        }
+        inspector_max_scroll := max(
+            inspector_content_height(&inspector_ui, &cel_style_ui, &cel_style) -
+            (inspector_bounds.height - 36),
+            f32(0),
+        )
+        command_context := App_UI_Command_Context{
+            quit_requested = &quit_requested,
+            shortcuts_help_open = &shortcuts_help_open,
+            export_requested = &export_requested,
+            lens_mode = &lens_mode,
+            lens_grid_visible = &lens_grid_visible,
+            downscale_level = &downscale_level,
+            inspector = &inspector_ui,
+            inspector_max_scroll = inspector_max_scroll,
+            model_browser = &model_browser,
+            cel_ui = &cel_style_ui,
+            cel_style = &cel_style,
+            animation = &animation_playback,
+            camera = &control_camera,
+            model_center = model_center,
+            scene_size = scene_size,
+            background_color = &scene_background_color,
+            background_picker_open = &background_picker_open,
+        }
+        execute_ui_command(shortcut_command, &command_context)
 
         ui_mouse_position := rl.GetMousePosition()
         mouse_over_inspector := rl.CheckCollisionPointRec(
@@ -3124,10 +3569,27 @@ run_application :: proc() -> int {
             ui_mouse_position,
             animation_controls_bounds,
         )
+        input_lens_bounds := rl.Rectangle{
+            (f32(screen_width) - LENS_WIDTH) / 2,
+            (f32(screen_height) - LENS_HEIGHT) / 2,
+            LENS_WIDTH,
+            LENS_HEIGHT,
+        }
+        mouse_over_export_button := rl.CheckCollisionPointRec(
+            ui_mouse_position,
+            {
+                input_lens_bounds.x + (input_lens_bounds.width - 300) / 2,
+                input_lens_bounds.y + input_lens_bounds.height + 10,
+                300,
+                28,
+            },
+        )
         mouse_over_ui := mouse_over_inspector ||
                          mouse_over_background_picker ||
-                         mouse_over_animation_controls
-        ui_captures_camera_input := background_picker_open ||
+                         mouse_over_animation_controls ||
+                         mouse_over_export_button
+        ui_captures_camera_input := shortcuts_help_open ||
+                                    background_picker_open ||
                                     animation_playback.dropdown_open ||
                                     model_browser.search_editing ||
                                     cel_style_ui.color_target != .NONE
@@ -3152,6 +3614,14 @@ run_application :: proc() -> int {
             camera_drag_for_frame != .NONE,
             left_mouse_down || middle_mouse_down,
         )
+        if ui_keyboard_has_focus() || ui_shortcut_uses_command_modifier() {
+            camera_input.keyboard = false
+        }
+        if !mouse_over_ui &&
+           (rl.IsMouseButtonPressed(.LEFT) ||
+            rl.IsMouseButtonPressed(.MIDDLE)) {
+            ui_keyboard_clear_focus()
+        }
         if camera_input.keyboard || camera_input.mouse {
             update_camera_controls(
                 &control_camera,
@@ -3173,51 +3643,6 @@ run_application :: proc() -> int {
             model_center,
             downsample_height,
         )
-
-        export_requested := false
-        if window_focused && !model_browser.search_editing {
-            if rl.IsKeyPressed(.C) {
-                cel_style_ui.open = !cel_style_ui.open
-                if cel_style_ui.open {
-                    background_picker_open = false
-                    animation_playback.dropdown_open = false
-                    sync_cel_style_light_angles(&cel_style_ui, &cel_style)
-                    inspector_ui.scroll_y = inspector_cel_section_offset(
-                        &inspector_ui,
-                    )
-                } else {
-                    cel_style_ui.color_target = .NONE
-                }
-            }
-            if rl.IsKeyPressed(.ONE) || rl.IsKeyPressed(.KP_1) {
-                lens_mode = .PIXELATED
-                log.info("Lens mode: pixelated")
-            }
-            if rl.IsKeyPressed(.TWO) || rl.IsKeyPressed(.KP_2) {
-                lens_mode = .BLENDED
-                log.info("Lens mode: blended 50/50")
-            }
-            if rl.IsKeyPressed(.THREE) || rl.IsKeyPressed(.KP_3) {
-                lens_mode = .COVERAGE_MASK
-                log.info("Lens mode: 16-sample coverage mask")
-            }
-            if rl.IsKeyPressed(.G) {
-                lens_grid_visible = !lens_grid_visible
-                if lens_grid_visible {
-                    log.info("Lens grid: on")
-                } else {
-                    log.info("Lens grid: off")
-                }
-            }
-            if rl.IsKeyPressed(.P) {
-                export_requested = true
-            }
-            if has_playable_animations(&animation_playback) &&
-               !animation_playback.dropdown_open &&
-               rl.IsKeyPressed(.SPACE) {
-                animation_playback.is_playing = !animation_playback.is_playing
-            }
-        }
 
         update_animation_playback(&animation_playback, active_model)
 
@@ -3495,8 +3920,9 @@ run_application :: proc() -> int {
         rl.EndTextureMode()
 
         rl.BeginTextureMode(composite_render_target)
-            camera_drag_locks_gui := camera_drag_for_frame != .NONE
-            if camera_drag_locks_gui {
+            composite_locks_gui := camera_drag_for_frame != .NONE ||
+                                   shortcuts_help_open
+            if composite_locks_gui {
                 rl.GuiLock()
             }
             rl.ClearBackground(scene_background_color)
@@ -3605,7 +4031,8 @@ run_application :: proc() -> int {
                 300,
                 28,
             }
-            if rl.GuiButton(
+            if ui_gui_button(
+                .EXPORT_PNG,
                 export_button_bounds,
                 rl.TextFormat(
                     "EXPORT %d x %d TRANSPARENT PNG [P]",
@@ -3663,9 +4090,21 @@ run_application :: proc() -> int {
                 &scene_background_color,
                 &background_picker_open,
             )
-            if camera_drag_locks_gui {
+            if composite_locks_gui {
                 rl.GuiUnlock()
             }
+            if shortcuts_help_open {
+                draw_shortcut_help(
+                    {
+                        (f32(screen_width) - 930) * 0.5,
+                        (f32(screen_height) - 560) * 0.5,
+                        930,
+                        560,
+                    },
+                    &shortcuts_help_open,
+                )
+            }
+            ui_keyboard_end_frame()
         rl.EndTextureMode()
 
         if export_requested {
