@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import json "core:encoding/json"
 import "core:os"
 import "core:log"
 import "core:math"
@@ -8,7 +9,6 @@ import "core:slice"
 import "core:strings"
 import rl "vendor:raylib"
 import rgl "vendor:raylib/rlgl"
-// import cgltf "vendor:cgltf"
 
 Vertex :: struct {
     position: [3]f32,
@@ -23,6 +23,7 @@ MASK_DOWNSCALE_FS_PATH :: "shaders/mask_downscale.fs"
 ASSETS_PATH         :: "assets"
 DEFAULT_MODEL_PATH  :: "assets/CesiumMan.glb"
 ANIMATION_SAMPLE_FPS :: 60.0
+GLTF_SKIN_SCALE_EPSILON :: f32(0.0001)
 
 DEFAULT_DOWNSCALE_LEVEL :: 10
 MIN_DOWNSCALE_LEVEL     :: 1
@@ -549,6 +550,264 @@ destroy_animation_playback :: proc(playback: ^Animation_Playback) {
     playback^ = {}
 }
 
+get_pure_uniform_scale_from_matrix :: proc(
+    transform: [16]f32,
+) -> (scale: f32, valid: bool) {
+    // glTF matrices are column-major. Only compensate transforms that are a
+    // positive uniform scale around the origin; translation, rotation, shear,
+    // or non-uniform scale require a full skin-matrix conversion instead.
+    zero_indices := [?]int{1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14}
+    for index in zero_indices {
+        if math.abs(transform[index]) > GLTF_SKIN_SCALE_EPSILON {
+            return 1, false
+        }
+    }
+    if math.abs(transform[15] - 1) > GLTF_SKIN_SCALE_EPSILON {
+        return 1, false
+    }
+
+    scale = transform[0]
+    if scale <= GLTF_SKIN_SCALE_EPSILON ||
+       math.abs(transform[5] - scale) > GLTF_SKIN_SCALE_EPSILON ||
+       math.abs(transform[10] - scale) > GLTF_SKIN_SCALE_EPSILON {
+        return 1, false
+    }
+    return scale, true
+}
+
+GLTF_Skin_Node_Metadata :: struct {
+    mesh:             Maybe(int),
+    skin:             Maybe(int),
+    children:         []int,
+    transform_matrix: Maybe([16]f32) `json:"matrix"`,
+    translation:      Maybe([3]f32),
+    rotation:         Maybe([4]f32),
+    scale:            Maybe([3]f32),
+}
+
+GLTF_Skin_Metadata :: struct {
+    nodes: []GLTF_Skin_Node_Metadata,
+}
+
+destroy_gltf_skin_metadata :: proc(metadata: ^GLTF_Skin_Metadata) {
+    for node in metadata.nodes {
+        delete(node.children)
+    }
+    delete(metadata.nodes)
+    metadata^ = {}
+}
+
+get_gltf_json_bytes :: proc(file_data: []byte) -> (
+    json_bytes: []byte,
+    valid: bool,
+) {
+    if len(file_data) < 4 ||
+       file_data[0] != 'g' || file_data[1] != 'l' ||
+       file_data[2] != 'T' || file_data[3] != 'F' {
+        return file_data, true
+    }
+    if len(file_data) < 20 {
+        return nil, false
+    }
+
+    chunk_length := int(u32(file_data[12]) |
+                        u32(file_data[13]) << 8 |
+                        u32(file_data[14]) << 16 |
+                        u32(file_data[15]) << 24)
+    is_json_chunk := file_data[16] == 'J' && file_data[17] == 'S' &&
+                     file_data[18] == 'O' && file_data[19] == 'N'
+    if !is_json_chunk || chunk_length < 0 || chunk_length > len(file_data) - 20 {
+        return nil, false
+    }
+    return file_data[20:20 + chunk_length], true
+}
+
+get_gltf_node_local_uniform_scale :: proc(
+    node: GLTF_Skin_Node_Metadata,
+) -> (scale: f32, valid: bool) {
+    if node_matrix, matrix_present := node.transform_matrix.?;
+       matrix_present {
+        if node.translation != nil {
+            return 1, false
+        }
+        if node.rotation != nil {
+            return 1, false
+        }
+        if node.scale != nil {
+            return 1, false
+        }
+        return get_pure_uniform_scale_from_matrix(node_matrix)
+    }
+
+    if translation, translation_present := node.translation.?;
+       translation_present {
+        if math.abs(translation[0]) > GLTF_SKIN_SCALE_EPSILON ||
+           math.abs(translation[1]) > GLTF_SKIN_SCALE_EPSILON ||
+           math.abs(translation[2]) > GLTF_SKIN_SCALE_EPSILON {
+            return 1, false
+        }
+    }
+
+    if rotation, rotation_present := node.rotation.?; rotation_present {
+        if math.abs(rotation[0]) > GLTF_SKIN_SCALE_EPSILON ||
+           math.abs(rotation[1]) > GLTF_SKIN_SCALE_EPSILON ||
+           math.abs(rotation[2]) > GLTF_SKIN_SCALE_EPSILON ||
+           math.abs(math.abs(rotation[3]) - 1) > GLTF_SKIN_SCALE_EPSILON {
+            return 1, false
+        }
+    }
+
+    if node_scale, scale_present := node.scale.?; scale_present {
+        if node_scale[0] <= GLTF_SKIN_SCALE_EPSILON ||
+           math.abs(node_scale[1] - node_scale[0]) >
+               GLTF_SKIN_SCALE_EPSILON ||
+           math.abs(node_scale[2] - node_scale[0]) >
+               GLTF_SKIN_SCALE_EPSILON {
+            return 1, false
+        }
+        return node_scale[0], true
+    }
+    return 1, true
+}
+
+get_gltf_skinned_mesh_uniform_scale :: proc(
+    model_path: string,
+) -> (scale: f32, found: bool) {
+    is_gltf := strings.has_suffix(model_path, ".glb") ||
+               strings.has_suffix(model_path, ".gltf") ||
+               strings.has_suffix(model_path, ".GLB") ||
+               strings.has_suffix(model_path, ".GLTF")
+    if !is_gltf {
+        return 1, false
+    }
+
+    file_data, read_error := os.read_entire_file(model_path, context.allocator)
+    if read_error != nil {
+        return 1, false
+    }
+    defer delete(file_data)
+
+    json_bytes, gltf_valid := get_gltf_json_bytes(file_data)
+    if !gltf_valid {
+        return 1, false
+    }
+    metadata: GLTF_Skin_Metadata
+    unmarshal_error := json.unmarshal(
+        json_bytes,
+        &metadata,
+        spec = .JSON,
+    )
+    defer destroy_gltf_skin_metadata(&metadata)
+    if unmarshal_error != nil || len(metadata.nodes) == 0 {
+        return 1, false
+    }
+
+    parents := make([]int, len(metadata.nodes))
+    defer delete(parents)
+    for &parent in parents {
+        parent = -1
+    }
+    for node, parent_index in metadata.nodes {
+        for child_index in node.children {
+            if child_index < 0 || child_index >= len(metadata.nodes) {
+                return 1, false
+            }
+            if parents[child_index] >= 0 {
+                return 1, false
+            }
+            parents[child_index] = parent_index
+        }
+    }
+
+    uniform_scale := f32(1)
+    scale_found := false
+    for node, node_index in metadata.nodes {
+        mesh_index, mesh_present := node.mesh.?
+        skin_index, skin_present := node.skin.?
+        if !mesh_present || !skin_present {
+            continue
+        }
+        if mesh_index < 0 || skin_index < 0 {
+            return 1, false
+        }
+
+        node_scale := f32(1)
+        ancestor_index := node_index
+        ancestor_count := 0
+        for ancestor_index >= 0 {
+            if ancestor_count >= len(metadata.nodes) {
+                return 1, false
+            }
+            ancestor := metadata.nodes[ancestor_index]
+            local_scale, local_valid :=
+                get_gltf_node_local_uniform_scale(ancestor)
+            if !local_valid {
+                return 1, false
+            }
+            node_scale *= local_scale
+            ancestor_index = parents[ancestor_index]
+            ancestor_count += 1
+        }
+        if scale_found &&
+           math.abs(node_scale - uniform_scale) > GLTF_SKIN_SCALE_EPSILON {
+            // A model-wide pose correction cannot represent differently
+            // scaled skinned meshes sharing raylib's single skeleton.
+            return 1, false
+        }
+        uniform_scale = node_scale
+        scale_found = true
+    }
+    return uniform_scale, scale_found
+}
+
+apply_gltf_skin_scale_correction :: proc(
+    model: rl.Model,
+    playback: ^Animation_Playback,
+    model_path: string,
+) -> bool {
+    if model.skeleton.boneCount <= 0 ||
+       model.skeleton.bindPose == nil ||
+       playback.animations == nil {
+        return false
+    }
+
+    uniform_scale, scale_found :=
+        get_gltf_skinned_mesh_uniform_scale(model_path)
+    if !scale_found ||
+       math.abs(uniform_scale - 1) <= GLTF_SKIN_SCALE_EPSILON {
+        return false
+    }
+
+    // raylib bakes this node scale into mesh vertices but leaves absolute bone
+    // translations in the unscaled skeleton space. Put both bind and animated
+    // translations into the same scaled space before CPU skinning.
+    for bone_index := 0;
+        bone_index < int(model.skeleton.boneCount);
+        bone_index += 1 {
+        model.skeleton.bindPose[bone_index].translation *= uniform_scale
+    }
+    for valid_index in playback.valid_indices {
+        animation := playback.animations[valid_index]
+        for frame_index := 0;
+            frame_index < int(animation.keyframeCount);
+            frame_index += 1 {
+            for bone_index := 0;
+                bone_index < int(animation.boneCount);
+                bone_index += 1 {
+                animation.keyframePoses[frame_index][bone_index].translation *=
+                    uniform_scale
+            }
+        }
+    }
+
+    log.infof(
+        "Applied glTF skin scale correction %.6f to %s",
+        uniform_scale,
+        model_path,
+    )
+    return true
+}
+
 load_animation_playback :: proc(
     model: rl.Model,
     model_path: string,
@@ -627,6 +886,8 @@ load_animation_playback :: proc(
     playback.current_frame = 0
     playback.applied_frame = 0
     playback.pose_dirty = true
+
+    apply_gltf_skin_scale_correction(model, &playback, model_path)
 
     animation, animation_found := get_active_animation(&playback)
     if animation_found {
