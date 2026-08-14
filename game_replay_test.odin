@@ -53,6 +53,47 @@ game_replay_fixture_loads_and_drives_the_real_simulation :: proc(t: ^testing.T) 
 }
 
 @(test)
+game_pixel_snap_replay_keeps_fixed_pose_subjects_on_parallel_lanes :: proc(
+    t: ^testing.T,
+) {
+    replay, replay_error := load_game_replay("replays/pixel-snap-fixed-pose.json")
+    testing.expect_value(t, replay_error, Game_Replay_Error.NONE)
+    if replay_error != .NONE {
+        return
+    }
+    defer destroy_game_replay(&replay)
+
+    state := game_state_init(replay.start_room)
+    zombie_index := GAME_ZOMBIE_COUNT - 1
+    player: Game_Replay_Player
+    for {
+        input, available := game_replay_next_input(&replay, &player)
+        if !available {
+            break
+        }
+        game_fixed_update(&state, input, GAME_FIXED_DT)
+    }
+
+    testing.expect_value(t, replay.total_ticks, u64(240))
+    testing.expect_value(t, state.current_room, Game_Room_ID.TEST_PIXEL_SNAP)
+    testing.expect_value(t, state.tick, u64(240))
+    testing.expect_value(t, state.dash_count, 0)
+    testing.expectf(
+        t,
+        state.player.position.x > -2.67 && state.player.position.x < -2.66,
+        "player should finish its fixed-pose lane near -2.667, got %.6f",
+        state.player.position.x,
+    )
+    testing.expectf(
+        t,
+        state.zombies[zombie_index].position.x > 2.66 &&
+            state.zombies[zombie_index].position.x < 2.67,
+        "zombie should finish its fixed-pose lane near 2.667, got %.6f",
+        state.zombies[zombie_index].position.x,
+    )
+}
+
+@(test)
 game_replay_validation_rejects_bad_segments :: proc(t: ^testing.T) {
     replay_file := Game_Replay_File{
         schema_version = GAME_REPLAY_SCHEMA_VERSION,

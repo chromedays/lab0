@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "start_room": "T01",
+  "segments": [
+    {
+      "ticks": 240,
+      "move": [1.0, 0.0],
+      "dash_on_first": false
+    }
+  ]
+}

@@ -20,7 +20,7 @@ GAME_DASH_BUFFER           :: f32(0.10)
 GAME_GAMEPAD_DEADZONE      :: f32(0.20)
 GAME_EXIT_REENTRY_LOCK     :: f32(0.15)
 GAME_GOAL_RADIUS           :: f32(1.2)
-GAME_ZOMBIE_COUNT          :: 7
+GAME_ZOMBIE_COUNT          :: 8
 GAME_ZOMBIE_RADIUS         :: f32(0.34)
 GAME_ZOMBIE_SHAMBLE_SPEED  :: f32(0.72)
 GAME_ZOMBIE_CHASE_SPEED    :: f32(1.65)
@@ -32,6 +32,9 @@ GAME_ZOMBIE_WINDUP_TIME    :: f32(0.46)
 GAME_ZOMBIE_LUNGE_TIME     :: f32(0.22)
 GAME_ZOMBIE_LUNGE_SPEED    :: f32(7.0)
 GAME_ZOMBIE_RECOVERY_TIME  :: f32(0.62)
+// The T01 diagnostic moves both subjects by exactly one quarter of a 256x144
+// render pixel per fixed tick: (8 world units / 144 pixels) * 60 Hz / 4.
+GAME_PIXEL_SNAP_TEST_SPEED :: f32(5.0 / 6.0)
 
 Game_Room_ID :: enum {
     R00_START_FOREST,
@@ -42,6 +45,7 @@ Game_Room_ID :: enum {
     R05_OVERLOOK,
     R06_LOWER_TRAIL,
     TEST_OCCLUSION,
+    TEST_PIXEL_SNAP,
 }
 
 Game_Player_Mode :: enum {
@@ -232,6 +236,15 @@ GAME_ROOMS := [?]Game_Room{
         camera_follow = false,
         color = {45, 45, 63, 255},
     },
+    {
+        id = .TEST_PIXEL_SNAP,
+        name = "T01 Pixel Snap Test",
+        bounds = {-8, 26, 8, 34},
+        floor_y = 0,
+        spawn = {-6, 0, 31.5},
+        camera_follow = false,
+        color = {28, 48, 62, 255},
+    },
 }
 
 GAME_EXITS := [?]Game_Room_Exit{
@@ -282,6 +295,7 @@ GAME_ZOMBIE_SPAWNS := [GAME_ZOMBIE_COUNT]Game_Zombie_Spawn{
     {.R03_WIDE_GROVE, {55.0, 0, 5.4}, {60.5, 0, 5.2}},
     {.R03_WIDE_GROVE, {65.1, 0, 5.3}, {65.4, 0, 2.7}},
     {.R03_WIDE_GROVE, {62.0, 0, -5.1}, {58.8, 0, -4.2}},
+    {.TEST_PIXEL_SNAP, {6, 0, 28.5}, {-6, 0, 28.5}},
 }
 
 GAME_OVERLOOK_POSITION :: rl.Vector3{18, 2.35, -18}
@@ -308,6 +322,8 @@ game_room_from_string :: proc(value: string) -> (Game_Room_ID, bool) {
         return .R06_LOWER_TRAIL, true
     case "T00", "t00", "occlusion-test":
         return .TEST_OCCLUSION, true
+    case "T01", "t01", "pixel-snap-test":
+        return .TEST_PIXEL_SNAP, true
     }
     return .R00_START_FOREST, false
 }
@@ -615,6 +631,30 @@ game_update_zombie :: proc(
         return false
     }
     zombie := &state.zombies[zombie_index]
+    if spawn.room == .TEST_PIXEL_SNAP {
+        // Keep the diagnostic independent from perception, attacks, and their
+        // pose changes. The subject only translates along its authored lane.
+        patrol_target := spawn.patrol_end
+        if !zombie.patrol_to_end {
+            patrol_target = spawn.position
+        }
+        patrol_delta := rl.Vector2{
+            patrol_target.x - zombie.position.x,
+            patrol_target.z - zombie.position.z,
+        }
+        if game_vector_length(patrol_delta) <= 0.0001 {
+            zombie.patrol_to_end = !zombie.patrol_to_end
+        } else {
+            game_zombie_walk_towards(
+                state,
+                zombie_index,
+                patrol_target,
+                GAME_PIXEL_SNAP_TEST_SPEED,
+                dt,
+            )
+        }
+        return false
+    }
     to_player := rl.Vector2{
         state.player.position.x - zombie.position.x,
         state.player.position.z - zombie.position.z,
@@ -943,6 +983,19 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
     dash_noise := raw_input.dash_pressed || state.player.mode == .DASHING
     state.player.dash_cooldown = max(state.player.dash_cooldown - dt, 0)
     state.player.exit_reentry_lock = max(state.player.exit_reentry_lock - dt, 0)
+
+    if state.current_room == .TEST_PIXEL_SNAP {
+        // T01 removes acceleration, dashes, collisions, AI, and rotation from
+        // the visual experiment. Only deterministic sub-pixel translation is
+        // allowed to change the two fixed-pose subjects.
+        move_input := game_normalize_input(rl.Vector2{raw_input.move.x, 0})
+        state.player.facing = {1, 0}
+        state.player.velocity = move_input * GAME_PIXEL_SNAP_TEST_SPEED
+        game_move_grounded(state, state.player.velocity * dt)
+        state.last_safe_position = state.player.position
+        game_update_zombies(state, false, dt)
+        return
+    }
 
     if raw_input.dash_pressed {
         state.player.dash_buffer = GAME_DASH_BUFFER

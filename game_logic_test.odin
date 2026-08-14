@@ -4,6 +4,45 @@ import "core:math"
 import "core:testing"
 import rl "vendor:raylib"
 
+@(test)
+game_pixel_snap_test_moves_fixed_subjects_one_pixel_every_four_ticks :: proc(
+    t: ^testing.T,
+) {
+    state := game_state_init(.TEST_PIXEL_SNAP)
+    player_start := state.player.position
+    zombie_index := GAME_ZOMBIE_COUNT - 1
+    testing.expect_value(
+        t,
+        GAME_ZOMBIE_SPAWNS[zombie_index].room,
+        Game_Room_ID.TEST_PIXEL_SNAP,
+    )
+    zombie_start := state.zombies[zombie_index].position
+
+    for _ in 0 ..< 4 {
+        game_fixed_update(&state, Game_Input{{1, 0}, true}, GAME_FIXED_DT)
+    }
+
+    one_pixel := GAME_CAMERA_FOVY / f32(GAME_PIXEL_HEIGHT)
+    testing.expectf(
+        t,
+        math.abs(state.player.position.x - (player_start.x + one_pixel)) < 0.00001,
+        "player should move one render pixel in four ticks, got %.6f",
+        state.player.position.x - player_start.x,
+    )
+    testing.expectf(
+        t,
+        math.abs(state.zombies[zombie_index].position.x -
+                 (zombie_start.x - one_pixel)) < 0.00001,
+        "zombie should move one render pixel in four ticks, got %.6f",
+        state.zombies[zombie_index].position.x - zombie_start.x,
+    )
+    testing.expect_value(t, state.player.facing, rl.Vector2{1, 0})
+    testing.expect_value(t, state.player.mode, Game_Player_Mode.GROUNDED)
+    testing.expect_value(t, state.dash_count, 0)
+    testing.expect_value(t, state.zombies[zombie_index].facing, rl.Vector2{-1, 0})
+    testing.expect_value(t, state.zombies[zombie_index].mode, Game_Zombie_Mode.SHAMBLING)
+}
+
 game_test_finish_transition :: proc(
     t: ^testing.T,
     state: ^Game_State,

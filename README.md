@@ -138,6 +138,38 @@ scripts/test-game.sh \
 Replace the replay path with `replays/tree-occlusion-edge-debug.json` for the
 edge-boundary sweep.
 
+### Pixel-snap test scene
+
+Use isolated `T01` to evaluate translation without animation noise. The camera,
+player pose, zombie pose, facings, floor grid, and lighting stay fixed. The
+player and zombie move in opposite horizontal lanes at one quarter of a
+256×144 render pixel per 60 Hz tick, so a correctly snapped result should hold
+for multiple ticks and then advance by exactly one whole pixel:
+
+Game rendering keeps simulation positions continuous, quantizes each moving
+entity anchor in the camera plane, and sends one rigid offset through both the
+color and cel-band vertex passes. This keeps the whole mesh and its shading
+coherent instead of rounding individual vertices.
+
+```sh
+scripts/test-game.sh \
+  --video-report artifacts/pixel-snap-fixed-pose-report \
+  --replay replays/pixel-snap-fixed-pose.json
+```
+
+For lossless frame-by-frame analysis, build a fresh binary and record the
+downsample target:
+
+```sh
+odin build . -out:/tmp/lab0-pixel-snap-test
+/tmp/lab0-pixel-snap-test \
+  --mode game \
+  --game-replay replays/pixel-snap-fixed-pose.json \
+  --game-record-dir /tmp/lab0-pixel-snap-test-frames \
+  --capture-case pixel-snap-fixed-pose \
+  --capture-target downsample
+```
+
 ### Automated gameplay checks
 
 Gameplay rules run at a fixed 60 Hz in `game_fixed_update`, independently of a
