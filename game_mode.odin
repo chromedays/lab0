@@ -18,8 +18,13 @@ GAME_SCREEN_HEIGHT      :: 720
 GAME_PIXEL_WIDTH        :: 256
 GAME_PIXEL_HEIGHT       :: 144
 GAME_CAMERA_FOVY        :: f32(8.0)
-GAME_CAMERA_SMOOTH_TIME :: f32(0.12)
-GAME_CAMERA_LOOK_AHEAD  :: f32(0.7)
+GAME_CAMERA_SMOOTH_TIME :: f32(0.16)
+GAME_CAMERA_LOOK_AHEAD  :: f32(0.5)
+GAME_CAMERA_LOOK_AHEAD_SMOOTH_TIME :: f32(0.18)
+GAME_CAMERA_DEADZONE_HALF_X_RATIO  :: f32(0.08)
+GAME_CAMERA_DEADZONE_HALF_Z_RATIO  :: f32(0.075)
+GAME_CAMERA_ROOM_MARGIN_X          :: f32(3.8)
+GAME_CAMERA_ROOM_MARGIN_Z          :: f32(2.5)
 GAME_CONNECTION_HEIGHT  :: f32(0.18)
 GAME_CONNECTION_LIFT    :: f32(0.015)
 GAME_OVERLAY_HEIGHT     :: f32(0.06)
@@ -43,8 +48,12 @@ Game_Run_Options :: struct {
 }
 
 Game_Camera_State :: struct {
-    target:      rl.Vector3,
-    initialized: bool,
+    target:                  rl.Vector3,
+    look_ahead:              rl.Vector2,
+    transition_start_target: rl.Vector3,
+    transition_end_target:   rl.Vector3,
+    initialized:             bool,
+    transition_active:       bool,
 }
 
 Game_Pixel_Snap_Offset :: struct {
@@ -837,47 +846,56 @@ game_room_center :: proc(room_id: Game_Room_ID) -> rl.Vector3 {
     }
 }
 
-game_camera_desired_target :: proc(
-    camera_state: ^Game_Camera_State,
-    state: ^Game_State,
-    move_input: rl.Vector2,
+game_camera_room_target :: proc(
+    room_id: Game_Room_ID,
+    player_position: rl.Vector3,
+    look_ahead: rl.Vector2,
+    reference_target: rl.Vector3,
 ) -> rl.Vector3 {
-    room := game_room(state.current_room)
-    desired := game_room_center(state.current_room)
-    if room.camera_follow {
-        if camera_state.initialized {
-            desired = camera_state.target
-        }
-        focus_x := state.player.position.x + move_input.x * GAME_CAMERA_LOOK_AHEAD
-        focus_z := state.player.position.z + move_input.y * GAME_CAMERA_LOOK_AHEAD
-        deadzone_half_x := GAME_CAMERA_FOVY * (16.0 / 9.0) * 0.07
-        deadzone_half_z := GAME_CAMERA_FOVY * 0.05
-        if focus_x < desired.x - deadzone_half_x {
-            desired.x = focus_x + deadzone_half_x
-        } else if focus_x > desired.x + deadzone_half_x {
-            desired.x = focus_x - deadzone_half_x
-        }
-        if focus_z < desired.z - deadzone_half_z {
-            desired.z = focus_z + deadzone_half_z
-        } else if focus_z > desired.z + deadzone_half_z {
-            desired.z = focus_z - deadzone_half_z
-        }
-        desired.x = clamp(desired.x, room.bounds.min_x + 4.2, room.bounds.max_x - 4.2)
-        desired.z = clamp(desired.z, room.bounds.min_z + 3.0, room.bounds.max_z - 3.0)
-        desired.y = room.floor_y + 0.65
+    room := game_room(room_id)
+    if !room.camera_follow {
+        return game_room_center(room_id)
     }
-    if state.player.mode == .ROOM_TRANSITION {
-        progress := clamp(
-            state.player.transition_elapsed / state.player.transition_duration,
-            f32(0),
-            f32(1),
-        )
-        smooth := progress * progress * (3 - 2 * progress)
-        from_target := game_room_center(state.player.transition_from_room)
-        to_target := game_room_center(state.player.transition_to_room)
-        desired = from_target + (to_target - from_target) * smooth
+
+    desired := reference_target
+    desired.y = room.floor_y + 0.65
+    focus_x := player_position.x + look_ahead.x
+    focus_z := player_position.z + look_ahead.y
+    deadzone_half_x := GAME_CAMERA_FOVY * (16.0 / 9.0) *
+                       GAME_CAMERA_DEADZONE_HALF_X_RATIO
+    deadzone_half_z := GAME_CAMERA_FOVY * GAME_CAMERA_DEADZONE_HALF_Z_RATIO
+    if focus_x < desired.x - deadzone_half_x {
+        desired.x = focus_x + deadzone_half_x
+    } else if focus_x > desired.x + deadzone_half_x {
+        desired.x = focus_x - deadzone_half_x
     }
+    if focus_z < desired.z - deadzone_half_z {
+        desired.z = focus_z + deadzone_half_z
+    } else if focus_z > desired.z + deadzone_half_z {
+        desired.z = focus_z - deadzone_half_z
+    }
+    desired.x = clamp(
+        desired.x,
+        room.bounds.min_x + GAME_CAMERA_ROOM_MARGIN_X,
+        room.bounds.max_x - GAME_CAMERA_ROOM_MARGIN_X,
+    )
+    desired.z = clamp(
+        desired.z,
+        room.bounds.min_z + GAME_CAMERA_ROOM_MARGIN_Z,
+        room.bounds.max_z - GAME_CAMERA_ROOM_MARGIN_Z,
+    )
     return desired
+}
+
+game_camera_smootherstep :: proc(value: f32) -> f32 {
+    t := clamp(value, f32(0), f32(1))
+    return t * t * t * (t * (t * 6 - 15) + 10)
+}
+
+game_camera_round_pixel_coordinate :: proc(value: f32) -> f32 {
+    // One rule for camera and entity anchors avoids opposite one-pixel choices
+    // at negative half-pixel coordinates.
+    return math.floor(value + 0.5)
 }
 
 game_update_camera :: proc(
@@ -886,11 +904,56 @@ game_update_camera :: proc(
     move_input: rl.Vector2,
     dt: f32,
 ) -> rl.Camera3D {
-    desired := game_camera_desired_target(camera_state, state, move_input)
     if !camera_state.initialized {
-        camera_state.target = desired
+        camera_state.target = game_camera_room_target(
+            state.current_room,
+            state.player.position,
+            {},
+            game_room_center(state.current_room),
+        )
         camera_state.initialized = true
+    }
+
+    look_ahead_target: rl.Vector2
+    if state.player.mode != .ROOM_TRANSITION {
+        look_ahead_target = game_normalize_input(move_input) * GAME_CAMERA_LOOK_AHEAD
+    }
+    look_ahead_smoothing := f32(1) -
+                            math.exp(-dt / GAME_CAMERA_LOOK_AHEAD_SMOOTH_TIME)
+    camera_state.look_ahead +=
+        (look_ahead_target - camera_state.look_ahead) * look_ahead_smoothing
+
+    if state.player.mode == .ROOM_TRANSITION {
+        if !camera_state.transition_active {
+            camera_state.transition_active = true
+            camera_state.transition_start_target = camera_state.target
+            camera_state.transition_end_target = game_camera_room_target(
+                state.player.transition_to_room,
+                state.player.transition_end,
+                {},
+                game_room_center(state.player.transition_to_room),
+            )
+        }
+        progress := state.player.transition_elapsed /
+                    state.player.transition_duration
+        smooth := game_camera_smootherstep(progress)
+        camera_state.target = camera_state.transition_start_target +
+                              (camera_state.transition_end_target -
+                               camera_state.transition_start_target) * smooth
+    } else if camera_state.transition_active {
+        // The fixed update changes rooms on the same tick that progress reaches
+        // one. Land exactly on the authored entrance framing before resuming
+        // ordinary follow smoothing.
+        camera_state.target = camera_state.transition_end_target
+        camera_state.look_ahead = {}
+        camera_state.transition_active = false
     } else {
+        desired := game_camera_room_target(
+            state.current_room,
+            state.player.position,
+            camera_state.look_ahead,
+            camera_state.target,
+        )
         smoothing := f32(1) - math.exp(-dt / GAME_CAMERA_SMOOTH_TIME)
         camera_state.target += (desired - camera_state.target) * smoothing
     }
@@ -911,8 +974,12 @@ game_update_camera :: proc(
     up := rl.Vector3Normalize(rl.Vector3CrossProduct(right, forward))
     horizontal := rl.Vector3DotProduct(camera.target, right)
     vertical := rl.Vector3DotProduct(camera.target, up)
-    snapped_horizontal := math.round(horizontal / world_units_per_pixel) * world_units_per_pixel
-    snapped_vertical := math.round(vertical / world_units_per_pixel) * world_units_per_pixel
+    snapped_horizontal := game_camera_round_pixel_coordinate(
+        horizontal / world_units_per_pixel,
+    ) * world_units_per_pixel
+    snapped_vertical := game_camera_round_pixel_coordinate(
+        vertical / world_units_per_pixel,
+    ) * world_units_per_pixel
     correction := right * (snapped_horizontal - horizontal) +
                   up * (snapped_vertical - vertical)
     camera.target += correction
@@ -938,8 +1005,8 @@ game_pixel_snap_offset :: proc(
     up := rl.Vector3Normalize(rl.Vector3CrossProduct(right, forward))
     horizontal_pixels := rl.Vector3DotProduct(anchor, right) / world_units_per_pixel
     vertical_pixels := rl.Vector3DotProduct(anchor, up) / world_units_per_pixel
-    snapped_horizontal := math.floor(horizontal_pixels + 0.5)
-    snapped_vertical := math.floor(vertical_pixels + 0.5)
+    snapped_horizontal := game_camera_round_pixel_coordinate(horizontal_pixels)
+    snapped_vertical := game_camera_round_pixel_coordinate(vertical_pixels)
     horizontal_delta := snapped_horizontal - horizontal_pixels
     vertical_delta := snapped_vertical - vertical_pixels
     return {

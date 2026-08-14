@@ -46,9 +46,10 @@ if [ ! -f "$replay_path" ]; then
     exit 2
 fi
 
-run_id=$$
-binary="/tmp/lab0-game-autotest-${run_id}"
-output_dir="/tmp/lab0-game-autotest-${run_id}-captures"
+run_root=$(mktemp -d /tmp/lab0-game-autotest.XXXXXX)
+run_id=${run_root##*.}
+binary="${run_root}/lab0-game-autotest"
+output_dir="${run_root}/captures"
 capture_a="${output_dir}/dash-tick-5-a.png"
 capture_b="${output_dir}/dash-tick-5-b.png"
 log_a="${output_dir}/dash-tick-5-a.log"

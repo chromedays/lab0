@@ -171,7 +171,7 @@ GAME_ROOMS := [?]Game_Room{
         bounds = {-8, -5, 8, 5},
         floor_y = 0,
         spawn = {0, 0, 1.5},
-        camera_follow = false,
+        camera_follow = true,
         color = {28, 103, 102, 255},
     },
     {
@@ -198,7 +198,7 @@ GAME_ROOMS := [?]Game_Room{
         bounds = {49, -7, 67, 7},
         floor_y = 0,
         spawn = {50, 0, 0},
-        camera_follow = false,
+        camera_follow = true,
         color = {30, 108, 78, 255},
     },
     {
@@ -207,7 +207,7 @@ GAME_ROOMS := [?]Game_Room{
         bounds = {29, -23, 47, -13},
         floor_y = 1.5,
         spawn = {38, 1.5, -13.8},
-        camera_follow = false,
+        camera_follow = true,
         color = {99, 46, 92, 255},
     },
     {
@@ -216,7 +216,7 @@ GAME_ROOMS := [?]Game_Room{
         bounds = {11, -23, 25, -13},
         floor_y = 1.5,
         spawn = {24.2, 1.5, -20.5},
-        camera_follow = false,
+        camera_follow = true,
         color = {117, 55, 81, 255},
     },
     {

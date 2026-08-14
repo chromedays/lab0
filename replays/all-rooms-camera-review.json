@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "start_room": "R00",
+  "segments": [
+    {"ticks": 60, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 32, "move": [0.0, -1.0], "dash_on_first": false},
+    {"ticks": 30, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 150, "move": [1.0, 0.0], "dash_on_first": false},
+    {"ticks": 60, "move": [0.0, 0.0], "dash_on_first": false},
+
+    {"ticks": 300, "move": [1.0, 0.0], "dash_on_first": false},
+    {"ticks": 60, "move": [0.0, 0.0], "dash_on_first": false},
+
+    {"ticks": 330, "move": [1.0, 0.0], "dash_on_first": false},
+    {"ticks": 45, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 45, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 45, "move": [0.0, 0.0], "dash_on_first": false},
+
+    {"ticks": 165, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 45, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 145, "move": [0.0, -1.0], "dash_on_first": false},
+    {"ticks": 60, "move": [0.0, 0.0], "dash_on_first": false},
+
+    {"ticks": 52, "move": [0.0, -1.0], "dash_on_first": false},
+    {"ticks": 1, "move": [0.0, -1.0], "dash_on_first": true},
+    {"ticks": 20, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 27, "move": [0.0, -1.0], "dash_on_first": false},
+    {"ticks": 155, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 60, "move": [0.0, 0.0], "dash_on_first": false},
+
+    {"ticks": 115, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 48, "move": [0.0, 1.0], "dash_on_first": false},
+    {"ticks": 90, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 48, "move": [0.0, -1.0], "dash_on_first": false},
+    {"ticks": 125, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 60, "move": [0.0, 0.0], "dash_on_first": false},
+
+    {"ticks": 220, "move": [0.0, 1.0], "dash_on_first": false},
+    {"ticks": 165, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 38, "move": [0.0, 1.0], "dash_on_first": false},
+    {"ticks": 90, "move": [0.0, 0.0], "dash_on_first": false}
+  ]
+}
