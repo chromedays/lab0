@@ -1418,7 +1418,7 @@ draw_model_browser :: proc(
             &browser.active_index,
             &browser.focus_index,
         )
-        result_clicked := rl.CheckCollisionPointRec(
+        result_clicked := !rl.GuiIsLocked() && rl.CheckCollisionPointRec(
             rl.GetMousePosition(),
             list_bounds,
         ) && rl.IsMouseButtonReleased(.LEFT) && browser.focus_index >= 0
@@ -1473,7 +1473,8 @@ draw_animation_controls :: proc(
     }
     rl.GuiLabel({content_x, bounds.y + 31, 38, 18}, "Clip")
 
-    if playback.dropdown_open {
+    lock_transport_controls := playback.dropdown_open && !rl.GuiIsLocked()
+    if lock_transport_controls {
         rl.GuiLock()
     }
 
@@ -1619,7 +1620,7 @@ draw_animation_controls :: proc(
         playback.pose_dirty = true
     }
 
-    if playback.dropdown_open {
+    if lock_transport_controls {
         rl.GuiUnlock()
     }
 
@@ -2004,20 +2005,73 @@ Camera_Input_Permissions :: struct {
     mouse:    bool,
 }
 
+Camera_Mouse_Drag :: enum {
+    NONE,
+    ORBIT,
+    PAN,
+}
+
+camera_mouse_drag_for_frame :: proc(
+    previous_drag: Camera_Mouse_Drag,
+    window_focused: bool,
+    ui_captures_input: bool,
+    mouse_over_ui: bool,
+    left_pressed: bool,
+    middle_pressed: bool,
+    left_down: bool,
+    middle_down: bool,
+) -> (frame_drag, next_drag: Camera_Mouse_Drag) {
+    if !window_focused {
+        return .NONE, .NONE
+    }
+
+    frame_drag = previous_drag
+    if frame_drag == .NONE && !ui_captures_input && !mouse_over_ui {
+        if left_pressed {
+            frame_drag = .ORBIT
+        } else if middle_pressed {
+            frame_drag = .PAN
+        }
+    }
+
+    // The release frame is still owned by the drag that began in the scene.
+    // This prevents a raygui control under the release position from treating
+    // that release as its own click.
+    next_drag = frame_drag
+    switch frame_drag {
+    case .ORBIT:
+        if !left_down {
+            next_drag = .NONE
+        }
+    case .PAN:
+        if !middle_down {
+            next_drag = .NONE
+        }
+    case .NONE:
+    }
+    return
+}
+
 camera_input_permissions :: proc(
     window_focused: bool,
     ui_captures_input: bool,
     mouse_over_ui: bool,
+    camera_drag_owns_mouse: bool,
+    camera_drag_button_down: bool,
 ) -> Camera_Input_Permissions {
-    if !window_focused || ui_captures_input {
+    if !window_focused {
         return {}
     }
 
-    // Hover only owns pointer input. Keyboard camera controls remain available
-    // unless a UI control is actively capturing input (for example, search).
+    // A drag keeps the owner chosen on its press frame. Scene drags may cross
+    // the UI without stopping, while UI-originated drags may leave the UI
+    // without leaking their held button into the camera controls.
     return {
-        keyboard = true,
-        mouse    = !mouse_over_ui,
+        keyboard = !ui_captures_input,
+        mouse    = camera_drag_owns_mouse ||
+                   (!ui_captures_input &&
+                    !mouse_over_ui &&
+                    !camera_drag_button_down),
     }
 }
 
@@ -2027,6 +2081,7 @@ update_camera_controls :: proc(
     orbit_pivot: rl.Vector3,
     allow_keyboard_input: bool,
     allow_mouse_input: bool,
+    mouse_drag: Camera_Mouse_Drag,
 ) -> bool {
     frame_time := rl.GetFrameTime()
     move_speed := scene_size * 2.0
@@ -2084,7 +2139,7 @@ update_camera_controls :: proc(
     }
 
     mouse_delta := rl.GetMouseDelta()
-    if rl.IsMouseButtonDown(.LEFT) {
+    if mouse_drag == .ORBIT && rl.IsMouseButtonDown(.LEFT) {
         mouse_look_sensitivity: f32 = 0.003
         yaw_delta := -mouse_delta.x * mouse_look_sensitivity
         pitch_delta := -mouse_delta.y * mouse_look_sensitivity
@@ -2170,7 +2225,7 @@ update_camera_controls :: proc(
         }
     }
 
-    if rl.IsMouseButtonDown(.MIDDLE) {
+    if mouse_drag == .PAN && rl.IsMouseButtonDown(.MIDDLE) {
         pan_sensitivity := camera.fovy / f32(rl.GetScreenHeight())
         mouse_pan_delta := camera_right * (-mouse_delta.x * pan_sensitivity) +
                            camera_up * (mouse_delta.y * pan_sensitivity)
@@ -2640,6 +2695,7 @@ run_application :: proc() -> int {
     rendered_capture_frames := 0
     capture_sequence_frame := capture_options.frame_range_start
     captured_sequence_frames := 0
+    camera_mouse_drag := Camera_Mouse_Drag.NONE
 
     for !rl.WindowShouldClose() && !capture_complete {
         if downscale_level != applied_downscale_level {
@@ -2752,10 +2808,26 @@ run_application :: proc() -> int {
         ui_captures_camera_input := background_picker_open ||
                                     animation_playback.dropdown_open ||
                                     model_browser.search_editing
+        left_mouse_down := rl.IsMouseButtonDown(.LEFT)
+        middle_mouse_down := rl.IsMouseButtonDown(.MIDDLE)
+        camera_drag_for_frame, next_camera_mouse_drag :=
+            camera_mouse_drag_for_frame(
+                camera_mouse_drag,
+                window_focused,
+                ui_captures_camera_input,
+                mouse_over_ui,
+                rl.IsMouseButtonPressed(.LEFT),
+                rl.IsMouseButtonPressed(.MIDDLE),
+                left_mouse_down,
+                middle_mouse_down,
+            )
+        camera_mouse_drag = next_camera_mouse_drag
         camera_input := camera_input_permissions(
             window_focused,
             ui_captures_camera_input,
             mouse_over_ui,
+            camera_drag_for_frame != .NONE,
+            left_mouse_down || middle_mouse_down,
         )
         if camera_input.keyboard || camera_input.mouse {
             update_camera_controls(
@@ -2764,6 +2836,7 @@ run_application :: proc() -> int {
                 model_center,
                 camera_input.keyboard,
                 camera_input.mouse,
+                camera_drag_for_frame,
             )
         }
         render_camera = control_camera
@@ -2948,6 +3021,10 @@ run_application :: proc() -> int {
         rl.EndTextureMode()
 
         rl.BeginTextureMode(composite_render_target)
+            camera_drag_locks_gui := camera_drag_for_frame != .NONE
+            if camera_drag_locks_gui {
+                rl.GuiLock()
+            }
             rl.ClearBackground(scene_background_color)
             rl.DrawTexturePro(
                 scene_render_target.texture,
@@ -3115,6 +3192,9 @@ run_application :: proc() -> int {
                 &scene_background_color,
                 &background_picker_open,
             )
+            if camera_drag_locks_gui {
+                rl.GuiUnlock()
+            }
         rl.EndTextureMode()
 
         if export_requested {
