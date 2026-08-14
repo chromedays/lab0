@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lab0 Video Report"
+  short_description: "Record and report deterministic Lab0 game tests"
+  default_prompt: "Use $lab0-video-report to run the deterministic game test, create an MP4 report, and attach the results."

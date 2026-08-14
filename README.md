@@ -53,6 +53,110 @@ The outline is evaluated at the active downsample resolution and is therefore
 measured in output pixels. It appears in the pixelated/blended lens and exported
 downsample PNG, while the full-resolution scene target remains unoutlined.
 
+## Traversal prototype
+
+The existing model viewer remains the default application. Start the separate
+room-based traversal prototype with:
+
+```sh
+odin run . -- --mode game
+```
+
+The prototype is a handcrafted seven-room forest loop rendered through the same
+cel-shading, coverage, downsample, and outline stages as the viewer. Gameplay is
+kept intentionally narrow: explore with screen-relative eight-directional
+movement, cross short gaps with a fixed-distance dash, reach the overlook, and
+return to the start forest.
+
+| Action | Keyboard | Gamepad |
+| --- | --- | --- |
+| Move | `WASD` or arrows | Left stick or D-pad |
+| Dash | `Space` | South face button |
+| Reset current room | `R` | Back/View button |
+| Debug overlay | `F3` | — |
+| Quit | `Cmd/Ctrl+Q` | — |
+
+Start directly in a room for inspection with `--game-room R00` through
+`--game-room R06`. Game captures are deterministic at the selected room spawn:
+
+```sh
+odin run . -- \
+  --mode game \
+  --game-room R04 \
+  --capture-case traversal-ravine \
+  --capture-target composite \
+  --capture-output artifacts/traversal/ravine.png
+```
+
+Game capture supports `composite` (1280×720), `scene` (1280×720),
+`downsample` (256×144, including the outline), and `coverage-mask` (256×144).
+Viewer capture defaults and output dimensions are unchanged. The complete
+prototype scope and tuning values are recorded in
+[`docs/traversal-prototype-spec.md`](docs/traversal-prototype-spec.md).
+
+### Automated gameplay checks
+
+Gameplay rules run at a fixed 60 Hz in `game_fixed_update`, independently of a
+window, GPU, or physical input device. The Odin suite includes a bot-driven
+walk through the full seven-room route, exact input-record/replay comparison,
+the ravine and one-way-drop checks, and a 10,000-tick fixed-seed invariant run:
+
+```sh
+odin test .
+```
+
+From a logged-in graphical macOS session, the all-in-one runner also builds a
+fresh binary, captures the same dynamic tick twice through the real GPU
+pipeline, checks dimensions and asset warnings, and requires byte-identical
+PNGs:
+
+```sh
+scripts/test-game.sh
+```
+
+For a remote, human-reviewable run, add `--video-report` and a new output
+directory. This records all 180 fixed replay ticks through the normal GPU
+pipeline, encodes a 1280×720 MP4, creates a contact sheet, and writes a Markdown
+summary with hashes and links to the detailed logs:
+
+```sh
+scripts/test-game.sh --video-report artifacts/game-test-report-demo
+```
+
+Select a different deterministic replay with `--replay`. For example, this
+report visibly crosses the R00 east exit and finishes in R01:
+
+```sh
+scripts/test-game.sh \
+  --video-report artifacts/game-test-report-room-transition \
+  --replay replays/room-transition-smoke.json
+```
+
+The generated directory contains `game-test.mp4`, `contact-sheet.png`,
+`report.md`, the deterministic source PNGs under `frames/`, and the test and
+capture logs. `ffmpeg` and `ffprobe` must be available. The PNGs remain the
+regression source of truth; the MP4 is optimized for remote review.
+
+Versioned replay JSON stores compact fixed-tick input segments. Use the bundled
+dash replay to render the exact same dynamic state on every run; capture ticks
+are one-based:
+
+```sh
+odin run . -- \
+  --mode game \
+  --game-replay replays/traversal-dash-smoke.json \
+  --game-capture-tick 5 \
+  --capture-case traversal-dash-tick-5 \
+  --capture-target composite \
+  --capture-output artifacts/traversal/dash-tick-5.png
+```
+
+The replay's `start_room` owns the initial state. Supplying a conflicting
+`--game-room` is an error. `--game-capture-tick` requires both a replay and a
+capture case and fails before opening a window when the tick is out of range.
+`--game-record-dir` requires a replay and capture case and exports one
+`frame-%06d.png` for every fixed simulation tick in a single process.
+
 ## Non-interactive capture mode
 
 Capture mode initializes a hidden graphics window, fixes the requested render state, renders a small number of warmup frames, exports an internal render texture to PNG, and exits. It does not use desktop screenshots or live mouse and keyboard input.

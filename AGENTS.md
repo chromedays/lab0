@@ -173,6 +173,65 @@ FFmpeg may be used to assemble a contact sheet for human review. PNG files, not
 encoded video, remain the regression source of truth because video codecs can
 introduce irrelevant differences.
 
+## Game-mode validation
+
+The traversal prototype is a separate runtime path selected with `--mode game`.
+The viewer remains the default, and its established capture outputs must remain
+byte-identical when game code changes.
+
+Use `--game-room R00` through `R06` to start from a deterministic room spawn.
+Game captures reuse the normal capture case, output, style, warmup, window, and
+target flags. They support `composite`, `scene`, `downsample`, and
+`coverage-mask`; lens, animation-frame, sequence, capture-view, non-pixelated
+capture-mode, and capture-model options are invalid in Game mode.
+
+```sh
+/tmp/lab0-capture-worker-a \
+  --mode game \
+  --game-room R04 \
+  --capture-case traversal-ravine \
+  --capture-target composite \
+  --capture-output /tmp/lab0-worker-a/traversal-ravine.png
+```
+
+Game target dimensions are 1280×720 for `composite` and `scene`, and 256×144
+for `downsample` and `coverage-mask`. Run representative R00, R02, and R04
+captures after changes to game rendering or room composition. Re-run the same
+room capture and require byte-identical output when validating determinism.
+
+Game behavior tests call `game_fixed_update` directly with `Game_Input`; do not
+use desktop keyboard automation. `game_scenario_test.odin` walks the authored
+route through real collision and transition rules, records every input, and
+replays it against an exact final-state checkpoint. The fixed-seed random test
+adds 10,000 ticks of bounds, collision, timer, and finite-value invariants.
+
+For a dynamic visual regression, drive capture from a versioned replay and name
+the exact one-based simulation tick:
+
+```sh
+/tmp/lab0-capture-worker-a \
+  --mode game \
+  --game-replay replays/traversal-dash-smoke.json \
+  --game-capture-tick 5 \
+  --capture-case traversal-dash-tick-5 \
+  --capture-target composite \
+  --capture-output /tmp/lab0-worker-a/traversal-dash-tick-5.png
+```
+
+Repeat the command to a distinct path and require byte-identical PNGs. Replay
+files use schema version 1 and compact input segments (`ticks`, `move`, and
+`dash_on_first`); they are evaluated only by the fixed 60 Hz simulation.
+`scripts/test-game.sh` runs the complete unit/build/double-capture check from
+the repository root and leaves its uniquely named artifacts under `/tmp`.
+
+Use `scripts/test-game.sh --video-report artifacts/<unique-report-name>` when
+the user needs remote review evidence in chat. It additionally records every
+replay tick in one process with `--game-record-dir`, encodes `game-test.mp4`,
+creates `contact-sheet.png`, and writes `report.md` plus logs. Inspect the
+contact sheet, read the report, and link the MP4, report, and preview by absolute
+local path in the final response. Never treat MP4 bytes as regression truth;
+the deterministic PNG captures and fixed-tick input replay remain authoritative.
+
 ## macOS graphics-session constraint
 
 Non-interactive does not mean software-headless. raylib still initializes a
