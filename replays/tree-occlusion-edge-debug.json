@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "start_room": "occlusion-test",
+  "segments": [
+    {
+      "ticks": 30,
+      "move": [0, 0],
+      "dash_on_first": false
+    },
+    {
+      "ticks": 90,
+      "move": [0, -1],
+      "dash_on_first": false
+    },
+    {
+      "ticks": 30,
+      "move": [0, 0],
+      "dash_on_first": false
+    },
+    {
+      "ticks": 60,
+      "move": [1, 0],
+      "dash_on_first": false
+    },
+    {
+      "ticks": 120,
+      "move": [-1, 0],
+      "dash_on_first": false
+    },
+    {
+      "ticks": 60,
+      "move": [1, 0],
+      "dash_on_first": false
+    },
+    {
+      "ticks": 30,
+      "move": [0, 0],
+      "dash_on_first": false
+    },
+    {
+      "ticks": 90,
+      "move": [0, 1],
+      "dash_on_first": false
+    }
+  ]
+}

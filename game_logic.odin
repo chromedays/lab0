@@ -29,6 +29,7 @@ Game_Room_ID :: enum {
     R04_RAVINE_CROSSING,
     R05_OVERLOOK,
     R06_LOWER_TRAIL,
+    TEST_OCCLUSION,
 }
 
 Game_Player_Mode :: enum {
@@ -183,6 +184,15 @@ GAME_ROOMS := [?]Game_Room{
         camera_follow = true,
         color = {25, 64, 94, 255},
     },
+    {
+        id = .TEST_OCCLUSION,
+        name = "T00 Occlusion Test",
+        bounds = {74, -4, 86, 4},
+        floor_y = 0,
+        spawn = {80, 0, 3},
+        camera_follow = false,
+        color = {45, 45, 63, 255},
+    },
 }
 
 GAME_EXITS := [?]Game_Room_Exit{
@@ -245,6 +255,8 @@ game_room_from_string :: proc(value: string) -> (Game_Room_ID, bool) {
         return .R05_OVERLOOK, true
     case "R06", "r06", "lower-trail":
         return .R06_LOWER_TRAIL, true
+    case "T00", "t00", "occlusion-test":
+        return .TEST_OCCLUSION, true
     }
     return .R00_START_FOREST, false
 }

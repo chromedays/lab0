@@ -72,6 +72,17 @@ game_run_options_reject_an_unknown_room :: proc(t: ^testing.T) {
 }
 
 @(test)
+game_run_options_accept_occlusion_test_scene :: proc(t: ^testing.T) {
+    options, valid, error_argument := parse_game_run_options([]string{
+        "--mode", "game",
+        "--game-room", "occlusion-test",
+    })
+    testing.expect(t, valid, error_argument)
+    testing.expect_value(t, options.start_room, Game_Room_ID.TEST_OCCLUSION)
+    testing.expect(t, options.start_room_explicit)
+}
+
+@(test)
 game_run_options_parse_replay_and_exact_capture_tick :: proc(t: ^testing.T) {
     options, valid, error_argument := parse_game_run_options([]string{
         "--mode", "game",
@@ -116,4 +127,94 @@ game_default_cel_style_is_valid_and_keeps_neon_accents :: proc(t: ^testing.T) {
     testing.expect(t, style.rim.enabled, "the game style should preserve cyan rim light")
     testing.expect(t, style.highlight.enabled, "the game style should preserve warm highlights")
     testing.expect_value(t, style.outline.width, 1)
+}
+
+game_test_occlusion_assets :: proc() -> Game_Assets {
+    assets: Game_Assets
+    assets.tree = {
+        bounds = {
+            min = {-1.2, 0, -0.6},
+            max = {1.2, 4.0, 0.6},
+        },
+        valid = true,
+    }
+    assets.player = {
+        bounds = {
+            min = {-0.3, 0, -0.2},
+            max = {0.3, 1.7, 0.2},
+        },
+        valid = true,
+    }
+    return assets
+}
+
+@(test)
+game_foreground_tree_uses_pink_visibility_debug_tint :: proc(
+    t: ^testing.T,
+) {
+    state := game_state_init(.TEST_OCCLUSION)
+    camera_state: Game_Camera_State
+    camera := game_update_camera(&camera_state, &state, {}, GAME_FIXED_DT)
+    tree := GAME_OCCLUSION_TEST_TREE
+    assets := game_test_occlusion_assets()
+
+    testing.expect_value(t, tree.kind, Game_Decor_Kind.TREE)
+    testing.expect_value(
+        t,
+        game_decor_visibility_tint(&assets, tree, &state, camera),
+        tree.tint,
+    )
+
+    // Moving through the isolated tree puts it exactly between the player and
+    // the fixed test camera. The debug tint exposes that classification.
+    state.player.position = {80, 0, -2}
+    camera = game_update_camera(&camera_state, &state, {}, GAME_FIXED_DT)
+    testing.expect_value(
+        t,
+        game_decor_visibility_tint(&assets, tree, &state, camera),
+        GAME_OCCLUSION_DEBUG_TINT,
+    )
+}
+
+@(test)
+game_occlusion_test_tree_edge_separates_inside_from_outside :: proc(
+    t: ^testing.T,
+) {
+    state := game_state_init(.TEST_OCCLUSION)
+    camera_state: Game_Camera_State
+    camera := game_update_camera(&camera_state, &state, {}, GAME_FIXED_DT)
+    tree := GAME_OCCLUSION_TEST_TREE
+    assets := game_test_occlusion_assets()
+
+    // The projected model bound includes the canopy, so this grazing position
+    // remains occluded even though it was outside the removed 0.72 m circle.
+    state.player.position = {81.25, 0, -2}
+    inside := game_decor_occlusion_query(&assets, tree, &state, camera)
+    testing.expect(t, inside.depth_valid)
+    testing.expect(t, inside.occluded, "the canopy edge should overlap the projected player bound")
+    testing.expect(t, inside.overlap.valid)
+
+    state.player.position = {82.25, 0, -2}
+    outside := game_decor_occlusion_query(&assets, tree, &state, camera)
+    testing.expect(t, outside.depth_valid)
+    testing.expect(t, !outside.occluded, "separated projected bounds should remain clear")
+    testing.expect(t, !outside.overlap.valid)
+}
+
+@(test)
+game_occlusion_test_scene_is_not_connected_to_the_authored_route :: proc(
+    t: ^testing.T,
+) {
+    room := game_room(.TEST_OCCLUSION)
+    testing.expect_value(t, room.name, "T00 Occlusion Test")
+    testing.expect_value(t, room.spawn, rl.Vector3{80, 0, 3})
+    testing.expect(t, !room.camera_follow)
+
+    for exit in GAME_EXITS {
+        testing.expect(
+            t,
+            exit.source != .TEST_OCCLUSION && exit.target != .TEST_OCCLUSION,
+            "the test scene must remain outside the traversal route",
+        )
+    }
 }

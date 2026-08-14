@@ -20,8 +20,13 @@ GAME_PIXEL_HEIGHT       :: 144
 GAME_CAMERA_FOVY        :: f32(8.0)
 GAME_CAMERA_SMOOTH_TIME :: f32(0.12)
 GAME_CAMERA_LOOK_AHEAD  :: f32(0.7)
+GAME_CONNECTION_HEIGHT  :: f32(0.18)
+GAME_CONNECTION_LIFT    :: f32(0.015)
+GAME_OVERLAY_HEIGHT     :: f32(0.06)
+GAME_OVERLAY_EMBED      :: f32(0.01)
 GAME_PLAYER_MODEL_PATH  :: "assets/Meshy_AI_lowpoly_man_rigged_biped_Meshy_AI_Meshy_Merged_Animations.glb"
 GAME_PLAYER_ANIMATION_SAMPLE_COUNT :: c.int(8)
+GAME_OCCLUSION_DEBUG_TINT :: rl.Color{255, 96, 200, 255}
 
 Game_Run_Options :: struct {
     start_room:          Game_Room_ID,
@@ -58,6 +63,7 @@ Game_Assets :: struct {
     walk_clip:  c.int,
     run_clip:   c.int,
     active_clip: c.int,
+    debug_white_texture: rl.Texture2D,
 }
 
 game_configure_player_animation :: proc(playback: ^Animation_Playback) {
@@ -80,6 +86,34 @@ Game_Decor :: struct {
     height:   f32,
     rotation: f32,
     tint:     rl.Color,
+}
+
+Game_Screen_Bounds :: struct {
+    min:   rl.Vector2,
+    max:   rl.Vector2,
+    valid: bool,
+}
+
+Game_Decor_Occlusion_Query :: struct {
+    player_ground: rl.Vector2,
+    camera_ground: rl.Vector2,
+    decor_center:  rl.Vector2,
+    projection:    f32,
+    player_bounds: Game_Screen_Bounds,
+    decor_bounds:  Game_Screen_Bounds,
+    overlap:       Game_Screen_Bounds,
+    depth_valid:   bool,
+    occluded:      bool,
+}
+
+// Isolated from the authored route so visibility changes can be exercised with
+// one known occluder and a fixed camera in TEST_OCCLUSION.
+GAME_OCCLUSION_TEST_TREE :: Game_Decor{
+    .TREE,
+    {80, 0, 0},
+    4.0,
+    0,
+    {100, 210, 180, 255},
 }
 
 GAME_DECOR := [?]Game_Decor{
@@ -109,6 +143,7 @@ GAME_DECOR := [?]Game_Decor{
     {.TREE, {-9.2, 0, -10.0}, 4.1, 7, {77, 183, 195, 255}},
     {.TREE, {7.0, 0, -8.0}, 4.0, -14, {89, 204, 201, 255}},
     {.GRASS, {1.5, 0, -15.0}, 0.8, 0, {127, 224, 187, 255}},
+    GAME_OCCLUSION_TEST_TREE,
 }
 
 Game_Floor_Accent :: struct {
@@ -138,6 +173,8 @@ GAME_FLOOR_ACCENTS := [?]Game_Floor_Accent{
     {.R06_LOWER_TRAIL, {-11.8, -15.76, 9.8, -15.29}, {38, 115, 160, 255}},
     {.R06_LOWER_TRAIL, {-0.24, -15.2, 0.24, -6.2}, {38, 115, 160, 255}},
     {.R06_LOWER_TRAIL, {-9.3, -10.6, -7.8, -10.25}, {177, 65, 153, 255}},
+    {.TEST_OCCLUSION, {79.88, -3.7, 80.12, 3.7}, {87, 119, 148, 255}},
+    {.TEST_OCCLUSION, {78.6, -0.08, 81.4, 0.08}, {202, 180, 102, 255}},
 }
 
 GAME_ROOM_WALL_COLORS := [?]rl.Color{
@@ -148,6 +185,7 @@ GAME_ROOM_WALL_COLORS := [?]rl.Color{
     {64, 42, 91, 255},
     {76, 44, 88, 255},
     {31, 45, 84, 255},
+    {64, 64, 82, 255},
 }
 
 GAME_ROOM_OBSTACLE_COLORS := [?]rl.Color{
@@ -158,6 +196,7 @@ GAME_ROOM_OBSTACLE_COLORS := [?]rl.Color{
     {147, 91, 146, 255},
     {164, 102, 134, 255},
     {69, 102, 143, 255},
+    {118, 118, 136, 255},
 }
 
 GAME_ROOM_BACKGROUND_COLORS := [?]rl.Color{
@@ -168,6 +207,7 @@ GAME_ROOM_BACKGROUND_COLORS := [?]rl.Color{
     {29, 18, 55, 255},
     {38, 21, 55, 255},
     {13, 23, 49, 255},
+    {18, 18, 28, 255},
 }
 
 GAME_ROOM_HUD_ACCENT_COLORS := [?]rl.Color{
@@ -178,6 +218,7 @@ GAME_ROOM_HUD_ACCENT_COLORS := [?]rl.Color{
     {244, 103, 162, 255},
     {255, 143, 142, 255},
     {83, 188, 224, 255},
+    {255, 57, 153, 255},
 }
 
 Game_Renderer :: struct {
@@ -308,7 +349,7 @@ print_game_usage :: proc() {
     fmt.println("Lab0 traversal prototype")
     fmt.println("")
     fmt.println("  --mode game                 Run the traversal prototype")
-    fmt.println("  --game-room <R00..R06>      Start in a deterministic room")
+    fmt.println("  --game-room <R00..R06|T00>  Start in a room or the occlusion test scene")
     fmt.println("  --game-debug                Show collision and camera diagnostics")
     fmt.println("  --game-replay <path>        Drive the 60 Hz simulation from replay JSON")
     fmt.println("  --game-capture-tick <tick>  Capture the exact replay tick (1-based)")
@@ -367,6 +408,9 @@ game_load_assets :: proc() -> Game_Assets {
     assets.dead_tree = game_load_imported_model("assets/dead_tree_1.glb")
     assets.trunk = game_load_imported_model("assets/trunk_1.glb")
     assets.grass = game_load_imported_model("assets/grass_1.glb")
+    white_image := rl.GenImageColor(1, 1, rl.WHITE)
+    assets.debug_white_texture = rl.LoadTextureFromImage(white_image)
+    rl.UnloadImage(white_image)
 
     if assets.player.valid {
         assets.animation = load_animation_playback(
@@ -392,6 +436,9 @@ game_unload_assets :: proc(assets: ^Game_Assets) {
     if is_model_loaded(assets.cube) { rl.UnloadModel(assets.cube) }
     if is_model_loaded(assets.sphere) { rl.UnloadModel(assets.sphere) }
     if is_model_loaded(assets.cylinder) { rl.UnloadModel(assets.cylinder) }
+    if rl.IsTextureValid(assets.debug_white_texture) {
+        rl.UnloadTexture(assets.debug_white_texture)
+    }
     assets^ = {}
 }
 
@@ -455,6 +502,42 @@ game_draw_imported :: proc(
         {scale, scale, scale},
         tint,
     )
+}
+
+game_draw_imported_debug_tint :: proc(
+    asset: ^Game_Imported_Model,
+    position: rl.Vector3,
+    target_height, rotation: f32,
+    tint: rl.Color,
+    white_texture: rl.Texture2D,
+) {
+    if !asset.valid || !rl.IsTextureValid(white_texture) {
+        game_draw_imported(asset, position, target_height, rotation, tint)
+        return
+    }
+
+    // DrawModelEx multiplies its tint by each material's albedo texture. Keep
+    // the original maps, substitute white only for this diagnostic draw, then
+    // restore them immediately so normal rendering is untouched.
+    material_count := int(asset.model.materialCount)
+    original_albedos := make(
+        []rl.MaterialMap,
+        material_count,
+        context.temp_allocator,
+    )
+    for material_index := 0; material_index < material_count; material_index += 1 {
+        albedo := &asset.model.materials[material_index].maps[rl.MaterialMapIndex.ALBEDO]
+        original_albedos[material_index] = albedo^
+        albedo.texture = white_texture
+        albedo.color = rl.WHITE
+    }
+
+    game_draw_imported(asset, position, target_height, rotation, tint)
+
+    for material_index := 0; material_index < material_count; material_index += 1 {
+        asset.model.materials[material_index].maps[rl.MaterialMapIndex.ALBEDO] =
+            original_albedos[material_index]
+    }
 }
 
 game_renderer_init :: proc(renderer: ^Game_Renderer, style: ^Cel_Style) -> bool {
@@ -845,6 +928,23 @@ game_exit_boundary_position :: proc(exit: Game_Room_Exit) -> rl.Vector3 {
     return result
 }
 
+game_exit_target_boundary_position :: proc(exit: Game_Room_Exit) -> rl.Vector3 {
+    room := game_room(exit.target)
+    result := exit.target_position
+    result.y = room.floor_y
+    switch exit.side {
+    case .NORTH:
+        result.z = room.bounds.max_z
+    case .EAST:
+        result.x = room.bounds.min_x
+    case .SOUTH:
+        result.z = room.bounds.min_z
+    case .WEST:
+        result.x = room.bounds.max_x
+    }
+    return result
+}
+
 game_draw_connections :: proc(assets: ^Game_Assets) {
     connection_color := rl.Color{103, 119, 178, 255}
     for exit in GAME_EXITS {
@@ -853,19 +953,27 @@ game_draw_connections :: proc(assets: ^Game_Assets) {
             continue
         }
         start := game_exit_boundary_position(exit)
-        end := exit.target_position
+        // Transition destinations sit inside the target room so the player
+        // clears its trigger. Rendering stops at the target boundary instead,
+        // keeping the connector from overlapping the room floor.
+        end := game_exit_target_boundary_position(exit)
         delta := end - start
         horizontal_distance := math.sqrt(delta.x * delta.x + delta.z * delta.z)
         step_count := max(int(math.ceil(horizontal_distance / 0.65)), 1)
         for step_index := 0; step_index < step_count; step_index += 1 {
             t := (f32(step_index) + 0.5) / f32(step_count)
             center := start + delta * t
-            segment_length := horizontal_distance / f32(step_count) + 0.12
-            size := rl.Vector3{2.8, 0.18, segment_length}
+            // Butt segments edge-to-edge. The old overlap made adjacent top
+            // faces coplanar and could flicker even away from room floors.
+            segment_length := horizontal_distance / f32(step_count)
+            size := rl.Vector3{2.8, GAME_CONNECTION_HEIGHT, segment_length}
             if math.abs(delta.x) > math.abs(delta.z) {
-                size = {segment_length, 0.18, 2.8}
+                size = {segment_length, GAME_CONNECTION_HEIGHT, 2.8}
             }
-            center.y -= 0.09
+            // Keep the connector top visibly above the interpolated floor.
+            // It previously landed exactly on the room floor and produced a
+            // true coplanar depth conflict where the pieces overlapped.
+            center.y += GAME_CONNECTION_LIFT - GAME_CONNECTION_HEIGHT * 0.5
             rl.DrawModelEx(assets.cube, center, {0, 1, 0}, 0, size, connection_color)
         }
     }
@@ -896,37 +1004,242 @@ game_draw_fallback_tree :: proc(
     )
 }
 
-game_decor_occludes_player :: proc(
+game_project_local_bounds :: proc(
+    bounds: rl.BoundingBox,
+    position, scale: rl.Vector3,
+    rotation: f32,
+    camera: rl.Camera3D,
+) -> Game_Screen_Bounds {
+    result: Game_Screen_Bounds
+    radians := rotation * f32(math.PI / 180.0)
+    cosine := math.cos(radians)
+    sine := math.sin(radians)
+
+    for corner_index := 0; corner_index < 8; corner_index += 1 {
+        local := rl.Vector3{bounds.min.x, bounds.min.y, bounds.min.z}
+        if corner_index & 1 != 0 { local.x = bounds.max.x }
+        if corner_index & 2 != 0 { local.y = bounds.max.y }
+        if corner_index & 4 != 0 { local.z = bounds.max.z }
+        scaled := rl.Vector3{
+            local.x * scale.x,
+            local.y * scale.y,
+            local.z * scale.z,
+        }
+        world := position + rl.Vector3{
+            scaled.x * cosine + scaled.z * sine,
+            scaled.y,
+            -scaled.x * sine + scaled.z * cosine,
+        }
+        screen := rl.GetWorldToScreenEx(
+            world,
+            camera,
+            GAME_SCREEN_WIDTH,
+            GAME_SCREEN_HEIGHT,
+        )
+        if !result.valid {
+            result.min = screen
+            result.max = screen
+            result.valid = true
+        } else {
+            result.min.x = min(result.min.x, screen.x)
+            result.min.y = min(result.min.y, screen.y)
+            result.max.x = max(result.max.x, screen.x)
+            result.max.y = max(result.max.y, screen.y)
+        }
+    }
+    return result
+}
+
+game_project_imported_bounds :: proc(
+    asset: ^Game_Imported_Model,
+    position: rl.Vector3,
+    target_height, rotation: f32,
+    camera: rl.Camera3D,
+) -> Game_Screen_Bounds {
+    if !asset.valid {
+        return {}
+    }
+    scale := game_imported_scale(asset, target_height)
+    draw_position := position
+    draw_position.y -= asset.bounds.min.y * scale
+    return game_project_local_bounds(
+        asset.bounds,
+        draw_position,
+        {scale, scale, scale},
+        rotation,
+        camera,
+    )
+}
+
+game_screen_bounds_intersection :: proc(
+    first, second: Game_Screen_Bounds,
+) -> Game_Screen_Bounds {
+    if !first.valid || !second.valid {
+        return {}
+    }
+    result := Game_Screen_Bounds{
+        min = {max(first.min.x, second.min.x), max(first.min.y, second.min.y)},
+        max = {min(first.max.x, second.max.x), min(first.max.y, second.max.y)},
+        valid = true,
+    }
+    if result.min.x >= result.max.x || result.min.y >= result.max.y {
+        return {}
+    }
+    return result
+}
+
+game_player_screen_bounds :: proc(
+    assets: ^Game_Assets,
+    state: ^Game_State,
+    camera: rl.Camera3D,
+) -> Game_Screen_Bounds {
+    facing := state.player.facing
+    rotation := f32(math.atan2(f64(facing.x), f64(facing.y)) * 180.0 / math.PI)
+    if assets.player.valid {
+        return game_project_imported_bounds(
+            &assets.player,
+            state.player.position,
+            1.7,
+            rotation,
+            camera,
+        )
+    }
+    fallback_bounds := rl.BoundingBox{
+        min = {-0.32, 0, -0.32},
+        max = {0.32, 2.0, 0.32},
+    }
+    return game_project_local_bounds(
+        fallback_bounds,
+        state.player.position,
+        {1, 1, 1},
+        rotation,
+        camera,
+    )
+}
+
+game_decor_screen_bounds :: proc(
+    assets: ^Game_Assets,
+    decor: Game_Decor,
+    camera: rl.Camera3D,
+) -> Game_Screen_Bounds {
+    #partial switch decor.kind {
+    case .TREE:
+        if assets.tree.valid {
+            return game_project_imported_bounds(
+                &assets.tree,
+                decor.position,
+                decor.height,
+                decor.rotation,
+                camera,
+            )
+        }
+        fallback_bounds := rl.BoundingBox{
+            min = {-0.5, 0, -0.5},
+            max = {0.5, 1.14, 0.5},
+        }
+        return game_project_local_bounds(
+            fallback_bounds,
+            decor.position,
+            {decor.height * 0.58, decor.height, decor.height * 0.58},
+            decor.rotation,
+            camera,
+        )
+    case .DEAD_TREE:
+        if assets.dead_tree.valid {
+            return game_project_imported_bounds(
+                &assets.dead_tree,
+                decor.position,
+                decor.height,
+                decor.rotation,
+                camera,
+            )
+        }
+        fallback_bounds := rl.BoundingBox{
+            min = {-0.5, 0, -0.5},
+            max = {0.5, 1, 0.5},
+        }
+        return game_project_local_bounds(
+            fallback_bounds,
+            decor.position,
+            {0.45, decor.height, 0.45},
+            decor.rotation,
+            camera,
+        )
+    case .COLUMN:
+        cube_bounds := rl.BoundingBox{
+            min = {-0.5, -0.5, -0.5},
+            max = {0.5, 0.5, 0.5},
+        }
+        return game_project_local_bounds(
+            cube_bounds,
+            decor.position + rl.Vector3{0, decor.height * 0.5, 0},
+            {0.75, decor.height, 0.75},
+            decor.rotation,
+            camera,
+        )
+    }
+    return {}
+}
+
+game_decor_occlusion_query :: proc(
+    assets: ^Game_Assets,
     decor: Game_Decor,
     state: ^Game_State,
     camera: rl.Camera3D,
-) -> bool {
-    if decor.kind != .TREE && decor.kind != .DEAD_TREE && decor.kind != .COLUMN {
-        return false
+) -> Game_Decor_Occlusion_Query {
+    query := Game_Decor_Occlusion_Query{
+        player_ground = {state.player.position.x, state.player.position.z},
+        camera_ground = {camera.position.x, camera.position.z},
+        decor_center = {decor.position.x, decor.position.z},
+        player_bounds = game_player_screen_bounds(assets, state, camera),
+        decor_bounds = game_decor_screen_bounds(assets, decor, camera),
     }
-    player := rl.Vector2{state.player.position.x, state.player.position.z}
-    camera_ground := rl.Vector2{camera.position.x, camera.position.z}
-    decor_center := rl.Vector2{decor.position.x, decor.position.z}
-    sight_line := camera_ground - player
+    query.overlap = game_screen_bounds_intersection(
+        query.player_bounds,
+        query.decor_bounds,
+    )
+    if decor.kind != .TREE && decor.kind != .DEAD_TREE && decor.kind != .COLUMN {
+        return query
+    }
+    sight_line := query.camera_ground - query.player_ground
     line_length_squared := sight_line.x * sight_line.x + sight_line.y * sight_line.y
     if line_length_squared <= 0.0001 {
-        return false
+        return query
     }
-    to_decor := decor_center - player
-    projection := clamp(
+    to_decor := query.decor_center - query.player_ground
+    query.projection = clamp(
         (to_decor.x * sight_line.x + to_decor.y * sight_line.y) /
         line_length_squared,
         f32(0),
         f32(1),
     )
-    if projection <= 0.04 || projection >= 0.96 {
-        return false
+    if query.projection <= 0.04 || query.projection >= 0.96 {
+        return query
     }
-    closest := player + sight_line * projection
-    separation := decor_center - closest
-    occluder_radius := max(decor.height * 0.18, f32(0.7))
-    return separation.x * separation.x + separation.y * separation.y <
-           occluder_radius * occluder_radius
+    query.depth_valid = true
+    query.occluded = query.overlap.valid
+    return query
+}
+
+game_decor_occludes_player :: proc(
+    assets: ^Game_Assets,
+    decor: Game_Decor,
+    state: ^Game_State,
+    camera: rl.Camera3D,
+) -> bool {
+    return game_decor_occlusion_query(assets, decor, state, camera).occluded
+}
+
+game_decor_visibility_tint :: proc(
+    assets: ^Game_Assets,
+    decor: Game_Decor,
+    state: ^Game_State,
+    camera: rl.Camera3D,
+) -> rl.Color {
+    if game_decor_occludes_player(assets, decor, state, camera) {
+        return GAME_OCCLUSION_DEBUG_TINT
+    }
+    return decor.tint
 }
 
 game_draw_decor :: proc(
@@ -935,21 +1248,44 @@ game_draw_decor :: proc(
     camera: rl.Camera3D,
 ) {
     for decor in GAME_DECOR {
-        // The current cel shader is opaque. Cull tagged foreground geometry
-        // while it blocks the camera ray; collision remains active.
-        if game_decor_occludes_player(decor, state, camera) {
-            continue
-        }
+        // Make the visibility detector observable without changing geometry or
+        // collision: any decor currently classified as a player occluder is
+        // rendered hot pink for this frame.
+        occluded := game_decor_occludes_player(assets, decor, state, camera)
+        tint := decor.tint
+        if occluded { tint = GAME_OCCLUSION_DEBUG_TINT }
         switch decor.kind {
         case .TREE:
             if assets.tree.valid {
-                game_draw_imported(&assets.tree, decor.position, decor.height, decor.rotation, decor.tint)
+                if occluded {
+                    game_draw_imported_debug_tint(
+                        &assets.tree,
+                        decor.position,
+                        decor.height,
+                        decor.rotation,
+                        tint,
+                        assets.debug_white_texture,
+                    )
+                } else {
+                    game_draw_imported(&assets.tree, decor.position, decor.height, decor.rotation, tint)
+                }
             } else {
-                game_draw_fallback_tree(assets, decor.position, decor.height, decor.tint)
+                game_draw_fallback_tree(assets, decor.position, decor.height, tint)
             }
         case .DEAD_TREE:
             if assets.dead_tree.valid {
-                game_draw_imported(&assets.dead_tree, decor.position, decor.height, decor.rotation, decor.tint)
+                if occluded {
+                    game_draw_imported_debug_tint(
+                        &assets.dead_tree,
+                        decor.position,
+                        decor.height,
+                        decor.rotation,
+                        tint,
+                        assets.debug_white_texture,
+                    )
+                } else {
+                    game_draw_imported(&assets.dead_tree, decor.position, decor.height, decor.rotation, tint)
+                }
             } else {
                 rl.DrawModelEx(
                     assets.cylinder,
@@ -957,12 +1293,12 @@ game_draw_decor :: proc(
                     {0, 1, 0},
                     0,
                     {0.45, decor.height, 0.45},
-                    decor.tint,
+                    tint,
                 )
             }
         case .TRUNK:
             if assets.trunk.valid {
-                game_draw_imported(&assets.trunk, decor.position, decor.height, decor.rotation, decor.tint)
+                game_draw_imported(&assets.trunk, decor.position, decor.height, decor.rotation, tint)
             } else {
                 rl.DrawModelEx(
                     assets.cylinder,
@@ -970,12 +1306,12 @@ game_draw_decor :: proc(
                     {0, 0, 1},
                     90,
                     {0.55, decor.height, 0.55},
-                    decor.tint,
+                    tint,
                 )
             }
         case .GRASS:
             if assets.grass.valid {
-                game_draw_imported(&assets.grass, decor.position, decor.height, decor.rotation, decor.tint)
+                game_draw_imported(&assets.grass, decor.position, decor.height, decor.rotation, tint)
             } else {
                 rl.DrawModelEx(
                     assets.sphere,
@@ -983,7 +1319,7 @@ game_draw_decor :: proc(
                     {0, 1, 0},
                     0,
                     {decor.height, decor.height * 0.6, decor.height},
-                    decor.tint,
+                    tint,
                 )
             }
         case .ROCK:
@@ -993,7 +1329,7 @@ game_draw_decor :: proc(
                 {0, 1, 0},
                 decor.rotation,
                 {decor.height, decor.height * 0.7, decor.height * 0.85},
-                decor.tint,
+                tint,
             )
         case .COLUMN:
             rl.DrawModelEx(
@@ -1002,7 +1338,7 @@ game_draw_decor :: proc(
                 {0, 1, 0},
                 decor.rotation,
                 {0.75, decor.height, 0.75},
-                decor.tint,
+                tint,
             )
         }
     }
@@ -1031,12 +1367,12 @@ game_draw_floor_accents :: proc(assets: ^Game_Assets) {
         room := game_room(accent.room)
         center := rl.Vector3{
             (accent.bounds.min_x + accent.bounds.max_x) * 0.5,
-            room.floor_y + 0.025,
+            room.floor_y + GAME_OVERLAY_HEIGHT * 0.5 - GAME_OVERLAY_EMBED,
             (accent.bounds.min_z + accent.bounds.max_z) * 0.5,
         }
         size := rl.Vector3{
             accent.bounds.max_x - accent.bounds.min_x,
-            0.05,
+            GAME_OVERLAY_HEIGHT,
             accent.bounds.max_z - accent.bounds.min_z,
         }
         rl.DrawModelEx(assets.cube, center, {0, 1, 0}, 0, size, accent.color)
@@ -1116,15 +1452,35 @@ game_draw_player :: proc(assets: ^Game_Assets, state: ^Game_State) {
     )
 }
 
+game_set_cel_accents_enabled :: proc(
+    shader: rl.Shader,
+    bindings: ^Cel_Shader_Bindings,
+    rim_enabled, highlight_enabled: bool,
+) {
+    rim_value := c.int(0)
+    if rim_enabled { rim_value = 1 }
+    highlight_value := c.int(0)
+    if highlight_enabled { highlight_value = 1 }
+    rl.SetShaderValue(shader, bindings.rim_enabled, &rim_value, .INT)
+    rl.SetShaderValue(shader, bindings.highlight_enabled, &highlight_value, .INT)
+}
+
 game_draw_world :: proc(
     assets: ^Game_Assets,
     state: ^Game_State,
     shader: rl.Shader,
+    bindings: ^Cel_Shader_Bindings,
     cel_ramp: rl.Texture2D,
+    style: ^Cel_Style,
     camera: rl.Camera3D,
 ) {
     game_prepare_assets_shader(assets, shader, cel_ramp)
 
+    // View-dependent rim/highlight thresholds can divide a large flat floor
+    // into hard regions that resemble z-fighting. Terrain has its own authored
+    // colors, so render it with stable diffuse bands and reserve accents for
+    // walls, props, and the player.
+    game_set_cel_accents_enabled(shader, bindings, false, false)
     for &room in GAME_ROOMS {
         center := rl.Vector3{
             (room.bounds.min_x + room.bounds.max_x) * 0.5,
@@ -1137,7 +1493,6 @@ game_draw_world :: proc(
             room.bounds.max_z - room.bounds.min_z,
         }
         rl.DrawModelEx(assets.cube, center, {0, 1, 0}, 0, size, room.color)
-        game_draw_room_walls(assets, &room)
     }
     game_draw_connections(assets)
     game_draw_floor_accents(assets)
@@ -1146,12 +1501,12 @@ game_draw_world :: proc(
         room := game_room(hazard.room)
         center := rl.Vector3{
             (hazard.bounds.min_x + hazard.bounds.max_x) * 0.5,
-            room.floor_y + 0.025,
+            room.floor_y + GAME_OVERLAY_HEIGHT * 0.5 - GAME_OVERLAY_EMBED,
             (hazard.bounds.min_z + hazard.bounds.max_z) * 0.5,
         }
         size := rl.Vector3{
             hazard.bounds.max_x - hazard.bounds.min_x,
-            0.05,
+            GAME_OVERLAY_HEIGHT,
             hazard.bounds.max_z - hazard.bounds.min_z,
         }
         rl.DrawModelEx(assets.cube, center, {0, 1, 0}, 0, size, {13, 17, 43, 255})
@@ -1174,6 +1529,15 @@ game_draw_world :: proc(
         )
     }
 
+    game_set_cel_accents_enabled(
+        shader,
+        bindings,
+        style.rim.enabled,
+        style.highlight.enabled,
+    )
+    for &room in GAME_ROOMS {
+        game_draw_room_walls(assets, &room)
+    }
     game_draw_obstacle_markers(assets)
     game_draw_decor(assets, state, camera)
     game_draw_player(assets, state)
@@ -1242,6 +1606,101 @@ game_draw_projected_rect :: proc(
     }
 }
 
+game_draw_screen_bounds :: proc(
+    bounds: Game_Screen_Bounds,
+    thickness: f32,
+    color: rl.Color,
+) {
+    if !bounds.valid {
+        return
+    }
+    rectangle := rl.Rectangle{
+        bounds.min.x,
+        bounds.min.y,
+        bounds.max.x - bounds.min.x,
+        bounds.max.y - bounds.min.y,
+    }
+    rl.DrawRectangleLinesEx(rectangle, thickness, color)
+}
+
+game_draw_occlusion_test_overlay :: proc(
+    assets: ^Game_Assets,
+    state: ^Game_State,
+    camera: rl.Camera3D,
+) {
+    query := game_decor_occlusion_query(
+        assets,
+        GAME_OCCLUSION_TEST_TREE,
+        state,
+        camera,
+    )
+    bound_color := rl.Color{255, 215, 82, 255}
+    status: cstring = "OUTSIDE"
+    if query.occluded {
+        bound_color = GAME_OCCLUSION_DEBUG_TINT
+        status = "INSIDE"
+    }
+
+    game_draw_screen_bounds(query.decor_bounds, 3, bound_color)
+    game_draw_screen_bounds(query.player_bounds, 3, {75, 229, 241, 255})
+    if query.overlap.valid {
+        overlap_rectangle := rl.Rectangle{
+            query.overlap.min.x,
+            query.overlap.min.y,
+            query.overlap.max.x - query.overlap.min.x,
+            query.overlap.max.y - query.overlap.min.y,
+        }
+        rl.DrawRectangleRec(overlap_rectangle, {255, 255, 255, 48})
+        rl.DrawRectangleLinesEx(overlap_rectangle, 2, rl.WHITE)
+    }
+
+    ground_y := GAME_OCCLUSION_TEST_TREE.position.y + 0.08
+    player_screen := rl.GetWorldToScreen(
+        {query.player_ground.x, ground_y, query.player_ground.y},
+        camera,
+    )
+    camera_ground_screen := rl.GetWorldToScreen(
+        {query.camera_ground.x, ground_y, query.camera_ground.y},
+        camera,
+    )
+    rl.DrawLineEx(player_screen, camera_ground_screen, 2, {75, 229, 241, 220})
+
+    overlap_width := f32(0)
+    overlap_height := f32(0)
+    if query.overlap.valid {
+        overlap_width = query.overlap.max.x - query.overlap.min.x
+        overlap_height = query.overlap.max.y - query.overlap.min.y
+    }
+    rl.DrawRectangle(900, 16, 364, 78, {12, 14, 38, 224})
+    rl.DrawRectangle(900, 16, 5, 78, bound_color)
+    rl.DrawText(
+        rl.TextFormat("PROJECTED BOUNDS: %s", status),
+        916,
+        24,
+        20,
+        bound_color,
+    )
+    rl.DrawText(
+        rl.TextFormat(
+            "overlap %.0f x %.0f px   depth t %.3f",
+            overlap_width,
+            overlap_height,
+            query.projection,
+        ),
+        916,
+        49,
+        16,
+        rl.RAYWHITE,
+    )
+    rl.DrawText(
+        "cyan: player model   yellow/pink: tree model",
+        916,
+        68,
+        14,
+        {75, 229, 241, 255},
+    )
+}
+
 game_draw_debug_overlay :: proc(state: ^Game_State, camera: rl.Camera3D) {
     room := game_room(state.current_room)
     game_draw_projected_rect(room.bounds, room.floor_y + 0.04, camera, rl.YELLOW)
@@ -1290,23 +1749,45 @@ game_draw_debug_overlay :: proc(state: ^Game_State, camera: rl.Camera3D) {
     )
 }
 
-game_draw_hud :: proc(state: ^Game_State, camera: rl.Camera3D) {
+game_draw_hud :: proc(
+    assets: ^Game_Assets,
+    state: ^Game_State,
+    camera: rl.Camera3D,
+) {
     room := game_room(state.current_room)
     accent := GAME_ROOM_HUD_ACCENT_COLORS[int(state.current_room)]
+    if state.current_room == .TEST_OCCLUSION {
+        game_draw_occlusion_test_overlay(assets, state, camera)
+    }
     rl.DrawRectangle(12, 12, 310, 48, {12, 14, 38, 224})
     rl.DrawRectangle(12, 12, 5, 48, accent)
     room_name := strings.clone_to_cstring(room.name, context.temp_allocator)
     rl.DrawText(room_name, 25, 20, 20, {244, 244, 255, 255})
     objective_text: cstring = "Reach the overlook"
-    if state.overlook_reached {
+    if state.current_room == .TEST_OCCLUSION {
+        if game_decor_occludes_player(
+            assets,
+            GAME_OCCLUSION_TEST_TREE,
+            state,
+            camera,
+        ) {
+            objective_text = "OCCLUDED: tree should be hot pink"
+        } else {
+            objective_text = "CLEAR: projected model bounds do not overlap"
+        }
+    } else if state.overlook_reached {
         objective_text = "Return to the start forest"
     }
     rl.DrawText(objective_text, 25, 42, 14, accent)
 
     rl.DrawRectangle(12, GAME_SCREEN_HEIGHT - 34, 420, 22, {12, 14, 38, 205})
     rl.DrawRectangle(12, GAME_SCREEN_HEIGHT - 34, 5, 22, {239, 91, 145, 255})
+    controls_text: cstring = "Move: WASD / arrows    Dash: Space    Reset: R    Debug: F3"
+    if state.current_room == .TEST_OCCLUSION {
+        controls_text = "W/S: cross tree    A/D: sweep projected edge    White: screen overlap"
+    }
     rl.DrawText(
-        "Move: WASD / arrows    Dash: Space    Reset: R    Debug: F3",
+        controls_text,
         20,
         GAME_SCREEN_HEIGHT - 30,
         14,
@@ -1441,7 +1922,9 @@ game_renderer_render :: proc(
                 assets,
                 state,
                 renderer.scene_shader,
+                &renderer.scene_bindings,
                 renderer.cel_ramp_texture,
+                style,
                 camera,
             )
         rl.EndMode3D()
@@ -1461,7 +1944,9 @@ game_renderer_render :: proc(
                 assets,
                 state,
                 renderer.cel_band_shader,
+                &renderer.cel_band_bindings,
                 renderer.cel_ramp_texture,
+                style,
                 camera,
             )
         rl.EndMode3D()
@@ -1535,7 +2020,7 @@ game_renderer_render :: proc(
             0,
             rl.WHITE,
         )
-        game_draw_hud(state, camera)
+        game_draw_hud(assets, state, camera)
     rl.EndTextureMode()
 }
 
