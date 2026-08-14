@@ -1,5 +1,10 @@
 #version 330
 
+// Classification-aware color downsampler. For each logical pixel it samples a
+// fixed 4x4 source footprint, chooses a dominant cel band and preservable accent,
+// then returns an existing representative source color rather than averaging
+// across hard albedo or lighting boundaries.
+
 in vec2 fragTexCoord;
 in vec4 fragColor;
 
@@ -16,12 +21,16 @@ out vec4 finalColor;
 
 #include "downsample_common.glsl"
 
+// color_distance_squared uses luma-weighted squared RGB distance. Avoiding sqrt
+// keeps the pairwise clustering loop inexpensive and threshold comparisons exact.
 float color_distance_squared(vec3 first_color, vec3 second_color) {
     vec3 color_delta = first_color - second_color;
     return dot(color_delta * color_delta, vec3(0.299, 0.587, 0.114));
 }
 
 void main() {
+    // Cache UVs and decoded metadata once; later voting stages repeatedly compare
+    // the same 16 samples.
     vec2 sample_uvs[DOWNSAMPLE_SAMPLE_COUNT];
     int sample_bands[DOWNSAMPLE_SAMPLE_COUNT];
     int sample_accents[DOWNSAMPLE_SAMPLE_COUNT];
@@ -45,6 +54,8 @@ void main() {
     }
 
     // First choose the cel-shading band with the greatest source coverage.
+    // Ties prefer a sample nearest the footprint center, then the lower band ID,
+    // making output stable regardless of candidate traversal coincidences.
     int winning_band = -1;
     int winning_band_votes = -1;
     float winning_band_center_distance = 2.0;
@@ -109,6 +120,8 @@ void main() {
         }
     }
 
+    // Highlights outrank rims when both satisfy their authorable preservation
+    // vote thresholds. A zero winner allows all samples in the dominant band.
     int winning_accent = 0;
     if (highlight_votes >= clamp(
             u_highlight_preserve_samples,
@@ -187,6 +200,8 @@ void main() {
         }
     }
 
+    // winning_sample_index is guaranteed once a non-background band wins because
+    // at least one sample belongs to that band and matches the selected accent.
     vec4 winning_color = vec4(sample_colors[winning_sample_index], 1.0);
     finalColor = winning_color * fragColor * colDiffuse;
 }

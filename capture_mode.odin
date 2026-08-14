@@ -1,5 +1,9 @@
 package main
 
+// This module owns the non-interactive capture command-line contract. It keeps
+// parsing and PNG export deterministic so visual regression jobs exercise the
+// same GPU pipeline as the interactive viewer without depending on user input.
+
 import "core:fmt"
 import "core:log"
 import "core:math"
@@ -9,6 +13,9 @@ import "core:strconv"
 import "core:strings"
 import rl "vendor:raylib"
 
+// Capture_Target selects which internal RenderTexture is read back. Each target
+// has a stable resolution documented in AGENTS.md and is suitable for a
+// different layer of visual regression testing.
 Capture_Target :: enum {
     COMPOSITE,
     LENS,
@@ -17,6 +24,8 @@ Capture_Target :: enum {
     COVERAGE_MASK,
 }
 
+// Capture_View names the reproducible camera presets available to capture jobs.
+// DEFAULT preserves normal framing; the other values overwrite the camera pose.
 Capture_View :: enum {
     DEFAULT,
     X,
@@ -25,6 +34,8 @@ Capture_View :: enum {
     ISOMETRIC,
 }
 
+// Capture_Parse_Error is intentionally specific enough for CLI callers to
+// distinguish malformed syntax from incompatible combinations of valid flags.
 Capture_Parse_Error :: enum {
     NONE,
     MISSING_VALUE,
@@ -44,12 +55,17 @@ Capture_Parse_Error :: enum {
     INVALID_OUTPUT_TEMPLATE,
 }
 
+// Capture_Output_Template stores byte offsets into the original output path.
+// token_end is exclusive and width is zero for an unpadded %d token.
 Capture_Output_Template :: struct {
     token_start: int,
     token_end:   int,
     width:       int,
 }
 
+// Capture_Options is the fully validated render request consumed by main.
+// output_path_owned records whether parsing allocated the path and therefore
+// whether destroy_capture_options must release it.
 Capture_Options :: struct {
     enabled:             bool,
     help_requested:      bool,
@@ -72,12 +88,16 @@ Capture_Options :: struct {
     hide_window:         bool,
 }
 
+// Capture_Parse_Result returns partial options alongside the first parse error,
+// allowing the CLI to report the offending value without throwing away context.
 Capture_Parse_Result :: struct {
     options:        Capture_Options,
     error:          Capture_Parse_Error,
     error_argument: string,
 }
 
+// destroy_capture_options releases parser-owned strings and clears the struct.
+// Clearing prevents stale ownership flags from causing a later double free.
 destroy_capture_options :: proc(options: ^Capture_Options) {
     if options.output_path_owned && len(options.output_path) > 0 {
         delete(options.output_path)
@@ -85,128 +105,8 @@ destroy_capture_options :: proc(options: ^Capture_Options) {
     options^ = {}
 }
 
-capture_parse_error_message :: proc(parse_error: Capture_Parse_Error) -> string {
-    switch parse_error {
-    case .NONE:
-        return ""
-    case .MISSING_VALUE:
-        return "capture option requires a value"
-    case .UNKNOWN_ARGUMENT:
-        return "unknown capture option"
-    case .MISSING_CASE:
-        return "capture options require --capture-case <name>"
-    case .INVALID_CASE:
-        return "capture case names may contain only letters, digits, '-' and '_'"
-    case .INVALID_MODEL:
-        return "capture model must be a non-empty asset path or built-in source"
-    case .INVALID_STYLE:
-        return "capture style must be a non-empty .json path"
-    case .INVALID_MODE:
-        return "capture mode must be pixelated, blended, or coverage-mask"
-    case .INVALID_VIEW:
-        return "capture view must be default, x, y, z, or isometric"
-    case .INVALID_TARGET:
-        return "capture target must be composite, lens, scene, downsample, or coverage-mask"
-    case .INVALID_FRAME:
-        return "capture frame must be a non-negative number"
-    case .INVALID_FRAME_RANGE:
-        return "capture frame range must be start:end[:step] with non-negative integers, start <= end, and step > 0"
-    case .CONFLICTING_FRAME_OPTIONS:
-        return "capture frame and capture frame range cannot be used together"
-    case .INVALID_WARMUP:
-        return "capture warmup must be an integer from 1 through 600"
-    case .INVALID_OUTPUT:
-        return "capture output must be a non-empty .png path"
-    case .INVALID_OUTPUT_TEMPLATE:
-        return "capture sequence output must contain exactly one %d or %0Nd frame token"
-    }
-    return "invalid capture configuration"
-}
-
-parse_capture_frame_range :: proc(value: string) -> (
-    start, end, step: int,
-    valid: bool,
-) {
-    parts := strings.split(value, ":", context.temp_allocator)
-    if len(parts) != 2 && len(parts) != 3 {
-        return
-    }
-
-    start_valid, end_valid: bool
-    start, start_valid = strconv.parse_int(parts[0])
-    end, end_valid = strconv.parse_int(parts[1])
-    step = 1
-    step_valid := true
-    if len(parts) == 3 {
-        step, step_valid = strconv.parse_int(parts[2])
-    }
-    if !start_valid || !end_valid || !step_valid ||
-       start < 0 || end < start || step <= 0 {
-        return 0, 0, 0, false
-    }
-
-    frame_intervals := (end - start) / step
-    if frame_intervals >= 10000 {
-        return 0, 0, 0, false
-    }
-    return start, end, step, true
-}
-
-parse_capture_output_template :: proc(output_path: string) -> (
-    output_template: Capture_Output_Template,
-    valid: bool,
-) {
-    token_found := false
-    path_index := 0
-    for path_index < len(output_path) {
-        if output_path[path_index] != '%' {
-            path_index += 1
-            continue
-        }
-        if token_found || path_index + 1 >= len(output_path) {
-            return {}, false
-        }
-
-        token_start := path_index
-        path_index += 1
-        token_width := 0
-        if output_path[path_index] == 'd' {
-            path_index += 1
-        } else if output_path[path_index] == '0' {
-            width_start := path_index + 1
-            path_index = width_start
-            for path_index < len(output_path) &&
-                output_path[path_index] >= '0' &&
-                output_path[path_index] <= '9' {
-                path_index += 1
-            }
-            if path_index == width_start ||
-               path_index >= len(output_path) ||
-               output_path[path_index] != 'd' {
-                return {}, false
-            }
-            parsed_width, width_valid := strconv.parse_int(
-                output_path[width_start:path_index],
-            )
-            if !width_valid || parsed_width < 1 || parsed_width > 12 {
-                return {}, false
-            }
-            token_width = parsed_width
-            path_index += 1
-        } else {
-            return {}, false
-        }
-
-        output_template = {
-            token_start = token_start,
-            token_end   = path_index,
-            width       = token_width,
-        }
-        token_found = true
-    }
-    return output_template, token_found
-}
-
+// format_capture_sequence_output_path substitutes one validated frame token.
+// The returned string is allocator-owned and must be deleted by the caller.
 format_capture_sequence_output_path :: proc(
     output_path: string,
     output_template: Capture_Output_Template,
@@ -226,22 +126,9 @@ format_capture_sequence_output_path :: proc(
     return fmt.aprintf("%s%d%s", prefix, animation_frame, suffix)
 }
 
-is_capture_case_name_valid :: proc(case_name: string) -> bool {
-    if len(case_name) == 0 {
-        return false
-    }
-    for value in case_name {
-        if (value >= 'a' && value <= 'z') ||
-           (value >= 'A' && value <= 'Z') ||
-           (value >= '0' && value <= '9') ||
-           value == '-' || value == '_' {
-            continue
-        }
-        return false
-    }
-    return true
-}
-
+// parse_capture_options scans capture-specific CLI flags while ignoring normal
+// application arguments. It applies defaults, validates cross-flag invariants,
+// and allocates a deterministic default output path when none is supplied.
 parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
     result: Capture_Parse_Result
     result.options.lens_mode = .PIXELATED
@@ -281,7 +168,21 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
 
         switch argument {
         case "--capture-case":
-            if !is_capture_case_name_valid(value) {
+            // Validate the case name here because this is its only consumer.
+            case_name_valid := len(value) > 0
+            if case_name_valid {
+                for case_character in value {
+                    if (case_character >= 'a' && case_character <= 'z') ||
+                       (case_character >= 'A' && case_character <= 'Z') ||
+                       (case_character >= '0' && case_character <= '9') ||
+                       case_character == '-' || case_character == '_' {
+                        continue
+                    }
+                    case_name_valid = false
+                    break
+                }
+            }
+            if !case_name_valid {
                 result.error = .INVALID_CASE
                 result.error_argument = value
                 return result
@@ -373,8 +274,26 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
             result.options.animation_frame_set = true
 
         case "--capture-frame-range":
-            range_start, range_end, range_step, range_valid :=
-                parse_capture_frame_range(value)
+            // Parse and bound the frame range inline at its sole call site.
+            range_start, range_end, range_step := 0, 0, 1
+            range_valid := false
+            parts := strings.split(value, ":", context.temp_allocator)
+            if len(parts) == 2 || len(parts) == 3 {
+                start_valid, end_valid: bool
+                range_start, start_valid = strconv.parse_int(parts[0])
+                range_end, end_valid = strconv.parse_int(parts[1])
+                step_valid := true
+                if len(parts) == 3 {
+                    range_step, step_valid = strconv.parse_int(parts[2])
+                }
+                range_valid = start_valid && end_valid && step_valid &&
+                              range_start >= 0 && range_end >= range_start &&
+                              range_step > 0
+                if range_valid {
+                    frame_intervals := (range_end - range_start) / range_step
+                    range_valid = frame_intervals < 10000
+                }
+            }
             if !range_valid {
                 result.error = .INVALID_FRAME_RANGE
                 result.error_argument = value
@@ -432,9 +351,63 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
         result.options.output_path_owned = true
     }
     if result.options.frame_range_set {
-        output_template, template_valid := parse_capture_output_template(
-            result.options.output_path,
-        )
+        // Locate and validate the one frame token where the template is used.
+        output_template: Capture_Output_Template
+        template_valid := true
+        token_found := false
+        path_index := 0
+        output_path := result.options.output_path
+        for path_index < len(output_path) {
+            if output_path[path_index] != '%' {
+                path_index += 1
+                continue
+            }
+            if token_found || path_index + 1 >= len(output_path) {
+                template_valid = false
+                break
+            }
+
+            token_start := path_index
+            path_index += 1
+            token_width := 0
+            if output_path[path_index] == 'd' {
+                path_index += 1
+            } else if output_path[path_index] == '0' {
+                width_start := path_index + 1
+                path_index = width_start
+                for path_index < len(output_path) &&
+                    output_path[path_index] >= '0' &&
+                    output_path[path_index] <= '9' {
+                    path_index += 1
+                }
+                if path_index == width_start ||
+                   path_index >= len(output_path) ||
+                   output_path[path_index] != 'd' {
+                    template_valid = false
+                    break
+                }
+                parsed_width, width_valid := strconv.parse_int(
+                    output_path[width_start:path_index],
+                )
+                if !width_valid || parsed_width < 1 || parsed_width > 12 {
+                    template_valid = false
+                    break
+                }
+                token_width = parsed_width
+                path_index += 1
+            } else {
+                template_valid = false
+                break
+            }
+
+            output_template = {
+                token_start = token_start,
+                token_end   = path_index,
+                width       = token_width,
+            }
+            token_found = true
+        }
+        template_valid = template_valid && token_found
         if !template_valid {
             result.error = .INVALID_OUTPUT_TEMPLATE
             result.error_argument = result.options.output_path
@@ -446,6 +419,8 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
     return result
 }
 
+// print_capture_usage writes the capture-only help text without initializing
+// raylib, which keeps --capture-help usable in non-graphical environments.
 print_capture_usage :: proc() {
     fmt.println("Non-interactive capture mode")
     fmt.println("")
@@ -463,6 +438,8 @@ print_capture_usage :: proc() {
     fmt.println("  --capture-help                 Print this help without opening a window")
 }
 
+// find_capture_model_source resolves built-ins, repository-relative assets, and
+// absolute paths to the canonical source index used by the model browser.
 find_capture_model_source :: proc(
     model_assets: ^Model_Assets,
     requested_source: string,
@@ -485,50 +462,8 @@ find_capture_model_source :: proc(
     return -1, false
 }
 
-apply_capture_view :: proc(
-    view: Capture_View,
-    camera: ^rl.Camera3D,
-    model_center: rl.Vector3,
-    scene_size: f32,
-) {
-    switch view {
-    case .DEFAULT:
-        return
-    case .X:
-        reset_camera_to_axis_view(
-            camera,
-            model_center,
-            {1, 0, 0},
-            {0, 1, 0},
-            scene_size,
-        )
-    case .Y:
-        reset_camera_to_axis_view(
-            camera,
-            model_center,
-            {0, 1, 0},
-            {0, 0, 1},
-            scene_size,
-        )
-    case .Z:
-        reset_camera_to_axis_view(
-            camera,
-            model_center,
-            {0, 0, 1},
-            {0, 1, 0},
-            scene_size,
-        )
-    case .ISOMETRIC:
-        reset_camera_to_axis_view(
-            camera,
-            model_center,
-            rl.Vector3Normalize({1, 1, 1}),
-            {0, 1, 0},
-            scene_size,
-        )
-    }
-}
-
+// ensure_capture_output_directory creates all parent directories for a PNG.
+// Existing directories are accepted to support concurrent capture workers.
 ensure_capture_output_directory :: proc(output_path: string) -> bool {
     output_directory := filepath.dir(output_path)
     if output_directory == "" || output_directory == "." {
@@ -552,6 +487,9 @@ ensure_capture_output_directory :: proc(output_path: string) -> bool {
     return true
 }
 
+// export_render_texture_png reads an RGBA texture from the GPU, fixes the
+// RenderTexture Y orientation, optionally crops it, and writes a PNG. The
+// temporary raylib Image is always unloaded before the procedure returns.
 export_render_texture_png :: proc(
     texture: rl.Texture2D,
     output_path: string,
@@ -581,45 +519,4 @@ export_render_texture_png :: proc(
         context.temp_allocator,
     )
     return rl.ExportImage(texture_readback, output_path_cstr)
-}
-
-export_capture_target :: proc(
-    options: ^Capture_Options,
-    output_path: string,
-    composite_render_target: rl.RenderTexture2D,
-    scene_render_target: rl.RenderTexture2D,
-    downsample_render_target: rl.RenderTexture2D,
-    coverage_mask_render_target: rl.RenderTexture2D,
-    lens_bounds: rl.Rectangle,
-) -> bool {
-    lens_crop_bounds := lens_bounds
-    switch options.target {
-    case .COMPOSITE:
-        return export_render_texture_png(
-            composite_render_target.texture,
-            output_path,
-        )
-    case .LENS:
-        return export_render_texture_png(
-            composite_render_target.texture,
-            output_path,
-            &lens_crop_bounds,
-        )
-    case .SCENE:
-        return export_render_texture_png(
-            scene_render_target.texture,
-            output_path,
-        )
-    case .DOWNSAMPLE:
-        return export_render_texture_png(
-            downsample_render_target.texture,
-            output_path,
-        )
-    case .COVERAGE_MASK:
-        return export_render_texture_png(
-            coverage_mask_render_target.texture,
-            output_path,
-        )
-    }
-    return false
 }

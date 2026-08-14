@@ -1,9 +1,14 @@
 package main
 
+// These tests specify the semantic keyboard layer without polling real input.
+// They protect exact modifiers, focus suppression, fallback focus, registry
+// uniqueness, and command-side bounds enforcement.
+
 import "core:c"
 import "core:testing"
 import rl "vendor:raylib"
 
+// Shortcut matches require exact modifiers rather than accepting accidental extras.
 @(test)
 shortcut_binding_requires_exact_modifiers :: proc(t: ^testing.T) {
     save_binding := UI_Shortcut_Binding{.CEL_SAVE, .S, UI_MOD_PRIMARY}
@@ -29,6 +34,7 @@ shortcut_binding_requires_exact_modifiers :: proc(t: ^testing.T) {
     )
 }
 
+// Focus suppression blocks plain commands but preserves modified commands and global help.
 @(test)
 focused_control_only_suppresses_unmodified_accelerators :: proc(t: ^testing.T) {
     lens_binding := UI_Shortcut_Binding{.LENS_PIXELATED, .ONE, 0}
@@ -52,6 +58,7 @@ focused_control_only_suppresses_unmodified_accelerators :: proc(t: ^testing.T) {
     )
 }
 
+// No two registry entries may claim the same key and modifier combination.
 @(test)
 shortcut_registry_has_no_conflicting_bindings :: proc(t: ^testing.T) {
     for left, left_index in UI_SHORTCUT_BINDINGS {
@@ -66,6 +73,7 @@ shortcut_registry_has_no_conflicting_bindings :: proc(t: ^testing.T) {
     }
 }
 
+// Focus from a hidden child resolves to the nearest still-visible section header.
 @(test)
 hidden_controls_fall_back_to_their_section_header :: proc(t: ^testing.T) {
     testing.expect_value(
@@ -85,6 +93,7 @@ hidden_controls_fall_back_to_their_section_header :: proc(t: ^testing.T) {
     )
 }
 
+// Semantic command dispatch clamps downscale and inspector scrolling at both limits.
 @(test)
 command_dispatch_clamps_downscale_and_scroll :: proc(t: ^testing.T) {
     quit_requested := false

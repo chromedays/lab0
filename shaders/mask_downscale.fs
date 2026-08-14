@@ -1,5 +1,8 @@
 #version 330
 
+// Coverage-only downsample pass. It uses the scene alpha attachment and the
+// shared 4x4 footprint to measure how much of each logical pixel is occupied.
+
 in vec2 fragTexCoord;
 in vec4 fragColor;
 
@@ -13,6 +16,8 @@ out vec4 finalColor;
 #include "downsample_common.glsl"
 
 void main() {
+    // Coverage remains fractional instead of thresholded here; outline.fs owns
+    // the style-specific decision about which neighboring cells count as solid.
     float coverage = sample_downscaled_alpha(
         texture0,
         fragTexCoord,

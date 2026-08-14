@@ -1,8 +1,13 @@
 package main
 
+// These tests protect the conservative glTF skin-scale correction. False
+// positives deform skeletons, so accepted transforms and the bundled fixture are
+// both checked independently.
+
 import "core:math"
 import "core:testing"
 
+// Matrix detection accepts only positive uniform scale and rejects translation, rotation, and non-uniform axes.
 @test
 pure_uniform_scale_matrix_detection_is_conservative :: proc(t: ^testing.T) {
     identity := [16]f32{
@@ -42,6 +47,7 @@ pure_uniform_scale_matrix_detection_is_conservative :: proc(t: ^testing.T) {
     testing.expect(t, !valid)
 }
 
+// The bundled GodotMan hierarchy must expose the known model-wide skinned-mesh scale.
 @test
 godotman_skinned_mesh_uniform_scale_is_detected :: proc(t: ^testing.T) {
     scale, found := get_gltf_skinned_mesh_uniform_scale("assets/godotman.glb")

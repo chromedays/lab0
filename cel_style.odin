@@ -1,5 +1,9 @@
 package main
 
+// This module defines the runtime cel-shading model, its JSON wire format, and
+// the CPU-to-GLSL upload path. Runtime structs use raylib vector/color types,
+// while file structs remain plain arrays so JSON encoding stays predictable.
+
 import json "core:encoding/json"
 import "core:c"
 import "core:math"
@@ -12,17 +16,23 @@ CEL_RAMP_WIDTH :: 256
 CEL_BOUNDARY_MINIMUM_GAP :: f32(1.0 / 255.0)
 CEL_STYLE_SCHEMA_VERSION :: 1
 
+// Cel_Light_Space describes the coordinate system in which light_direction is
+// authored. The value is converted to world space immediately before upload.
 Cel_Light_Space :: enum {
     WORLD,
     CAMERA,
     MODEL,
 }
 
+// Cel_Alpha_Mode mirrors the shader's integer alpha-mode uniform. OPAQUE ignores
+// texture alpha; MASK discards samples below alpha_cutoff.
 Cel_Alpha_Mode :: enum {
     OPAQUE,
     MASK,
 }
 
+// Cel_Band represents one quantized diffuse interval. upper_bound belongs to
+// every band except the last, whose implicit upper bound is 1.0.
 Cel_Band :: struct {
     upper_bound: f32,
     brightness:  f32,
@@ -30,6 +40,8 @@ Cel_Band :: struct {
     tint_mix:    f32,
 }
 
+// Cel_Accent configures view-dependent rim or highlight lighting. The
+// preserve_samples count controls edge preservation during pixel downsampling.
 Cel_Accent :: struct {
     enabled:          bool,
     color:            rl.Vector3,
@@ -38,12 +50,16 @@ Cel_Accent :: struct {
     preserve_samples: int,
 }
 
+// Cel_Outline configures the post-process outline in low-resolution pixels.
+// coverage_threshold rejects weakly covered cells before edge detection.
 Cel_Outline :: struct {
     width:              int,
     color:              rl.Color,
     coverage_threshold: f32,
 }
 
+// Cel_Style is the validated runtime style. name_owned tracks heap ownership,
+// and revision increments whenever UI edits require the ramp texture to refresh.
 Cel_Style :: struct {
     name:            string,
     name_owned:      bool,
@@ -60,6 +76,8 @@ Cel_Style :: struct {
     revision:        u64,
 }
 
+// Cel_Style_Error separates I/O failures from individual validation failures so
+// the editor and capture CLI can produce actionable diagnostics.
 Cel_Style_Error :: enum {
     NONE,
     READ_FAILED,
@@ -81,12 +99,15 @@ Cel_Style_Error :: enum {
     INVALID_OUTLINE,
 }
 
+// The Cel_Style_File_* structs are the versioned JSON representation. They are
+// deliberately distinct from runtime structs to isolate schema compatibility.
 Cel_Style_File_Light :: struct {
     space:     string,
     direction: [3]f32,
     wrap:      f32,
 }
 
+// Cel_Style_File_Band stores one JSON ramp interval using plain RGB arrays.
 Cel_Style_File_Band :: struct {
     upper_bound: f32,
     brightness:  f32,
@@ -94,11 +115,13 @@ Cel_Style_File_Band :: struct {
     tint_mix:    f32,
 }
 
+// Cel_Style_File_Alpha keeps the mode human-readable in preset files.
 Cel_Style_File_Alpha :: struct {
     mode:   string,
     cutoff: f32,
 }
 
+// Cel_Style_File_Accent is shared by the serialized rim and highlight fields.
 Cel_Style_File_Accent :: struct {
     enabled:          bool,
     color:            [3]f32,
@@ -107,12 +130,14 @@ Cel_Style_File_Accent :: struct {
     preserve_samples: int,
 }
 
+// Cel_Style_File_Outline stores exact RGBA bytes to avoid color round-off.
 Cel_Style_File_Outline :: struct {
     width:              int,
     color:              [4]u8,
     coverage_threshold: f32,
 }
 
+// Cel_Style_File is the schema-versioned top-level JSON document.
 Cel_Style_File :: struct {
     schema_version: int,
     name:           string,
@@ -124,6 +149,8 @@ Cel_Style_File :: struct {
     outline:        Cel_Style_File_Outline,
 }
 
+// Cel_Shader_Bindings caches uniform locations. Resolving these once avoids
+// repeated string lookups in the per-frame rendering path.
 Cel_Shader_Bindings :: struct {
     light_direction:       c.int,
     wrap_lighting:         c.int,
@@ -143,6 +170,8 @@ Cel_Shader_Bindings :: struct {
     highlight_strength:    c.int,
 }
 
+// make_classic_cel_style constructs the built-in fallback without allocating
+// its static name. Callers may replace it with an owned style loaded from JSON.
 make_classic_cel_style :: proc() -> Cel_Style {
     style := Cel_Style{
         name            = "Classic",
@@ -193,6 +222,8 @@ make_classic_cel_style :: proc() -> Cel_Style {
     return style
 }
 
+// destroy_cel_style releases only data marked as owned and zeroes the value.
+// Static built-in names therefore remain safe while loaded names are reclaimed.
 destroy_cel_style :: proc(style: ^Cel_Style) {
     if style.name_owned && len(style.name) > 0 {
         delete(style.name)
@@ -200,6 +231,8 @@ destroy_cel_style :: proc(style: ^Cel_Style) {
     style^ = {}
 }
 
+// cel_style_error_message converts stable error categories into user-facing
+// text shared by logs, the preset editor, and capture-mode diagnostics.
 cel_style_error_message :: proc(style_error: Cel_Style_Error) -> string {
     switch style_error {
     case .NONE:                    return ""
@@ -224,20 +257,25 @@ cel_style_error_message :: proc(style_error: Cel_Style_Error) -> string {
     return "invalid cel style"
 }
 
+// cel_f32_is_finite rejects NaN and infinities before any range comparison.
 cel_f32_is_finite :: proc(value: f32) -> bool {
     return !math.is_nan(value) && !math.is_inf(value)
 }
 
+// cel_unit_value_is_valid validates normalized scalar fields in [0, 1].
 cel_unit_value_is_valid :: proc(value: f32) -> bool {
     return cel_f32_is_finite(value) && value >= 0 && value <= 1
 }
 
+// cel_color_is_valid validates every RGB component as a normalized finite value.
 cel_color_is_valid :: proc(color: rl.Vector3) -> bool {
     return cel_unit_value_is_valid(color.x) &&
            cel_unit_value_is_valid(color.y) &&
            cel_unit_value_is_valid(color.z)
 }
 
+// validate_cel_accent checks both shader ranges and the supported sample count.
+// Disabled accents are still validated so enabling them cannot reveal bad state.
 validate_cel_accent :: proc(accent: Cel_Accent) -> bool {
     return cel_color_is_valid(accent.color) &&
            cel_unit_value_is_valid(accent.threshold) &&
@@ -246,6 +284,9 @@ validate_cel_accent :: proc(accent: Cel_Accent) -> bool {
            accent.preserve_samples >= 1 && accent.preserve_samples <= 16
 }
 
+// validate_cel_style enforces all runtime and serialized invariants, returning
+// the first precise failure. Band thresholds must be ordered far enough apart
+// to map to distinct bytes in the 256-entry ramp texture.
 validate_cel_style :: proc(style: ^Cel_Style) -> Cel_Style_Error {
     if len(strings.trim_space(style.name)) == 0 {
         return .INVALID_NAME
@@ -310,6 +351,7 @@ validate_cel_style :: proc(style: ^Cel_Style) -> Cel_Style_Error {
     return .NONE
 }
 
+// cel_band_for_diffuse maps a clamped Lambert diffuse term to its quantized band.
 cel_band_for_diffuse :: proc(style: ^Cel_Style, diffuse: f32) -> int {
     clamped_diffuse := clamp(diffuse, f32(0), f32(1))
     for band_index := 0; band_index < style.band_count - 1; band_index += 1 {
@@ -320,10 +362,13 @@ cel_band_for_diffuse :: proc(style: ^Cel_Style, diffuse: f32) -> int {
     return style.band_count - 1
 }
 
+// cel_color_component_to_byte clamps, rounds, and encodes normalized color data.
 cel_color_component_to_byte :: proc(value: f32) -> u8 {
     return u8(math.round(clamp(value, f32(0), f32(1)) * 255))
 }
 
+// build_cel_ramp_pixels creates the lookup texture consumed by the cel shader.
+// RGB stores tint and alpha stores a one-based band index for exact decoding.
 build_cel_ramp_pixels :: proc(style: ^Cel_Style) -> [CEL_RAMP_WIDTH]rl.Color {
     pixels: [CEL_RAMP_WIDTH]rl.Color
     for &pixel, pixel_index in pixels {
@@ -340,28 +385,8 @@ build_cel_ramp_pixels :: proc(style: ^Cel_Style) -> [CEL_RAMP_WIDTH]rl.Color {
     return pixels
 }
 
-load_cel_ramp_texture :: proc(style: ^Cel_Style) -> rl.Texture2D {
-    pixels := build_cel_ramp_pixels(style)
-    image := rl.Image{
-        data = raw_data(pixels[:]),
-        width = CEL_RAMP_WIDTH,
-        height = 1,
-        mipmaps = 1,
-        format = .UNCOMPRESSED_R8G8B8A8,
-    }
-    texture := rl.LoadTextureFromImage(image)
-    if rl.IsTextureValid(texture) {
-        rl.SetTextureFilter(texture, .POINT)
-        rl.SetTextureWrap(texture, .CLAMP)
-    }
-    return texture
-}
-
-update_cel_ramp_texture :: proc(texture: rl.Texture2D, style: ^Cel_Style) {
-    pixels := build_cel_ramp_pixels(style)
-    rl.UpdateTexture(texture, raw_data(pixels[:]))
-}
-
+// resolve_cel_shader_bindings caches every style uniform and redirects raylib's
+// emission sampler slot to the cel-ramp texture used during DrawMesh.
 resolve_cel_shader_bindings :: proc(shader: rl.Shader) -> Cel_Shader_Bindings {
     bindings := Cel_Shader_Bindings{
         light_direction = rl.GetShaderLocation(shader, "u_light_direction"),
@@ -387,12 +412,18 @@ resolve_cel_shader_bindings :: proc(shader: rl.Shader) -> Cel_Shader_Bindings {
     return bindings
 }
 
-compute_world_cel_light_direction :: proc(
+// apply_cel_style_to_shader converts the configured light to world space and
+// uploads the complete style for one render pass. Fixed-size arrays are sent so
+// shader layout remains stable even when the active band count changes.
+apply_cel_style_to_shader :: proc(
+    shader: rl.Shader,
+    bindings: ^Cel_Shader_Bindings,
     style: ^Cel_Style,
     camera: rl.Camera3D,
     model_transform: rl.Matrix,
-) -> rl.Vector3 {
-    direction := style.light_direction
+) {
+    // Resolve the configured light space inline before uploading the uniforms.
+    light_direction := style.light_direction
     switch style.light_space {
     case .WORLD:
     case .CAMERA:
@@ -403,29 +434,18 @@ compute_world_cel_light_direction :: proc(
         camera_up := rl.Vector3Normalize(
             rl.Vector3CrossProduct(camera_back, camera_right),
         )
-        direction = camera_right * direction.x +
-                    camera_up * direction.y +
-                    camera_back * direction.z
+        light_direction = camera_right * light_direction.x +
+                          camera_up * light_direction.y +
+                          camera_back * light_direction.z
     case .MODEL:
         transformed_origin := rl.Vector3Transform({}, model_transform)
-        transformed_direction := rl.Vector3Transform(direction, model_transform)
-        direction = transformed_direction - transformed_origin
+        transformed_direction := rl.Vector3Transform(
+            light_direction,
+            model_transform,
+        )
+        light_direction = transformed_direction - transformed_origin
     }
-    return rl.Vector3Normalize(direction)
-}
-
-apply_cel_style_to_shader :: proc(
-    shader: rl.Shader,
-    bindings: ^Cel_Shader_Bindings,
-    style: ^Cel_Style,
-    camera: rl.Camera3D,
-    model_transform: rl.Matrix,
-) {
-    light_direction := compute_world_cel_light_direction(
-        style,
-        camera,
-        model_transform,
-    )
+    light_direction = rl.Vector3Normalize(light_direction)
     brightness: [MAX_CEL_BANDS]f32
     tint_mix: [MAX_CEL_BANDS]f32
     for band_index := 0; band_index < MAX_CEL_BANDS; band_index += 1 {
@@ -487,6 +507,8 @@ apply_cel_style_to_shader :: proc(
     )
 }
 
+// destroy_cel_style_file releases allocations produced by json.unmarshal,
+// including child arrays, and clears the wire-format value.
 destroy_cel_style_file :: proc(style_file: ^Cel_Style_File) {
     if len(style_file.name) > 0 {
         delete(style_file.name)
@@ -501,35 +523,7 @@ destroy_cel_style_file :: proc(style_file: ^Cel_Style_File) {
     style_file^ = {}
 }
 
-parse_cel_light_space :: proc(value: string) -> (Cel_Light_Space, bool) {
-    if value == "world"  { return .WORLD, true }
-    if value == "camera" { return .CAMERA, true }
-    if value == "model"  { return .MODEL, true }
-    return {}, false
-}
-
-cel_light_space_string :: proc(value: Cel_Light_Space) -> string {
-    switch value {
-    case .WORLD:  return "world"
-    case .CAMERA: return "camera"
-    case .MODEL:  return "model"
-    }
-    return "world"
-}
-
-parse_cel_alpha_mode :: proc(value: string) -> (Cel_Alpha_Mode, bool) {
-    if value == "opaque" { return .OPAQUE, true }
-    if value == "mask"   { return .MASK, true }
-    return {}, false
-}
-
-cel_alpha_mode_string :: proc(value: Cel_Alpha_Mode) -> string {
-    if value == .OPAQUE {
-        return "opaque"
-    }
-    return "mask"
-}
-
+// cel_accent_from_file translates JSON-friendly arrays into runtime vectors.
 cel_accent_from_file :: proc(value: Cel_Style_File_Accent) -> Cel_Accent {
     return {
         enabled = value.enabled,
@@ -540,6 +534,7 @@ cel_accent_from_file :: proc(value: Cel_Style_File_Accent) -> Cel_Accent {
     }
 }
 
+// cel_accent_to_file translates runtime vectors back to JSON-friendly arrays.
 cel_accent_to_file :: proc(value: Cel_Accent) -> Cel_Style_File_Accent {
     return {
         enabled = value.enabled,
@@ -550,18 +545,45 @@ cel_accent_to_file :: proc(value: Cel_Accent) -> Cel_Style_File_Accent {
     }
 }
 
-cel_style_from_file :: proc(style_file: ^Cel_Style_File) -> (
-    Cel_Style,
-    Cel_Style_Error,
-) {
+// load_cel_style reads, decodes, validates, and owns a style from disk. On any
+// error it frees partial JSON/runtime allocations and returns an empty style.
+load_cel_style :: proc(path: string) -> (Cel_Style, Cel_Style_Error) {
+    file_data, read_error := os.read_entire_file(path, context.allocator)
+    if read_error != nil {
+        return {}, .READ_FAILED
+    }
+    defer delete(file_data)
+
+    style_file: Cel_Style_File
+    unmarshal_error := json.unmarshal(file_data, &style_file, spec = .JSON)
+    if unmarshal_error != nil {
+        destroy_cel_style_file(&style_file)
+        return {}, .PARSE_FAILED
+    }
+    defer destroy_cel_style_file(&style_file)
+
+    // Convert the decoded file schema at its only load site.
     if style_file.schema_version != CEL_STYLE_SCHEMA_VERSION {
         return {}, .INVALID_SCHEMA
     }
-    light_space, light_space_valid := parse_cel_light_space(style_file.light.space)
+    light_space: Cel_Light_Space
+    light_space_valid := true
+    switch style_file.light.space {
+    case "world":  light_space = .WORLD
+    case "camera": light_space = .CAMERA
+    case "model":  light_space = .MODEL
+    case:           light_space_valid = false
+    }
     if !light_space_valid {
         return {}, .INVALID_LIGHT_SPACE
     }
-    alpha_mode, alpha_mode_valid := parse_cel_alpha_mode(style_file.alpha.mode)
+    alpha_mode: Cel_Alpha_Mode
+    alpha_mode_valid := true
+    switch style_file.alpha.mode {
+    case "opaque": alpha_mode = .OPAQUE
+    case "mask":   alpha_mode = .MASK
+    case:           alpha_mode_valid = false
+    }
     if !alpha_mode_valid {
         return {}, .INVALID_ALPHA_MODE
     }
@@ -611,29 +633,29 @@ cel_style_from_file :: proc(style_file: ^Cel_Style_File) -> (
     return style, .NONE
 }
 
-load_cel_style :: proc(path: string) -> (Cel_Style, Cel_Style_Error) {
-    file_data, read_error := os.read_entire_file(path, context.allocator)
-    if read_error != nil {
-        return {}, .READ_FAILED
+// save_cel_style validates before encoding pretty JSON. Temporary band and JSON
+// buffers are released on every path; the input runtime style remains untouched.
+save_cel_style :: proc(path: string, style: ^Cel_Style) -> Cel_Style_Error {
+    if validation_error := validate_cel_style(style); validation_error != .NONE {
+        return validation_error
     }
-    defer delete(file_data)
 
-    style_file: Cel_Style_File
-    unmarshal_error := json.unmarshal(file_data, &style_file, spec = .JSON)
-    if unmarshal_error != nil {
-        destroy_cel_style_file(&style_file)
-        return {}, .PARSE_FAILED
+    // Encode the runtime style directly where its file representation is used.
+    light_space_string := "world"
+    switch style.light_space {
+    case .WORLD:  light_space_string = "world"
+    case .CAMERA: light_space_string = "camera"
+    case .MODEL:  light_space_string = "model"
     }
-    defer destroy_cel_style_file(&style_file)
-    return cel_style_from_file(&style_file)
-}
-
-cel_style_to_file :: proc(style: ^Cel_Style) -> Cel_Style_File {
+    alpha_mode_string := "mask"
+    if style.alpha_mode == .OPAQUE {
+        alpha_mode_string = "opaque"
+    }
     style_file := Cel_Style_File{
         schema_version = CEL_STYLE_SCHEMA_VERSION,
         name = style.name,
         light = {
-            space = cel_light_space_string(style.light_space),
+            space = light_space_string,
             direction = {
                 style.light_direction.x,
                 style.light_direction.y,
@@ -642,7 +664,7 @@ cel_style_to_file :: proc(style: ^Cel_Style) -> Cel_Style_File {
             wrap = style.wrap_lighting,
         },
         alpha = {
-            mode = cel_alpha_mode_string(style.alpha_mode),
+            mode = alpha_mode_string,
             cutoff = style.alpha_cutoff,
         },
         rim = cel_accent_to_file(style.rim),
@@ -667,14 +689,6 @@ cel_style_to_file :: proc(style: ^Cel_Style) -> Cel_Style_File {
             tint_mix = band.tint_mix,
         })
     }
-    return style_file
-}
-
-save_cel_style :: proc(path: string, style: ^Cel_Style) -> Cel_Style_Error {
-    if validation_error := validate_cel_style(style); validation_error != .NONE {
-        return validation_error
-    }
-    style_file := cel_style_to_file(style)
     defer delete(style_file.bands)
     encoded, marshal_error := json.marshal(
         style_file,
@@ -690,6 +704,8 @@ save_cel_style :: proc(path: string, style: ^Cel_Style) -> Cel_Style_Error {
     return .NONE
 }
 
+// replace_cel_style transfers ownership of replacement into destination while
+// preserving monotonic revision numbers needed by GPU texture invalidation.
 replace_cel_style :: proc(destination: ^Cel_Style, replacement: Cel_Style) {
     next_revision := destination.revision + 1
     destroy_cel_style(destination)

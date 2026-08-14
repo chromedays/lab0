@@ -1,5 +1,9 @@
 package main
 
+// This module centralizes application commands, shortcut matching, keyboard
+// focus traversal, and raygui wrappers. Mouse and keyboard activation therefore
+// share one state machine instead of each panel implementing its own rules.
+
 import "core:c"
 import rl "vendor:raylib"
 
@@ -9,6 +13,8 @@ UI_MOD_PRIMARY :: u8(1 << 2)
 
 UI_MAX_FOCUSABLE_CONTROLS :: 128
 
+// UI_Command is the semantic action layer between raw keys and application
+// mutation. Commands are dispatched in main after modal/focus conflict checks.
 UI_Command :: enum {
     NONE,
     TOGGLE_HELP,
@@ -51,12 +57,15 @@ UI_Command :: enum {
     RESET_BACKGROUND,
 }
 
+// UI_Shortcut_Binding requires an exact normalized modifier mask.
 UI_Shortcut_Binding :: struct {
     command:   UI_Command,
     key:       rl.KeyboardKey,
     modifiers: u8,
 }
 
+// UI_SHORTCUT_BINDINGS is ordered for deterministic first-match dispatch. Any
+// duplicate key/modifier pair would make the later binding unreachable.
 UI_SHORTCUT_BINDINGS := [?]UI_Shortcut_Binding{
     {.TOGGLE_HELP,                 .F1,            0},
     {.TOGGLE_HELP,                 .SLASH,         UI_MOD_SHIFT},
@@ -105,6 +114,8 @@ UI_SHORTCUT_BINDINGS := [?]UI_Shortcut_Binding{
     {.RESET_BACKGROUND,            .B,             UI_MOD_SHIFT},
 }
 
+// UI_Focus_ID gives every keyboard-focusable widget a stable identity across
+// frames, even when scrolling or collapsed sections change registration order.
 UI_Focus_ID :: enum {
     NONE,
     EXPORT_PNG,
@@ -176,6 +187,8 @@ UI_Focus_ID :: enum {
     HELP_CLOSE,
 }
 
+// UI_Keyboard_State retains the previous frame's traversal order and builds the
+// next one during drawing. clip_bounds excludes scrolled-out inspector controls.
 UI_Keyboard_State :: struct {
     enabled:        bool,
     focused:        UI_Focus_ID,
@@ -188,13 +201,18 @@ UI_Keyboard_State :: struct {
     clip_bounds:    rl.Rectangle,
 }
 
+// ui_keyboard is intentionally global because every wrapper participates in one
+// frame-wide focus registry.
 ui_keyboard: UI_Keyboard_State
 
+// ui_primary_modifier_down treats Control and Command/Super as one portable
+// primary modifier so shortcuts behave naturally on macOS and other platforms.
 ui_primary_modifier_down :: proc() -> bool {
     return rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL) ||
            rl.IsKeyDown(.LEFT_SUPER) || rl.IsKeyDown(.RIGHT_SUPER)
 }
 
+// ui_modifier_mask snapshots exact Shift, Alt, and primary-modifier state.
 ui_modifier_mask :: proc() -> u8 {
     modifiers: u8
     if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
@@ -209,6 +227,8 @@ ui_modifier_mask :: proc() -> u8 {
     return modifiers
 }
 
+// ui_find_focus_index searches the active prefix of a fixed control array and
+// returns -1 when the focused ID is not registered in that frame.
 ui_find_focus_index :: proc(
     controls: [^]UI_Focus_ID,
     count: int,
@@ -222,36 +242,8 @@ ui_find_focus_index :: proc(
     return -1
 }
 
-ui_keyboard_begin_frame :: proc(enabled: bool, trap_tab: bool) {
-    ui_keyboard.enabled = enabled
-    ui_keyboard.current_count = 0
-    if !enabled {
-        ui_keyboard.focused = .NONE
-        return
-    }
-
-    if !trap_tab && rl.IsKeyPressed(.TAB) && ui_keyboard.previous_count > 0 {
-        focused_index := ui_find_focus_index(
-            &ui_keyboard.previous_order[0],
-            ui_keyboard.previous_count,
-            ui_keyboard.focused,
-        )
-        move_backward := rl.IsKeyDown(.LEFT_SHIFT) ||
-                         rl.IsKeyDown(.RIGHT_SHIFT)
-        if move_backward {
-            if focused_index < 0 {
-                focused_index = ui_keyboard.previous_count - 1
-            } else {
-                focused_index = (focused_index - 1 + ui_keyboard.previous_count) %
-                                ui_keyboard.previous_count
-            }
-        } else {
-            focused_index = (focused_index + 1) % ui_keyboard.previous_count
-        }
-        ui_keyboard.focused = ui_keyboard.previous_order[focused_index]
-    }
-}
-
+// ui_focus_fallback maps hidden child controls to the nearest visible section
+// header after a picker closes or a subsection collapses.
 ui_focus_fallback :: proc(focused: UI_Focus_ID) -> UI_Focus_ID {
     #partial switch focused {
     case .MODEL_SEARCH, .MODEL_CLEAR, .MODEL_LIST:
@@ -286,58 +278,23 @@ ui_focus_fallback :: proc(focused: UI_Focus_ID) -> UI_Focus_ID {
     return .NONE
 }
 
-ui_keyboard_end_frame :: proc() {
-    if !ui_keyboard.enabled {
-        return
-    }
-    if ui_keyboard.focused != .NONE &&
-       ui_find_focus_index(
-           &ui_keyboard.current_order[0],
-           ui_keyboard.current_count,
-           ui_keyboard.focused,
-       ) < 0 {
-        fallback := ui_focus_fallback(ui_keyboard.focused)
-        if fallback != .NONE &&
-           ui_find_focus_index(
-               &ui_keyboard.current_order[0],
-               ui_keyboard.current_count,
-               fallback,
-           ) >= 0 {
-            ui_keyboard.focused = fallback
-        } else {
-            ui_keyboard.focused = .NONE
-        }
-    }
-    ui_keyboard.previous_count = ui_keyboard.current_count
-    for control_index := 0;
-        control_index < ui_keyboard.current_count;
-        control_index += 1 {
-        ui_keyboard.previous_order[control_index] =
-            ui_keyboard.current_order[control_index]
-    }
-}
-
+// ui_keyboard_clear_focus relinquishes keyboard ownership without altering order.
 ui_keyboard_clear_focus :: proc() {
     ui_keyboard.focused = .NONE
 }
 
+// ui_keyboard_set_focus transfers keyboard ownership to a known control ID.
 ui_keyboard_set_focus :: proc(focused: UI_Focus_ID) {
     ui_keyboard.focused = focused
 }
 
-ui_keyboard_set_focus_clip :: proc(bounds: rl.Rectangle) {
-    ui_keyboard.clip_active = true
-    ui_keyboard.clip_bounds = bounds
-}
-
-ui_keyboard_clear_focus_clip :: proc() {
-    ui_keyboard.clip_active = false
-}
-
+// ui_keyboard_has_focus reports whether navigation is enabled and non-empty.
 ui_keyboard_has_focus :: proc() -> bool {
     return ui_keyboard.enabled && ui_keyboard.focused != .NONE
 }
 
+// ui_register_control appends a visible widget to this frame's traversal order,
+// updates focus on a mouse press, and returns whether the widget owns focus.
 ui_register_control :: proc(id: UI_Focus_ID, bounds: rl.Rectangle) -> bool {
     if !ui_keyboard.enabled || id == .NONE {
         return false
@@ -357,6 +314,7 @@ ui_register_control :: proc(id: UI_Focus_ID, bounds: rl.Rectangle) -> bool {
     return ui_keyboard.focused == id
 }
 
+// ui_draw_focus paints the shared high-contrast focus ring outside widget bounds.
 ui_draw_focus :: proc(bounds: rl.Rectangle, focused: bool) {
     if focused {
         rl.DrawRectangleLinesEx(
@@ -367,16 +325,19 @@ ui_draw_focus :: proc(bounds: rl.Rectangle, focused: bool) {
     }
 }
 
+// ui_key_pressed_or_repeat unifies the initial key edge with raylib repeat events.
 ui_key_pressed_or_repeat :: proc(key: rl.KeyboardKey) -> bool {
     return rl.IsKeyPressed(key) || rl.IsKeyPressedRepeat(key)
 }
 
+// ui_activation_pressed recognizes unmodified Enter, keypad Enter, or Space.
 ui_activation_pressed :: proc() -> bool {
     return ui_modifier_mask() == 0 &&
            (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.KP_ENTER) ||
             rl.IsKeyPressed(.SPACE))
 }
 
+// ui_gui_button layers keyboard focus and activation over a standard raygui button.
 ui_gui_button :: proc(
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
@@ -389,6 +350,8 @@ ui_gui_button :: proc(
     return activated
 }
 
+// ui_gui_check_box supports Space toggling and returns an actual value change,
+// independent of whether the mouse or keyboard produced it.
 ui_gui_check_box :: proc(
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
@@ -405,31 +368,8 @@ ui_gui_check_box :: proc(
     return checked^ != previous
 }
 
-ui_adjust_f32 :: proc(
-    value: ^f32,
-    minimum, maximum, step, coarse_step: f32,
-) -> bool {
-    previous := value^
-    adjustment := step
-    if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
-        adjustment = coarse_step
-    }
-    if ui_key_pressed_or_repeat(.LEFT) || ui_key_pressed_or_repeat(.DOWN) {
-        value^ -= adjustment
-    }
-    if ui_key_pressed_or_repeat(.RIGHT) || ui_key_pressed_or_repeat(.UP) {
-        value^ += adjustment
-    }
-    if rl.IsKeyPressed(.HOME) {
-        value^ = minimum
-    }
-    if rl.IsKeyPressed(.END) {
-        value^ = maximum
-    }
-    value^ = clamp(value^, minimum, maximum)
-    return value^ != previous
-}
-
+// ui_gui_slider_bar adds stepped arrow/Home/End control to a continuous raygui
+// slider while preserving direct mouse edits and coarse Shift adjustments.
 ui_gui_slider_bar :: proc(
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
@@ -442,12 +382,30 @@ ui_gui_slider_bar :: proc(
     rl.GuiSliderBar(bounds, left_text, right_text, value, minimum, maximum)
     if focused && !ui_primary_modifier_down() &&
        !(rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)) {
-        _ = ui_adjust_f32(value, minimum, maximum, step, coarse_step)
+        // Apply keyboard slider adjustments inline at their only call site.
+        adjustment := step
+        if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
+            adjustment = coarse_step
+        }
+        if ui_key_pressed_or_repeat(.LEFT) || ui_key_pressed_or_repeat(.DOWN) {
+            value^ -= adjustment
+        }
+        if ui_key_pressed_or_repeat(.RIGHT) || ui_key_pressed_or_repeat(.UP) {
+            value^ += adjustment
+        }
+        if rl.IsKeyPressed(.HOME) {
+            value^ = minimum
+        }
+        if rl.IsKeyPressed(.END) {
+            value^ = maximum
+        }
+        value^ = clamp(value^, minimum, maximum)
     }
     ui_draw_focus(bounds, focused)
     return value^ != previous
 }
 
+// ui_adjust_int applies bounded integer keyboard edits with normal/coarse steps.
 ui_adjust_int :: proc(
     value: ^c.int,
     minimum, maximum, step, coarse_step: c.int,
@@ -473,6 +431,7 @@ ui_adjust_int :: proc(
     return value^ != previous
 }
 
+// ui_gui_spinner combines raygui editing with deterministic keyboard adjustment.
 ui_gui_spinner :: proc(
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
@@ -492,6 +451,7 @@ ui_gui_spinner :: proc(
     return value^ != previous
 }
 
+// ui_gui_combo_box clamps arrow-driven selection to the supplied item count.
 ui_gui_combo_box :: proc(
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
@@ -510,52 +470,8 @@ ui_gui_combo_box :: proc(
     return active^ != previous
 }
 
-ui_gui_text_box :: proc(
-    id: UI_Focus_ID,
-    bounds: rl.Rectangle,
-    text: cstring,
-    text_size: c.int,
-    edit_mode: bool,
-) -> bool {
-    focused := ui_register_control(id, bounds)
-    was_locked := rl.GuiIsLocked()
-    unlock_for_keyboard_edit := was_locked && focused && edit_mode
-    if unlock_for_keyboard_edit {
-        rl.GuiUnlock()
-    }
-    toggled := rl.GuiTextBox(bounds, text, text_size, edit_mode)
-    if unlock_for_keyboard_edit {
-        rl.GuiLock()
-    }
-    if focused && !edit_mode && ui_modifier_mask() == 0 &&
-       (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.KP_ENTER)) {
-        toggled = true
-    }
-    ui_draw_focus(bounds, focused || edit_mode)
-    return toggled
-}
-
-ui_gui_dropdown_box :: proc(
-    id: UI_Focus_ID,
-    bounds: rl.Rectangle,
-    text: cstring,
-    active: ^c.int,
-    item_count: c.int,
-    edit_mode: bool,
-) -> bool {
-    focused := ui_register_control(id, bounds)
-    toggled := rl.GuiDropdownBox(bounds, text, active, edit_mode)
-    if focused && edit_mode && !ui_primary_modifier_down() &&
-       !(rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)) {
-        _ = ui_adjust_int(active, 0, max(item_count - 1, 0), 1, 1)
-    }
-    if focused && ui_activation_pressed() {
-        toggled = true
-    }
-    ui_draw_focus(bounds, focused)
-    return toggled
-}
-
+// ui_gui_color_picker adds keyboard channel selection and byte adjustment to
+// raygui's mouse picker. color_channel persists when focus moves between pickers.
 ui_gui_color_picker :: proc(
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
@@ -631,24 +547,8 @@ ui_gui_color_picker :: proc(
     return color^ != previous
 }
 
-ui_keyboard_shortcut_command :: proc(
-    enabled: bool,
-    suppress_unmodified: bool,
-) -> UI_Command {
-    if !enabled {
-        return .NONE
-    }
-    modifiers := ui_modifier_mask()
-    for binding in UI_SHORTCUT_BINDINGS {
-        if !ui_shortcut_matches(binding, modifiers, suppress_unmodified) ||
-           !rl.IsKeyPressed(binding.key) {
-            continue
-        }
-        return binding.command
-    }
-    return .NONE
-}
-
+// ui_shortcut_matches enforces exact modifiers and optionally suppresses plain
+// accelerators while a text-like control owns focus; help remains globally usable.
 ui_shortcut_matches :: proc(
     binding: UI_Shortcut_Binding,
     modifiers: u8,
@@ -659,39 +559,6 @@ ui_shortcut_matches :: proc(
     }
     return !suppress_unmodified || modifiers != 0 ||
            binding.command == .TOGGLE_HELP
-}
-
-ui_shortcut_uses_command_modifier :: proc() -> bool {
-    modifiers := ui_modifier_mask()
-    return modifiers & (UI_MOD_PRIMARY | UI_MOD_ALT) != 0
-}
-
-ui_command_conflicts_with_focused_control :: proc(command: UI_Command) -> bool {
-    #partial switch command {
-    case .ANIMATION_PLAY_PAUSE:
-        return ui_keyboard.focused != .NONE
-    case .ANIMATION_FIRST_FRAME:
-        #partial switch ui_keyboard.focused {
-        case .ANIMATION_TIMELINE, .ANIMATION_SPEED,
-             .ANIMATION_SAMPLE_COUNT, .MODEL_LIST, .CAMERA_DOWNSCALE,
-             .CEL_PRESET, .CEL_LIGHT_SPACE, .CEL_LIGHT_AZIMUTH,
-             .CEL_LIGHT_ELEVATION, .CEL_LIGHT_WRAP, .CEL_BAND_SELECT,
-             .CEL_BAND_UPPER_BOUND, .CEL_BAND_BRIGHTNESS,
-             .CEL_BAND_TINT_MIX, .CEL_BAND_TINT_PICKER,
-             .CEL_ALPHA_MODE, .CEL_ALPHA_CUTOFF, .CEL_RIM_THRESHOLD,
-             .CEL_RIM_STRENGTH, .CEL_RIM_SAMPLES, .CEL_RIM_PICKER,
-             .CEL_HIGHLIGHT_THRESHOLD, .CEL_HIGHLIGHT_STRENGTH,
-             .CEL_HIGHLIGHT_SAMPLES, .CEL_HIGHLIGHT_PICKER,
-             .CEL_OUTLINE_WIDTH, .CEL_OUTLINE_COVERAGE,
-             .CEL_OUTLINE_PICKER, .CEL_OUTLINE_ALPHA,
-             .BACKGROUND_PICKER, .INSPECTOR_SCROLLBAR:
-            return true
-        }
-    case .INSPECTOR_PAGE_UP, .INSPECTOR_PAGE_DOWN:
-        return ui_keyboard.focused == .MODEL_LIST ||
-               ui_keyboard.focused == .INSPECTOR_SCROLLBAR
-    }
-    return false
 }
 
 UI_SHORTCUT_HELP_LEFT := [?]cstring{
@@ -742,52 +609,4 @@ UI_SHORTCUT_HELP_RIGHT := [?]cstring{
     "Shift+Arrow  Coarse adjustment",
     "Home/End     Minimum / maximum",
     "Color: Up/Down channel, Left/Right value",
-}
-
-draw_shortcut_help :: proc(bounds: rl.Rectangle, open: ^bool) {
-    rl.DrawRectangle(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight(), rl.Color{0, 0, 0, 170})
-    rl.GuiPanel(bounds, "KEYBOARD SHORTCUTS")
-    if ui_gui_button(
-        .HELP_CLOSE,
-        {bounds.x + bounds.width - 34, bounds.y + 4, 28, 22},
-        "X",
-    ) {
-        open^ = false
-        ui_keyboard_clear_focus()
-        return
-    }
-
-    column_width := (bounds.width - 42) * 0.5
-    line_height: f32 = 22
-    left_x := bounds.x + 16
-    right_x := left_x + column_width + 10
-    start_y := bounds.y + 36
-    for line, line_index in UI_SHORTCUT_HELP_LEFT {
-        color := rl.Color{45, 45, 45, 255}
-        if line == "GENERAL" || line == "MODEL & INSPECTOR" ||
-           line == "LENS & CAMERA" {
-            color = rl.Color{190, 110, 0, 255}
-        }
-        rl.DrawText(
-            line,
-            c.int(left_x),
-            c.int(start_y + f32(line_index) * line_height),
-            16,
-            color,
-        )
-    }
-    for line, line_index in UI_SHORTCUT_HELP_RIGHT {
-        color := rl.Color{45, 45, 45, 255}
-        if line == "ANIMATION" || line == "CEL & BACKGROUND" ||
-           line == "FOCUSED CONTROLS" {
-            color = rl.Color{190, 110, 0, 255}
-        }
-        rl.DrawText(
-            line,
-            c.int(right_x),
-            c.int(start_y + f32(line_index) * line_height),
-            16,
-            color,
-        )
-    }
 }

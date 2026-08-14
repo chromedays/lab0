@@ -1,10 +1,15 @@
 package main
 
+// These tests define the capture CLI contract and filesystem-facing edge cases.
+// Parsing tests avoid GPU initialization; asset-format and directory tests guard the
+// assumptions required before a real hidden-window capture begins.
+
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:testing"
 
+// Ordinary application arguments leave capture mode disabled and defaults intact.
 @test
 capture_options_are_disabled_without_capture_arguments :: proc(t: ^testing.T) {
     result := parse_capture_options({})
@@ -14,6 +19,7 @@ capture_options_are_disabled_without_capture_arguments :: proc(t: ^testing.T) {
     testing.expect(t, !result.options.enabled)
 }
 
+// A case without an explicit output receives a stable single-frame PNG path.
 @test
 capture_options_build_a_deterministic_default_output :: proc(t: ^testing.T) {
     result := parse_capture_options({"--capture-case", "smoke"})
@@ -30,6 +36,7 @@ capture_options_build_a_deterministic_default_output :: proc(t: ^testing.T) {
     testing.expect(t, result.options.hide_window)
 }
 
+// Every explicit model/style/view/mode/target/frame/warmup option maps to runtime state.
 @test
 capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
     result := parse_capture_options({
@@ -57,6 +64,7 @@ capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
     testing.expect(t, !result.options.hide_window)
 }
 
+// Style inputs must be non-empty JSON paths before any file access occurs.
 @test
 capture_options_reject_an_invalid_style_path :: proc(t: ^testing.T) {
     result := parse_capture_options({
@@ -69,6 +77,7 @@ capture_options_reject_an_invalid_style_path :: proc(t: ^testing.T) {
     testing.expect(t, !result.options.enabled)
 }
 
+// Model-source flags reject empty values rather than falling back silently.
 @test
 capture_options_reject_an_empty_model_source :: proc(t: ^testing.T) {
     result := parse_capture_options({
@@ -81,6 +90,7 @@ capture_options_reject_an_empty_model_source :: proc(t: ^testing.T) {
     testing.expect(t, !result.options.enabled)
 }
 
+// Any capture-specific flag requires an explicit case name for deterministic reporting.
 @test
 capture_options_reject_capture_flags_without_a_case :: proc(t: ^testing.T) {
     result := parse_capture_options({"--capture-mode", "blended"})
@@ -90,6 +100,7 @@ capture_options_reject_capture_flags_without_a_case :: proc(t: ^testing.T) {
     testing.expect(t, !result.options.enabled)
 }
 
+// Unknown capture-prefixed flags fail fast instead of being ignored as app arguments.
 @test
 capture_options_reject_unknown_capture_arguments :: proc(t: ^testing.T) {
     result := parse_capture_options({"--capture-case", "smoke", "--capture-magic", "yes"})
@@ -99,6 +110,7 @@ capture_options_reject_unknown_capture_arguments :: proc(t: ^testing.T) {
     testing.expect_value(t, result.error_argument, "--capture-magic")
 }
 
+// NaN and infinity are rejected even though they are parseable floating-point values.
 @test
 capture_options_reject_non_finite_animation_frames :: proc(t: ^testing.T) {
     result := parse_capture_options({
@@ -110,6 +122,7 @@ capture_options_reject_non_finite_animation_frames :: proc(t: ^testing.T) {
     testing.expect_value(t, result.error, Capture_Parse_Error.INVALID_FRAME)
 }
 
+// Inclusive start/end/step ranges populate sequence state and output-token metadata.
 @test
 capture_options_parse_frame_sequence :: proc(t: ^testing.T) {
     result := parse_capture_options({
@@ -135,6 +148,7 @@ capture_options_parse_frame_sequence :: proc(t: ^testing.T) {
     testing.expect_value(t, frame_path, "captures/running/frame-0012.png")
 }
 
+// Sequence mode synthesizes a zero-padded frame token when output is omitted.
 @test
 capture_options_build_a_default_sequence_template :: proc(t: ^testing.T) {
     result := parse_capture_options({
@@ -155,6 +169,7 @@ capture_options_build_a_default_sequence_template :: proc(t: ^testing.T) {
     testing.expect_value(t, frame_path, "captures/running-0004.png")
 }
 
+// Malformed, descending, zero-step, negative, and oversized ranges are rejected.
 @test
 capture_options_reject_invalid_frame_ranges :: proc(t: ^testing.T) {
     invalid_ranges := []string{
@@ -181,6 +196,7 @@ capture_options_reject_invalid_frame_ranges :: proc(t: ^testing.T) {
     }
 }
 
+// A single-frame pose and a frame range cannot be requested simultaneously.
 @test
 capture_options_reject_conflicting_frame_modes :: proc(t: ^testing.T) {
     result := parse_capture_options({
@@ -197,6 +213,7 @@ capture_options_reject_conflicting_frame_modes :: proc(t: ^testing.T) {
     )
 }
 
+// Explicit sequence outputs must contain exactly one supported integer token.
 @test
 capture_options_require_a_sequence_output_token :: proc(t: ^testing.T) {
     invalid_templates := []string{
@@ -219,6 +236,7 @@ capture_options_require_a_sequence_output_token :: proc(t: ^testing.T) {
     }
 }
 
+// Relative asset paths resolve to the same canonical source as scanned absolute paths.
 @test
 capture_model_source_accepts_a_relative_asset_path :: proc(t: ^testing.T) {
     relative_model_path := "assets/CesiumMan.glb"
@@ -245,6 +263,7 @@ capture_model_source_accepts_a_relative_asset_path :: proc(t: ^testing.T) {
     testing.expect_value(t, source_index, 0)
 }
 
+// Bundled glTF images use embedded PNG data so raylib does not fall back to white textures.
 @test
 bundled_textured_models_use_supported_embedded_pngs :: proc(t: ^testing.T) {
     model_paths := []string{
@@ -284,6 +303,7 @@ bundled_textured_models_use_supported_embedded_pngs :: proc(t: ^testing.T) {
     }
 }
 
+// Output directory creation succeeds both initially and when the directory already exists.
 @test
 capture_output_directory_can_be_reused :: proc(t: ^testing.T) {
     temporary_directory, temporary_error := os.make_directory_temp(

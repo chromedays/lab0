@@ -1,5 +1,9 @@
 #version 330
 
+// Auxiliary metadata fragment stage. Geometry and alpha testing match custom.fs,
+// but RGBA encodes classification instead of visible color. The downscale pass
+// uses this texture to preserve hard lighting bands and sparse accents.
+
 in vec2 fragTexCoord;
 in vec4 fragColor;
 in vec3 fragNormal;
@@ -13,6 +17,8 @@ uniform vec4 colDiffuse;
 #include "cel_shading_common.glsl"
 
 void main() {
+    // Use identical albedo alpha and shared classifiers so metadata coverage is
+    // pixel-for-pixel aligned with the scene-color RenderTexture.
     vec4 albedo = texture(texture0, fragTexCoord) * colDiffuse * fragColor;
     if (cel_alpha_discarded(albedo.a)) {
         discard;

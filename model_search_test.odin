@@ -1,8 +1,12 @@
 package main
 
+// These tests specify fuzzy asset search independently of raygui. They cover
+// delimiter tolerance, ranking quality, and preservation of canonical source IDs.
+
 import "core:strings"
 import "core:testing"
 
+// Queries match both path-like asset names and human-readable built-in labels.
 @test
 model_search_matches_asset_names_and_primitives :: proc(t: ^testing.T) {
     _, case_insensitive_match := fuzzy_model_score(
@@ -40,6 +44,7 @@ model_search_matches_asset_names_and_primitives :: proc(t: ^testing.T) {
     )
 }
 
+// Consecutive boundary matches outrank candidates with larger intervening gaps.
 @test
 model_search_prefers_tighter_matches :: proc(t: ^testing.T) {
     direct_score, direct_match := fuzzy_model_score(
@@ -58,6 +63,7 @@ model_search_prefers_tighter_matches :: proc(t: ^testing.T) {
     )
 }
 
+// Sorting/filtering must not replace canonical source indices with result positions.
 @test
 model_search_results_keep_source_indices :: proc(t: ^testing.T) {
     model_assets: Model_Assets

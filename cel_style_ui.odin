@@ -1,5 +1,9 @@
 package main
 
+// This module contains cel-style editor state and reusable editor widgets.
+// Rendering mutates the supplied style immediately; callers use the returned
+// height calculations to integrate the editor into a clipped inspector.
+
 import "core:c"
 import "core:log"
 import "core:math"
@@ -18,6 +22,7 @@ INSPECTOR_SECTION_HEADER_HEIGHT :: f32(28)
 INSPECTOR_SECTION_GAP           :: f32(6)
 CEL_SUBSECTION_HEADER_HEIGHT    :: f32(26)
 
+// Cel_Style_UI_Status drives short-lived feedback shown beneath the editor.
 Cel_Style_UI_Status :: enum {
     NONE,
     LOADED,
@@ -27,6 +32,8 @@ Cel_Style_UI_Status :: enum {
     SAVE_FAILED,
 }
 
+// Cel_Color_Target identifies the one expanded color picker. Keeping this
+// mutually exclusive prevents overlapping modal controls in a narrow inspector.
 Cel_Color_Target :: enum {
     NONE,
     BAND_TINT,
@@ -35,6 +42,8 @@ Cel_Color_Target :: enum {
     OUTLINE,
 }
 
+// Cel_Style_UI_State stores presentation state separately from Cel_Style so UI
+// expansion, focus, and transient status never leak into saved presets.
 Cel_Style_UI_State :: struct {
     open:               bool,
     light_open:         bool,
@@ -52,6 +61,7 @@ Cel_Style_UI_State :: struct {
     status_time:        f64,
 }
 
+// Inspector_UI_State tracks scrolling and the non-cel section expansion flags.
 Inspector_UI_State :: struct {
     scroll_y:              f32,
     scrollbar_dragging:    bool,
@@ -61,18 +71,7 @@ Inspector_UI_State :: struct {
     background_open:       bool,
 }
 
-cel_style_ui_status_text :: proc(status: Cel_Style_UI_Status) -> cstring {
-    switch status {
-    case .NONE:        return "Changes apply immediately"
-    case .LOADED:      return "Preset loaded"
-    case .SAVED:       return "Preset saved"
-    case .RESET:       return "Reset to built-in Classic"
-    case .LOAD_FAILED: return "Preset load failed; current style kept"
-    case .SAVE_FAILED: return "Preset save failed"
-    }
-    return ""
-}
-
+// set_cel_style_ui_status records both the message category and its start time.
 set_cel_style_ui_status :: proc(
     state: ^Cel_Style_UI_State,
     status: Cel_Style_UI_Status,
@@ -81,6 +80,8 @@ set_cel_style_ui_status :: proc(
     state.status_time = rl.GetTime()
 }
 
+// sync_cel_style_light_angles converts the normalized direction vector to
+// degrees for the azimuth/elevation controls after loading or resetting a style.
 sync_cel_style_light_angles :: proc(
     state: ^Cel_Style_UI_State,
     style: ^Cel_Style,
@@ -94,6 +95,8 @@ sync_cel_style_light_angles :: proc(
     state.light_angles_valid = true
 }
 
+// update_cel_style_direction_from_angles reconstructs a unit direction from the
+// editor's degree values after either angular slider changes.
 update_cel_style_direction_from_angles :: proc(
     state: ^Cel_Style_UI_State,
     style: ^Cel_Style,
@@ -109,6 +112,7 @@ update_cel_style_direction_from_angles :: proc(
     }
 }
 
+// cel_vector_color_to_raylib encodes normalized runtime RGB for raygui widgets.
 cel_vector_color_to_raylib :: proc(color: rl.Vector3) -> rl.Color {
     return {
         cel_color_component_to_byte(color.x),
@@ -118,6 +122,7 @@ cel_vector_color_to_raylib :: proc(color: rl.Vector3) -> rl.Color {
     }
 }
 
+// cel_raylib_color_to_vector decodes raygui byte RGB back to normalized runtime RGB.
 cel_raylib_color_to_vector :: proc(color: rl.Color) -> rl.Vector3 {
     return {
         f32(color.r) / 255,
@@ -126,15 +131,8 @@ cel_raylib_color_to_vector :: proc(color: rl.Color) -> rl.Vector3 {
     }
 }
 
-mark_cel_style_edited :: proc(
-    state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
-) {
-    style.revision += 1
-    state.dirty = true
-    state.status = .NONE
-}
-
+// load_selected_cel_style_preset replaces the active style only after a complete
+// successful load, then resets selection, dirty state, and derived light angles.
 load_selected_cel_style_preset :: proc(
     state: ^Cel_Style_UI_State,
     style: ^Cel_Style,
@@ -158,6 +156,8 @@ load_selected_cel_style_preset :: proc(
     return true
 }
 
+// save_selected_cel_style_preset persists the current style to the selected
+// bundled path and updates status without discarding unsaved state on failure.
 save_selected_cel_style_preset :: proc(
     state: ^Cel_Style_UI_State,
     style: ^Cel_Style,
@@ -178,6 +178,8 @@ save_selected_cel_style_preset :: proc(
     return true
 }
 
+// reset_cel_style_to_classic installs the allocation-free built-in defaults and
+// resets modal editor state while marking the result as an unsaved edit.
 reset_cel_style_to_classic :: proc(
     state: ^Cel_Style_UI_State,
     style: ^Cel_Style,
@@ -192,6 +194,8 @@ reset_cel_style_to_classic :: proc(
     set_cel_style_ui_status(state, .RESET)
 }
 
+// add_cel_band_after splits the selected diffuse interval in half. It shifts
+// following bands and refuses splits that violate the one-byte threshold gap.
 add_cel_band_after :: proc(style: ^Cel_Style, selected_band: int) -> bool {
     if style.band_count >= MAX_CEL_BANDS {
         return false
@@ -221,6 +225,8 @@ add_cel_band_after :: proc(style: ^Cel_Style, selected_band: int) -> bool {
     return true
 }
 
+// remove_cel_band merges the selected interval into a neighbor and compacts the
+// fixed array. At least two bands are retained to preserve style validity.
 remove_cel_band :: proc(style: ^Cel_Style, selected_band: int) -> bool {
     if style.band_count <= 2 {
         return false
@@ -238,6 +244,8 @@ remove_cel_band :: proc(style: ^Cel_Style, selected_band: int) -> bool {
     return true
 }
 
+// draw_collapsible_header renders a keyboard-focusable section header and
+// toggles the supplied expansion flag on mouse or keyboard activation.
 draw_collapsible_header :: proc(
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
@@ -259,6 +267,8 @@ draw_collapsible_header :: proc(
     }
 }
 
+// draw_cel_style_slider combines a label, focus-aware slider, and numeric readout.
+// step/coarse_step define deterministic keyboard adjustments.
 draw_cel_style_slider :: proc(
     id: UI_Focus_ID,
     x, y, width: f32,
@@ -291,6 +301,8 @@ draw_cel_style_slider :: proc(
     return changed || value^ != previous
 }
 
+// draw_cel_color_swatch toggles the requested color picker and transfers focus
+// to the correct picker control while always displaying the encoded RGB value.
 draw_cel_color_swatch :: proc(
     id: UI_Focus_ID,
     x, y, width: f32,
@@ -326,38 +338,14 @@ draw_cel_color_swatch :: proc(
     )
 }
 
-draw_cel_ramp_preview :: proc(bounds: rl.Rectangle, style: ^Cel_Style) {
-    lower_bound := f32(0)
-    for band_index := 0; band_index < style.band_count; band_index += 1 {
-        band := style.bands[band_index]
-        upper_bound := f32(1)
-        if band_index < style.band_count - 1 {
-            upper_bound = band.upper_bound
-        }
-        base := rl.Vector3{1, 1, 1} * band.brightness
-        tinted := band.tint * band.brightness
-        preview := base * (1 - band.tint_mix) + tinted * band.tint_mix
-        color := rl.Color{
-            cel_color_component_to_byte(preview.x),
-            cel_color_component_to_byte(preview.y),
-            cel_color_component_to_byte(preview.z),
-            255,
-        }
-        band_x := bounds.x + lower_bound * bounds.width
-        band_width := max((upper_bound - lower_bound) * bounds.width, f32(1))
-        rl.DrawRectangleRec(
-            {band_x, bounds.y, band_width, bounds.height},
-            color,
-        )
-        lower_bound = upper_bound
-    }
-    rl.DrawRectangleLinesEx(bounds, 1, rl.GRAY)
-}
-
+// Height helpers mirror the exact vertical increments used by drawing code.
+// Keeping them pure lets inspector scrolling remain correct before controls draw.
 cel_style_light_content_height :: proc() -> f32 {
     return 146
 }
 
+// cel_style_bands_content_height includes conditional threshold, tint picker,
+// and alpha-cutoff rows for the currently selected band and alpha mode.
 cel_style_bands_content_height :: proc(
     state: ^Cel_Style_UI_State,
     style: ^Cel_Style,
@@ -378,6 +366,7 @@ cel_style_bands_content_height :: proc(
     return height
 }
 
+// cel_accent_block_height includes the optional expanded picker for one accent.
 cel_accent_block_height :: proc(
     state: ^Cel_Style_UI_State,
     target: Cel_Color_Target,
@@ -389,11 +378,13 @@ cel_accent_block_height :: proc(
     return height
 }
 
+// cel_style_accents_content_height combines rim/highlight blocks and their divider.
 cel_style_accents_content_height :: proc(state: ^Cel_Style_UI_State) -> f32 {
     return cel_accent_block_height(state, .RIM) +
            cel_accent_block_height(state, .HIGHLIGHT) + 8
 }
 
+// cel_style_outline_content_height accounts for the optional RGBA picker area.
 cel_style_outline_content_height :: proc(state: ^Cel_Style_UI_State) -> f32 {
     height: f32 = 32 + 28 + 32 + 28
     if state.color_target == .OUTLINE {
@@ -402,6 +393,7 @@ cel_style_outline_content_height :: proc(state: ^Cel_Style_UI_State) -> f32 {
     return height
 }
 
+// cel_subsection_height adds header and padding only when content is expanded.
 cel_subsection_height :: proc(open: bool, content_height: f32) -> f32 {
     if !open {
         return CEL_SUBSECTION_HEADER_HEIGHT
@@ -409,6 +401,8 @@ cel_subsection_height :: proc(open: bool, content_height: f32) -> f32 {
     return CEL_SUBSECTION_HEADER_HEIGHT + 8 + content_height + 8
 }
 
+// cel_style_editor_height predicts the complete editor extent from current UI
+// and style state; draw code must keep its row increments synchronized with it.
 cel_style_editor_height :: proc(
     state: ^Cel_Style_UI_State,
     style: ^Cel_Style,
@@ -437,207 +431,8 @@ cel_style_editor_height :: proc(
     return height + 28
 }
 
-draw_cel_style_light_content :: proc(
-    x, y, width: f32,
-    state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
-) -> bool {
-    changed := false
-    cursor_y := y
-    if !state.light_angles_valid {
-        sync_cel_style_light_angles(state, style)
-    }
-
-    rl.GuiLabel({x, cursor_y, 104, 22}, "Light space")
-    light_space := c.int(style.light_space)
-    previous_light_space := light_space
-    _ = ui_gui_combo_box(
-        .CEL_LIGHT_SPACE,
-        {x + 108, cursor_y, width - 108, 22},
-        "World;Camera;Model",
-        &light_space,
-        3,
-    )
-    if light_space != previous_light_space {
-        style.light_space = Cel_Light_Space(light_space)
-        changed = true
-    }
-    cursor_y += 30
-    if draw_cel_style_slider(
-        .CEL_LIGHT_AZIMUTH,
-        x, cursor_y, width, "Azimuth", &state.light_azimuth, -180, 180, 1, 10,
-    ) {
-        update_cel_style_direction_from_angles(state, style)
-        changed = true
-    }
-    cursor_y += 28
-    if draw_cel_style_slider(
-        .CEL_LIGHT_ELEVATION,
-        x, cursor_y, width, "Elevation", &state.light_elevation, -89, 89, 1, 10,
-    ) {
-        update_cel_style_direction_from_angles(state, style)
-        changed = true
-    }
-    cursor_y += 28
-    changed = draw_cel_style_slider(
-        .CEL_LIGHT_WRAP,
-        x, cursor_y, width, "Wrap lighting", &style.wrap_lighting, 0, 1, 0.01, 0.1,
-    ) || changed
-    cursor_y += 28
-    rl.GuiLabel(
-        {x, cursor_y, width, 32},
-        "Direction points from the surface toward the light.",
-    )
-    return changed
-}
-
-draw_cel_style_bands_content :: proc(
-    x, y, width: f32,
-    state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
-) -> bool {
-    changed := false
-    cursor_y := y
-    state.selected_band = clamp(
-        state.selected_band,
-        c.int(0),
-        c.int(style.band_count - 1),
-    )
-
-    rl.GuiLabel({x, cursor_y, 38, 22}, "Band")
-    selected_display := state.selected_band + 1
-    _ = ui_gui_spinner(
-        .CEL_BAND_SELECT,
-        {x + 40, cursor_y, 62, 22},
-        nil,
-        &selected_display,
-        1,
-        c.int(style.band_count),
-        1,
-        1,
-        false,
-    )
-    state.selected_band = selected_display - 1
-    add_width := (width - 110) * 0.5
-    if ui_gui_button(
-        .CEL_BAND_ADD,
-        {x + 108, cursor_y, add_width, 22},
-        "Add after",
-    ) {
-        if add_cel_band_after(style, int(state.selected_band)) {
-            state.selected_band += 1
-            changed = true
-        }
-    }
-    if ui_gui_button(
-        .CEL_BAND_REMOVE,
-        {x + 112 + add_width, cursor_y, width - 112 - add_width, 22},
-        "Remove",
-    ) {
-        if remove_cel_band(style, int(state.selected_band)) {
-            state.selected_band = min(
-                state.selected_band,
-                c.int(style.band_count - 1),
-            )
-            changed = true
-        }
-    }
-
-    band_index := int(state.selected_band)
-    band := &style.bands[band_index]
-    cursor_y += 32
-    rl.GuiLabel(
-        {x, cursor_y, width, 20},
-        rl.TextFormat("Editing band %d of %d", band_index + 1, style.band_count),
-    )
-    cursor_y += 28
-    if band_index < style.band_count - 1 {
-        lower_bound := f32(0)
-        if band_index > 0 {
-            lower_bound = style.bands[band_index - 1].upper_bound +
-                          CEL_BOUNDARY_MINIMUM_GAP
-        }
-        upper_bound := f32(1) - CEL_BOUNDARY_MINIMUM_GAP
-        if band_index < style.band_count - 2 {
-            upper_bound = style.bands[band_index + 1].upper_bound -
-                          CEL_BOUNDARY_MINIMUM_GAP
-        }
-        changed = draw_cel_style_slider(
-            .CEL_BAND_UPPER_BOUND,
-            x,
-            cursor_y,
-            width,
-            "Upper bound",
-            &band.upper_bound,
-            lower_bound,
-            upper_bound,
-            0.01,
-            0.1,
-        ) || changed
-        cursor_y += 28
-    }
-    changed = draw_cel_style_slider(
-        .CEL_BAND_BRIGHTNESS,
-        x, cursor_y, width, "Brightness", &band.brightness, 0, 2, 0.05, 0.25,
-    ) || changed
-    cursor_y += 28
-    changed = draw_cel_style_slider(
-        .CEL_BAND_TINT_MIX,
-        x, cursor_y, width, "Tint mix", &band.tint_mix, 0, 1, 0.01, 0.1,
-    ) || changed
-    cursor_y += 28
-
-    tint_color := cel_vector_color_to_raylib(band.tint)
-    draw_cel_color_swatch(
-        .CEL_BAND_TINT_SWATCH,
-        x,
-        cursor_y,
-        width,
-        "Tint",
-        tint_color,
-        .BAND_TINT,
-        state,
-    )
-    cursor_y += 28
-    if state.color_target == .BAND_TINT {
-        previous_tint_color := tint_color
-        _ = ui_gui_color_picker(
-            .CEL_BAND_TINT_PICKER,
-            {x, cursor_y, 150, 150},
-            &tint_color,
-            false,
-        )
-        if tint_color != previous_tint_color {
-            band.tint = cel_raylib_color_to_vector(tint_color)
-            changed = true
-        }
-        cursor_y += 158
-    }
-
-    rl.GuiLabel({x, cursor_y, 104, 22}, "Alpha")
-    alpha_mode := c.int(style.alpha_mode)
-    previous_alpha_mode := alpha_mode
-    _ = ui_gui_combo_box(
-        .CEL_ALPHA_MODE,
-        {x + 108, cursor_y, width - 108, 22},
-        "Opaque;Mask",
-        &alpha_mode,
-        2,
-    )
-    if alpha_mode != previous_alpha_mode {
-        style.alpha_mode = Cel_Alpha_Mode(alpha_mode)
-        changed = true
-    }
-    cursor_y += 30
-    if style.alpha_mode == .MASK {
-        changed = draw_cel_style_slider(
-            .CEL_ALPHA_CUTOFF,
-            x, cursor_y, width, "Cutoff", &style.alpha_cutoff, 0, 1, 0.01, 0.1,
-        ) || changed
-    }
-    return changed
-}
-
+// draw_cel_accent_content renders the common rim/highlight controls. Focus IDs
+// are selected from target so both blocks share layout logic without collisions.
 draw_cel_accent_content :: proc(
     x, y, width: f32,
     label: cstring,
@@ -728,109 +523,8 @@ draw_cel_accent_content :: proc(
     return changed
 }
 
-draw_cel_style_accents_content :: proc(
-    x, y, width: f32,
-    state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
-) -> bool {
-    rim_changed := draw_cel_accent_content(
-        x, y, width, "Rim light", .RIM, state, &style.rim,
-    )
-    highlight_y := y + cel_accent_block_height(state, .RIM) + 8
-    rl.GuiLine({x, highlight_y - 6, width, 2}, nil)
-    highlight_changed := draw_cel_accent_content(
-        x,
-        highlight_y,
-        width,
-        "Highlight",
-        .HIGHLIGHT,
-        state,
-        &style.highlight,
-    )
-    return rim_changed || highlight_changed
-}
-
-draw_cel_style_outline_content :: proc(
-    x, y, width: f32,
-    state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
-) -> bool {
-    changed := false
-    cursor_y := y
-    rl.GuiLabel({x, cursor_y, 104, 22}, "Width (pixels)")
-    outline_width := c.int(style.outline.width)
-    previous_width := outline_width
-    _ = ui_gui_spinner(
-        .CEL_OUTLINE_WIDTH,
-        {x + 108, cursor_y, width - 108, 22},
-        nil,
-        &outline_width,
-        0,
-        3,
-        1,
-        1,
-        false,
-    )
-    if outline_width != previous_width {
-        style.outline.width = int(outline_width)
-        changed = true
-    }
-    cursor_y += 32
-    changed = draw_cel_style_slider(
-        .CEL_OUTLINE_COVERAGE,
-        x,
-        cursor_y,
-        width,
-        "Coverage",
-        &style.outline.coverage_threshold,
-        0,
-        1,
-        0.01,
-        0.1,
-    ) || changed
-    cursor_y += 28
-
-    outline_color := style.outline.color
-    draw_cel_color_swatch(
-        .CEL_OUTLINE_SWATCH,
-        x,
-        cursor_y,
-        width,
-        "Color",
-        outline_color,
-        .OUTLINE,
-        state,
-    )
-    cursor_y += 32
-    if state.color_target == .OUTLINE {
-        previous_color := outline_color
-        _ = ui_gui_color_picker(
-            .CEL_OUTLINE_PICKER,
-            {x, cursor_y, 160, 160},
-            &outline_color,
-            false,
-        )
-        if outline_color != previous_color {
-            style.outline.color.r = outline_color.r
-            style.outline.color.g = outline_color.g
-            style.outline.color.b = outline_color.b
-            changed = true
-        }
-        cursor_y += 168
-    }
-
-    alpha := f32(style.outline.color.a) / 255
-    previous_alpha := alpha
-    changed = draw_cel_style_slider(
-        .CEL_OUTLINE_ALPHA,
-        x, cursor_y, width, "Alpha", &alpha, 0, 1, 0.01, 0.1,
-    ) || changed
-    if alpha != previous_alpha {
-        style.outline.color.a = cel_color_component_to_byte(alpha)
-    }
-    return changed
-}
-
+// draw_cel_subsection renders the panel chrome and delegates expansion behavior
+// to the shared collapsible-header control.
 draw_cel_subsection :: proc(
     id: UI_Focus_ID,
     x, y, width: f32,
@@ -844,188 +538,4 @@ draw_cel_subsection :: proc(
         title,
         open,
     )
-}
-
-draw_cel_style_editor :: proc(
-    bounds: rl.Rectangle,
-    state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
-) {
-    rl.GuiPanel(bounds, nil)
-    was_open := state.open
-    draw_collapsible_header(
-        .CEL_HEADER,
-        {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
-        "CEL SHADING [C]",
-        &state.open,
-    )
-    if was_open && !state.open {
-        state.color_target = .NONE
-    }
-    if !state.open {
-        return
-    }
-
-    x := bounds.x + 12
-    width := bounds.width - 24
-    y := bounds.y + INSPECTOR_SECTION_HEADER_HEIGHT + 8
-
-    combo_width := width * 0.38
-    button_gap: f32 = 4
-    reload_width: f32 = 56
-    save_width: f32 = 44
-    reset_width := width - combo_width - reload_width - save_width - button_gap * 3
-    previous_preset := state.preset_index
-    _ = ui_gui_combo_box(
-        .CEL_PRESET,
-        {x, y, combo_width, 24},
-        CEL_STYLE_PRESET_OPTIONS,
-        &state.preset_index,
-        3,
-    )
-    if state.preset_index != previous_preset {
-        _ = load_selected_cel_style_preset(state, style)
-    }
-    button_x := x + combo_width + button_gap
-    if ui_gui_button(.CEL_RELOAD, {button_x, y, reload_width, 24}, "Reload") {
-        _ = load_selected_cel_style_preset(state, style)
-    }
-    button_x += reload_width + button_gap
-    if ui_gui_button(.CEL_SAVE, {button_x, y, save_width, 24}, "Save") {
-        _ = save_selected_cel_style_preset(state, style)
-    }
-    button_x += save_width + button_gap
-    if ui_gui_button(.CEL_RESET, {button_x, y, reset_width, 24}, "Reset") {
-        reset_cel_style_to_classic(state, style)
-    }
-    y += 30
-
-    title_suffix: cstring = ""
-    if state.dirty {
-        title_suffix = " *"
-    }
-    style_name_cstr := strings.clone_to_cstring(style.name, context.temp_allocator)
-    rl.GuiLabel(
-        {x, y, width, 20},
-        rl.TextFormat("%s%s", style_name_cstr, title_suffix),
-    )
-    y += 22
-    draw_cel_ramp_preview({x, y, width, 22}, style)
-    y += 30
-
-    changed := false
-
-    light_was_open := state.light_open
-    draw_cel_subsection(
-        .CEL_LIGHT_HEADER,
-        x,
-        y,
-        width,
-        "LIGHT",
-        &state.light_open,
-    )
-    if state.light_open {
-        changed = draw_cel_style_light_content(
-            x + 8,
-            y + CEL_SUBSECTION_HEADER_HEIGHT + 8,
-            width - 16,
-            state,
-            style,
-        ) || changed
-    }
-    if !light_was_open && state.light_open && !state.light_angles_valid {
-        sync_cel_style_light_angles(state, style)
-    }
-    y += cel_subsection_height(
-        state.light_open,
-        cel_style_light_content_height(),
-    ) + INSPECTOR_SECTION_GAP
-
-    bands_was_open := state.bands_open
-    draw_cel_subsection(
-        .CEL_BANDS_HEADER,
-        x,
-        y,
-        width,
-        "BANDS & ALPHA",
-        &state.bands_open,
-    )
-    if bands_was_open && !state.bands_open && state.color_target == .BAND_TINT {
-        state.color_target = .NONE
-    }
-    if state.bands_open {
-        changed = draw_cel_style_bands_content(
-            x + 8,
-            y + CEL_SUBSECTION_HEADER_HEIGHT + 8,
-            width - 16,
-            state,
-            style,
-        ) || changed
-    }
-    y += cel_subsection_height(
-        state.bands_open,
-        cel_style_bands_content_height(state, style),
-    ) + INSPECTOR_SECTION_GAP
-
-    accents_was_open := state.accents_open
-    draw_cel_subsection(
-        .CEL_ACCENTS_HEADER,
-        x,
-        y,
-        width,
-        "ACCENTS",
-        &state.accents_open,
-    )
-    if accents_was_open && !state.accents_open &&
-       (state.color_target == .RIM || state.color_target == .HIGHLIGHT) {
-        state.color_target = .NONE
-    }
-    if state.accents_open {
-        changed = draw_cel_style_accents_content(
-            x + 8,
-            y + CEL_SUBSECTION_HEADER_HEIGHT + 8,
-            width - 16,
-            state,
-            style,
-        ) || changed
-    }
-    y += cel_subsection_height(
-        state.accents_open,
-        cel_style_accents_content_height(state),
-    ) + INSPECTOR_SECTION_GAP
-
-    outline_was_open := state.outline_open
-    draw_cel_subsection(
-        .CEL_OUTLINE_HEADER,
-        x,
-        y,
-        width,
-        "OUTLINE",
-        &state.outline_open,
-    )
-    if outline_was_open && !state.outline_open && state.color_target == .OUTLINE {
-        state.color_target = .NONE
-    }
-    if state.outline_open {
-        changed = draw_cel_style_outline_content(
-            x + 8,
-            y + CEL_SUBSECTION_HEADER_HEIGHT + 8,
-            width - 16,
-            state,
-            style,
-        ) || changed
-    }
-    y += cel_subsection_height(
-        state.outline_open,
-        cel_style_outline_content_height(state),
-    ) + INSPECTOR_SECTION_GAP
-
-    if changed {
-        mark_cel_style_edited(state, style)
-    }
-
-    status_text := cel_style_ui_status_text(state.status)
-    if state.status == .NONE || rl.GetTime() - state.status_time < 5 {
-        rl.GuiStatusBar({x, y, width, 20}, status_text)
-    }
 }

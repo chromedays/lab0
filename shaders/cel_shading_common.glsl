@@ -1,4 +1,6 @@
 // Single source of truth for scene shading and metadata classification.
+// Included by both custom.fs and cel_band.fs; keeping thresholds here guarantees
+// visible color and encoded metadata select identical bands and accent flags.
 const int CEL_MAX_BANDS = 8;
 const int CEL_RAMP_WIDTH = 256;
 const int CEL_ALPHA_MODE_OPAQUE = 0;
@@ -23,11 +25,15 @@ uniform vec3 u_highlight_color;
 uniform float u_highlight_threshold;
 uniform float u_highlight_strength;
 
+// Cel_Ramp_Sample decodes one texel: alpha carries a one-based band ID while RGB
+// carries the authorable tint color for that interval.
 struct Cel_Ramp_Sample {
     int band_id;
     vec3 tint;
 };
 
+// cel_diffuse_value evaluates wrapped Lambert lighting and normalizes it to the
+// [0,1] ramp domain. The epsilon protects the denominator from invalid uniforms.
 float cel_diffuse_value(vec3 normal) {
     float raw_diffuse = dot(
         normalize(normal),
@@ -41,6 +47,8 @@ float cel_diffuse_value(vec3 normal) {
     );
 }
 
+// cel_ramp_sample rounds diffuse to the nearest of 256 exact lookup entries.
+// texelFetch avoids filtering that could blend adjacent band IDs.
 Cel_Ramp_Sample cel_ramp_sample(vec3 normal) {
     float diffuse = cel_diffuse_value(normal);
     int ramp_index = int(floor(diffuse * 255.0 + 0.5));
@@ -55,11 +63,14 @@ Cel_Ramp_Sample cel_ramp_sample(vec3 normal) {
     return result;
 }
 
+// cel_alpha_discarded centralizes alpha-mask behavior for both fragment passes.
 bool cel_alpha_discarded(float material_alpha) {
     return u_alpha_mode == CEL_ALPHA_MODE_MASK &&
            material_alpha < u_alpha_cutoff;
 }
 
+// cel_accent_flags classifies rim and Blinn-style highlight presence as bits.
+// Degenerate view/half vectors use stable fallbacks to avoid NaN propagation.
 int cel_accent_flags(vec3 normal, vec3 world_position) {
     vec3 unit_normal = normalize(normal);
     vec3 view_delta = u_view_position - world_position;
@@ -86,6 +97,8 @@ int cel_accent_flags(vec3 normal, vec3 world_position) {
     return flags;
 }
 
+// cel_apply_band applies per-band brightness, then interpolates from multiplied
+// albedo toward a flat tint. tint_mix=0 preserves texture detail.
 vec3 cel_apply_band(vec3 albedo, Cel_Ramp_Sample ramp_sample) {
     float brightness = u_band_brightness[ramp_sample.band_id];
     float tint_mix = u_band_tint_mix[ramp_sample.band_id];
@@ -94,6 +107,7 @@ vec3 cel_apply_band(vec3 albedo, Cel_Ramp_Sample ramp_sample) {
     return mix(multiplied, tinted, tint_mix);
 }
 
+// cel_apply_accents adds enabled classified colors after base band shading.
 vec3 cel_apply_accents(vec3 color, int accent_flags) {
     vec3 result = color;
     if ((accent_flags & CEL_ACCENT_RIM) != 0) {

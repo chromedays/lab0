@@ -1,5 +1,9 @@
 #version 330
 
+// Final low-resolution outline pass. Existing color pixels pass through unchanged;
+// transparent cells become outline color when nearby coverage exceeds the style
+// threshold. The fixed maximum radius matches the validated CPU width range.
+
 in vec2 fragTexCoord;
 in vec4 fragColor;
 
@@ -14,12 +18,16 @@ uniform float u_coverage_threshold;
 out vec4 finalColor;
 
 void main() {
+    // Do not overwrite filled pixels; outline expansion operates only into empty
+    // target cells so silhouettes never shrink.
     vec4 source_color = texture(texture0, fragTexCoord);
     if (u_outline_width <= 0 || source_color.a > 0.0) {
         finalColor = source_color * fragColor * colDiffuse;
         return;
     }
 
+    // Search a square Chebyshev neighborhood up to the requested pixel width.
+    // UV clamping prevents reads outside the RenderTexture at image borders.
     vec2 texel_size = 1.0 / u_target_resolution;
     bool neighboring_coverage = false;
     for (int offset_y = -3; offset_y <= 3; offset_y++) {
@@ -41,5 +49,6 @@ void main() {
         }
     }
 
+    // Output remains transparent where no qualifying source coverage is nearby.
     finalColor = neighboring_coverage ? u_outline_color : vec4(0.0);
 }

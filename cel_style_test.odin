@@ -1,8 +1,12 @@
 package main
 
+// These tests cover cel-style defaults, validation, byte-level ramp encoding,
+// JSON persistence, bundled presets, editor mutations, and inspector layout.
+
 import "core:os"
 import "core:testing"
 
+// Built-in Classic keeps its historical three-band thresholds and brightness values.
 @test
 classic_cel_style_preserves_the_original_three_bands :: proc(t: ^testing.T) {
     style := make_classic_cel_style()
@@ -14,6 +18,7 @@ classic_cel_style_preserves_the_original_three_bands :: proc(t: ^testing.T) {
     testing.expect_value(t, cel_band_for_diffuse(&style, 0.6501), 2)
 }
 
+// Validation rejects thresholds that overlap or collapse into one ramp byte.
 @test
 cel_style_rejects_unordered_band_boundaries :: proc(t: ^testing.T) {
     style := make_classic_cel_style()
@@ -25,6 +30,7 @@ cel_style_rejects_unordered_band_boundaries :: proc(t: ^testing.T) {
     )
 }
 
+// The generated lookup ramp stores exact tint bytes and one-based band IDs.
 @test
 cel_ramp_encodes_exact_band_bytes :: proc(t: ^testing.T) {
     style := make_classic_cel_style()
@@ -35,6 +41,7 @@ cel_ramp_encodes_exact_band_bytes :: proc(t: ^testing.T) {
     testing.expect_value(t, pixels[255].a, u8(3))
 }
 
+// Saving then loading a style preserves all runtime fields and ownership semantics.
 @test
 cel_style_json_round_trip_preserves_runtime_values :: proc(t: ^testing.T) {
     path := "/tmp/lab0-cel-style-round-trip.json"
@@ -59,6 +66,7 @@ cel_style_json_round_trip_preserves_runtime_values :: proc(t: ^testing.T) {
     testing.expect_value(t, loaded.bands[1].brightness, f32(0.62))
 }
 
+// Every shipped JSON preset decodes and validates against the current schema.
 @test
 bundled_cel_style_presets_are_valid :: proc(t: ^testing.T) {
     for preset_path in CEL_STYLE_PRESET_PATHS {
@@ -71,6 +79,7 @@ bundled_cel_style_presets_are_valid :: proc(t: ^testing.T) {
     }
 }
 
+// Editor add/remove operations cover the full supported band-count range safely.
 @test
 cel_band_editor_supports_two_through_eight_bands :: proc(t: ^testing.T) {
     style := make_classic_cel_style()
@@ -89,6 +98,7 @@ cel_band_editor_supports_two_through_eight_bands :: proc(t: ^testing.T) {
     testing.expect(t, !remove_cel_band(&style, 0))
 }
 
+// Predicted editor height grows only for the subsection that is opened.
 @test
 cel_style_inspector_is_compact_until_a_section_is_expanded :: proc(t: ^testing.T) {
     style := make_classic_cel_style()
