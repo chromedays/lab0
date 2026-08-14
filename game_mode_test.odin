@@ -1,5 +1,6 @@
 package main
 
+import "core:math"
 import "core:testing"
 import rl "vendor:raylib"
 
@@ -110,6 +111,17 @@ game_run_options_accept_occlusion_test_scene :: proc(t: ^testing.T) {
     })
     testing.expect(t, valid, error_argument)
     testing.expect_value(t, options.start_room, Game_Room_ID.TEST_OCCLUSION)
+    testing.expect(t, options.start_room_explicit)
+}
+
+@(test)
+game_run_options_accept_pixel_snap_test_scene :: proc(t: ^testing.T) {
+    options, valid, error_argument := parse_game_run_options([]string{
+        "--mode", "game",
+        "--game-room", "pixel-snap-test",
+    })
+    testing.expect(t, valid, error_argument)
+    testing.expect_value(t, options.start_room, Game_Room_ID.TEST_PIXEL_SNAP)
     testing.expect(t, options.start_room_explicit)
 }
 
@@ -248,4 +260,74 @@ game_occlusion_test_scene_is_not_connected_to_the_authored_route :: proc(
             "the test scene must remain outside the traversal route",
         )
     }
+}
+
+@(test)
+game_pixel_snap_test_scene_is_fixed_camera_and_route_isolated :: proc(
+    t: ^testing.T,
+) {
+    room := game_room(.TEST_PIXEL_SNAP)
+    testing.expect_value(t, room.name, "T01 Pixel Snap Test")
+    testing.expect_value(t, room.spawn, rl.Vector3{-6, 0, 31.5})
+    testing.expect(t, !room.camera_follow)
+
+    zombie_count := 0
+    for spawn in GAME_ZOMBIE_SPAWNS {
+        if spawn.room == .TEST_PIXEL_SNAP {
+            zombie_count += 1
+        }
+    }
+    testing.expect_value(t, zombie_count, 1)
+
+    for exit in GAME_EXITS {
+        testing.expect(
+            t,
+            exit.source != .TEST_PIXEL_SNAP && exit.target != .TEST_PIXEL_SNAP,
+            "the pixel-snap test scene must remain outside the traversal route",
+        )
+    }
+}
+
+@(test)
+game_entity_pixel_snap_offset_quantizes_camera_plane_translation :: proc(
+    t: ^testing.T,
+) {
+    state := game_state_init(.TEST_PIXEL_SNAP)
+    camera_state: Game_Camera_State
+    camera := game_update_camera(&camera_state, &state, {}, GAME_FIXED_DT)
+    game_fixed_update(&state, Game_Input{{1, 0}, false}, GAME_FIXED_DT)
+
+    player_offset := game_pixel_snap_offset(state.player.position, camera)
+    zombie_index := GAME_ZOMBIE_COUNT - 1
+    zombie_offset := game_pixel_snap_offset(
+        state.zombies[zombie_index].position,
+        camera,
+    )
+    right := rl.GetCameraRight(&camera)
+    quarter_pixel := GAME_CAMERA_FOVY / f32(GAME_PIXEL_HEIGHT) / 4
+
+    testing.expectf(
+        t,
+        math.abs(
+            rl.Vector3DotProduct(player_offset.world, right) + quarter_pixel,
+        ) < 0.00001,
+        "player render offset should cancel its first quarter-pixel step",
+    )
+    testing.expectf(
+        t,
+        math.abs(
+            rl.Vector3DotProduct(zombie_offset.world, right) - quarter_pixel,
+        ) < 0.00001,
+        "zombie render offset should cancel its first negative quarter-pixel step",
+    )
+    testing.expectf(
+        t,
+        math.abs(player_offset.ndc.x + 0.5 / f32(GAME_PIXEL_WIDTH)) < 0.00001,
+        "player NDC offset should be one negative quarter logical pixel",
+    )
+    testing.expectf(
+        t,
+        math.abs(zombie_offset.ndc.x - 0.5 / f32(GAME_PIXEL_WIDTH)) < 0.00001,
+        "zombie NDC offset should be one positive quarter logical pixel",
+    )
 }

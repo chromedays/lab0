@@ -168,6 +168,8 @@ Cel_Shader_Bindings :: struct {
     highlight_color:       c.int,
     highlight_threshold:   c.int,
     highlight_strength:    c.int,
+    pixel_snap_ndc_offset:  c.int,
+    pixel_snap_world_offset: c.int,
 }
 
 // make_classic_cel_style constructs the built-in fallback without allocating
@@ -405,6 +407,8 @@ resolve_cel_shader_bindings :: proc(shader: rl.Shader) -> Cel_Shader_Bindings {
         highlight_color = rl.GetShaderLocation(shader, "u_highlight_color"),
         highlight_threshold = rl.GetShaderLocation(shader, "u_highlight_threshold"),
         highlight_strength = rl.GetShaderLocation(shader, "u_highlight_strength"),
+        pixel_snap_ndc_offset = rl.GetShaderLocation(shader, "u_pixel_snap_ndc_offset"),
+        pixel_snap_world_offset = rl.GetShaderLocation(shader, "u_pixel_snap_world_offset"),
     }
     // DrawMesh owns material sampler binding. Reserve the copied material's
     // emission map slot for the cel ramp so it is active with this shader.

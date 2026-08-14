@@ -46,6 +46,11 @@ Game_Camera_State :: struct {
     initialized: bool,
 }
 
+Game_Pixel_Snap_Offset :: struct {
+    ndc:   rl.Vector2,
+    world: rl.Vector3,
+}
+
 Game_Imported_Model :: struct {
     model:  rl.Model,
     bounds: rl.BoundingBox,
@@ -206,6 +211,13 @@ GAME_FLOOR_ACCENTS := [?]Game_Floor_Accent{
     {.R06_LOWER_TRAIL, {-9.3, -10.6, -7.8, -10.25}, {177, 65, 153, 255}},
     {.TEST_OCCLUSION, {79.88, -3.7, 80.12, 3.7}, {87, 119, 148, 255}},
     {.TEST_OCCLUSION, {78.6, -0.08, 81.4, 0.08}, {202, 180, 102, 255}},
+    // T01 has two isolated motion lanes and stationary crossbars. They make
+    // sub-pixel drift visible without adding any animated scenery.
+    {.TEST_PIXEL_SNAP, {-7.6, 31.44, 7.6, 31.56}, {69, 198, 211, 255}},
+    {.TEST_PIXEL_SNAP, {-7.6, 28.44, 7.6, 28.56}, {231, 91, 155, 255}},
+    {.TEST_PIXEL_SNAP, {-4.03, 26.4, -3.97, 33.6}, {83, 109, 132, 255}},
+    {.TEST_PIXEL_SNAP, {-0.03, 26.4, 0.03, 33.6}, {112, 129, 145, 255}},
+    {.TEST_PIXEL_SNAP, {3.97, 26.4, 4.03, 33.6}, {83, 109, 132, 255}},
 }
 
 GAME_ROOM_WALL_COLORS := [?]rl.Color{
@@ -217,6 +229,7 @@ GAME_ROOM_WALL_COLORS := [?]rl.Color{
     {76, 44, 88, 255},
     {31, 45, 84, 255},
     {64, 64, 82, 255},
+    {45, 69, 82, 255},
 }
 
 GAME_ROOM_OBSTACLE_COLORS := [?]rl.Color{
@@ -228,6 +241,7 @@ GAME_ROOM_OBSTACLE_COLORS := [?]rl.Color{
     {164, 102, 134, 255},
     {69, 102, 143, 255},
     {118, 118, 136, 255},
+    {82, 118, 132, 255},
 }
 
 GAME_ROOM_BACKGROUND_COLORS := [?]rl.Color{
@@ -239,6 +253,7 @@ GAME_ROOM_BACKGROUND_COLORS := [?]rl.Color{
     {38, 21, 55, 255},
     {13, 23, 49, 255},
     {18, 18, 28, 255},
+    {12, 24, 31, 255},
 }
 
 GAME_ROOM_HUD_ACCENT_COLORS := [?]rl.Color{
@@ -250,6 +265,7 @@ GAME_ROOM_HUD_ACCENT_COLORS := [?]rl.Color{
     {255, 143, 142, 255},
     {83, 188, 224, 255},
     {255, 57, 153, 255},
+    {103, 226, 218, 255},
 }
 
 Game_Renderer :: struct {
@@ -380,7 +396,7 @@ print_game_usage :: proc() {
     fmt.println("Lab0 traversal prototype")
     fmt.println("")
     fmt.println("  --mode game                 Run the traversal prototype")
-    fmt.println("  --game-room <R00..R06|T00>  Start in a room or the occlusion test scene")
+    fmt.println("  --game-room <R00..R06|T00|T01>  Start in a room or diagnostic scene")
     fmt.println("  --game-debug                Show collision and camera diagnostics")
     fmt.println("  --game-replay <path>        Drive the 60 Hz simulation from replay JSON")
     fmt.println("  --game-capture-tick <tick>  Capture the exact replay tick (1-based)")
@@ -884,6 +900,38 @@ game_update_camera :: proc(
     camera.target += correction
     camera.position += correction
     return camera
+}
+
+game_pixel_snap_offset :: proc(
+    anchor: rl.Vector3,
+    camera: rl.Camera3D,
+) -> Game_Pixel_Snap_Offset {
+    if camera.projection != .ORTHOGRAPHIC || camera.fovy <= 0 {
+        return {}
+    }
+
+    // Quantize one entity anchor in the same camera plane and logical pixel
+    // units used by the render camera. The returned translation is shared by
+    // every draw that composes the entity, preserving its rigid silhouette.
+    world_units_per_pixel := camera.fovy / f32(GAME_PIXEL_HEIGHT)
+    render_camera := camera
+    forward := rl.GetCameraForward(&render_camera)
+    right := rl.GetCameraRight(&render_camera)
+    up := rl.Vector3Normalize(rl.Vector3CrossProduct(right, forward))
+    horizontal_pixels := rl.Vector3DotProduct(anchor, right) / world_units_per_pixel
+    vertical_pixels := rl.Vector3DotProduct(anchor, up) / world_units_per_pixel
+    snapped_horizontal := math.floor(horizontal_pixels + 0.5)
+    snapped_vertical := math.floor(vertical_pixels + 0.5)
+    horizontal_delta := snapped_horizontal - horizontal_pixels
+    vertical_delta := snapped_vertical - vertical_pixels
+    return {
+        ndc = {
+            horizontal_delta * 2 / f32(GAME_PIXEL_WIDTH),
+            vertical_delta * 2 / f32(GAME_PIXEL_HEIGHT),
+        },
+        world = right * (horizontal_delta * world_units_per_pixel) +
+                up * (vertical_delta * world_units_per_pixel),
+    }
 }
 
 game_room_opening :: proc(
@@ -1604,7 +1652,7 @@ game_apply_zombie_animation :: proc(
 
     last_frame := f32(max(animation.keyframeCount - 1, 0))
     frame: f32
-    if last_frame > 0 {
+    if state.current_room != .TEST_PIXEL_SNAP && last_frame > 0 {
         switch animation_kind {
         case .WALKING:
             playback_speed: f32 = 0.52
@@ -1821,12 +1869,44 @@ game_draw_zombie :: proc(
     }
 }
 
-game_draw_zombies :: proc(assets: ^Game_Assets, state: ^Game_State) {
+game_set_pixel_snap_offset :: proc(
+    shader: rl.Shader,
+    bindings: ^Cel_Shader_Bindings,
+    offset: Game_Pixel_Snap_Offset,
+) {
+    snap_offset := offset
+    rl.SetShaderValue(
+        shader,
+        bindings.pixel_snap_ndc_offset,
+        &snap_offset.ndc,
+        .VEC2,
+    )
+    rl.SetShaderValue(
+        shader,
+        bindings.pixel_snap_world_offset,
+        &snap_offset.world,
+        .VEC3,
+    )
+}
+
+game_draw_zombies :: proc(
+    assets: ^Game_Assets,
+    state: ^Game_State,
+    shader: rl.Shader,
+    bindings: ^Cel_Shader_Bindings,
+    camera: rl.Camera3D,
+) {
     for spawn, zombie_index in GAME_ZOMBIE_SPAWNS {
         if spawn.room == state.current_room {
+            game_set_pixel_snap_offset(
+                shader,
+                bindings,
+                game_pixel_snap_offset(state.zombies[zombie_index].position, camera),
+            )
             game_draw_zombie(assets, state, zombie_index)
         }
     }
+    game_set_pixel_snap_offset(shader, bindings, {})
 }
 
 game_set_cel_accents_enabled :: proc(
@@ -1852,6 +1932,7 @@ game_draw_world :: proc(
     camera: rl.Camera3D,
 ) {
     game_prepare_assets_shader(assets, shader, cel_ramp)
+    game_set_pixel_snap_offset(shader, bindings, {})
 
     // View-dependent rim/highlight thresholds can divide a large flat floor
     // into hard regions that resemble z-fighting. Terrain has its own authored
@@ -1917,9 +1998,15 @@ game_draw_world :: proc(
     }
     game_draw_obstacle_markers(assets)
     game_draw_decor(assets, state, camera)
-    game_draw_zombies(assets, state)
+    game_draw_zombies(assets, state, shader, bindings, camera)
     game_draw_particles(assets, state)
+    game_set_pixel_snap_offset(
+        shader,
+        bindings,
+        game_pixel_snap_offset(state.player.position, camera),
+    )
     game_draw_player(assets, state)
+    game_set_pixel_snap_offset(shader, bindings, {})
 }
 
 game_update_player_animation :: proc(
@@ -1931,9 +2018,10 @@ game_update_player_animation :: proc(
         return
     }
     desired_clip := assets.walk_clip
-    moving := game_vector_length(state.player.velocity) > 0.08
+    fixed_pose := state.current_room == .TEST_PIXEL_SNAP
+    moving := !fixed_pose && game_vector_length(state.player.velocity) > 0.08
     speed: f32 = max(game_vector_length(state.player.velocity) / GAME_MOVE_SPEED, 0.65)
-    if state.player.mode == .DASHING {
+    if !fixed_pose && state.player.mode == .DASHING {
         desired_clip = assets.run_clip
         moving = true
         speed = 1.35
@@ -2181,6 +2269,8 @@ game_draw_hud :: proc(
         } else {
             objective_text = "CLEAR: projected model bounds do not overlap"
         }
+    } else if state.current_room == .TEST_PIXEL_SNAP {
+        objective_text = "FIXED POSE  |  0.25 PIXEL PER TICK"
     } else if state.overlook_reached {
         objective_text = "Return to the start forest"
     }
@@ -2206,6 +2296,8 @@ game_draw_hud :: proc(
     controls_text: cstring = "Move: WASD / arrows    Dash: Space    Reset: R    Debug: F3"
     if state.current_room == .TEST_OCCLUSION {
         controls_text = "W/S: cross tree    A/D: sweep projected edge    White: screen overlap"
+    } else if state.current_room == .TEST_PIXEL_SNAP {
+        controls_text = "T01 diagnostic: translation only, fixed camera and poses"
     }
     rl.DrawText(
         controls_text,

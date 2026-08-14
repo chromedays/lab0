@@ -21,6 +21,11 @@ out vec3 fragWorldPosition;
 uniform mat4 mvp;
 uniform mat4 matModel;
 uniform mat4 matNormal;
+// Game entities receive one render-only translation shared by every mesh draw
+// that composes the subject. Zero offsets leave Viewer and static Game geometry
+// on their existing paths.
+uniform vec2 u_pixel_snap_ndc_offset;
+uniform vec3 u_pixel_snap_world_offset;
 
 void main() {
     // Normalize after the normal-matrix transform so non-unit source normals do
@@ -28,6 +33,13 @@ void main() {
     fragTexCoord = vertexTexCoord;
     fragColor = vertexColor;
     fragNormal = normalize(vec3(matNormal * vec4(vertexNormal, 0.0)));
-    fragWorldPosition = vec3(matModel * vec4(vertexPosition, 1.0));
-    gl_Position = mvp * vec4(vertexPosition, 1.0);
+    fragWorldPosition =
+        vec3(matModel * vec4(vertexPosition, 1.0)) +
+        u_pixel_snap_world_offset;
+    vec4 clip_position = mvp * vec4(vertexPosition, 1.0);
+    // Multiplying the NDC translation by W applies one rigid screen-space
+    // offset to the whole model instead of rounding individual vertices and
+    // deforming its silhouette.
+    clip_position.xy += u_pixel_snap_ndc_offset * clip_position.w;
+    gl_Position = clip_position;
 }
