@@ -94,6 +94,36 @@ Viewer capture defaults and output dimensions are unchanged. The complete
 prototype scope and tuning values are recorded in
 [`docs/traversal-prototype-spec.md`](docs/traversal-prototype-spec.md).
 
+### Occlusion test scene
+
+Use the isolated `T00` scene to inspect the player/tree visibility detector
+without the authored route, transitions, hazards, or nearby props:
+
+```sh
+odin run . -- --mode game --game-room T00
+```
+
+Walk forward and backward through the single tree with `W` and `S`. The tree
+keeps its normal green texture while the detector reports clear and switches to
+a flat hot-pink diagnostic material while it reports that the tree occludes the
+player. The yellow/hot-pink rectangle is the actual tree model bound projected
+through the active camera, the cyan rectangle is the projected player model
+bound, and the white rectangle is their overlap. The cyan ground ray shows the
+separate depth-order check. Use `A` and `D` behind the tree to sweep across the
+projected canopy edge.
+
+The fixed replays exercise the center crossing and edge sweep and can produce a
+video report with:
+
+```sh
+scripts/test-game.sh \
+  --video-report artifacts/occlusion-test-report \
+  --replay replays/tree-occlusion-debug.json
+```
+
+Replace the replay path with `replays/tree-occlusion-edge-debug.json` for the
+edge-boundary sweep.
+
 ### Automated gameplay checks
 
 Gameplay rules run at a fixed 60 Hz in `game_fixed_update`, independently of a
