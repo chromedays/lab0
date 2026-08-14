@@ -77,3 +77,13 @@ int decode_cel_accents(vec4 encoded_sample) {
     }
     return int(floor(encoded_sample.g * 255.0 + 0.5));
 }
+
+// Blue is reserved for binary classifications that must survive color
+// clustering. Viewer and Game write zero; Scene Editor writes one for a
+// directional hard-shadow sample.
+int decode_cel_shadow(vec4 encoded_sample) {
+    if (encoded_sample.a <= 0.8) {
+        return 0;
+    }
+    return int(floor(encoded_sample.b * 255.0 + 0.5));
+}

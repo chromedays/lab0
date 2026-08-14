@@ -91,16 +91,22 @@ imported models, cube, sphere, plane, triangle, cylinder, cone, torus, point
 lights, and spot lights. Select an item in the hierarchy or viewport and edit
 its exact transform, color, visibility, light values, or fixed animation pose
 in the right inspector. The pinned directional-light panel controls its
-enabled state, azimuth, elevation, color, and intensity without giving it a
-scene position. Right-drag orbits the serialized camera, middle-drag pans, the
-wheel dollies, `W`/`E`/`R` select world-axis translate/rotate/scale gizmos, `F`
-frames the selection, `Delete` removes it, and `Cmd/Ctrl+S` saves.
+enabled state, azimuth, elevation, color, intensity, and pixel-hard shadow
+settings without giving it a scene position. Directional shadows use a
+nearest-filtered 1024x1024 depth map whose light camera is snapped to whole
+shadow texels; Strength, Extent, and Bias remain exact serialized scene values.
+Point and spot lights remain unshadowed. Right-drag orbits the serialized
+camera, middle-drag pans, the wheel dollies, `W`/`E`/`R` select world-axis
+translate/rotate/scale gizmos, `F` frames the selection, `Delete` removes it,
+and `Cmd/Ctrl+S` saves.
 
 Scene files are schema-versioned strict JSON. They use repository-relative
 model and style paths, canonical two-space formatting, globally unique stable
 IDs, and an atomic sibling-temporary-file save. The editor rejects comments,
 trailing commas, non-finite numbers, invalid transforms or light values,
 missing assets, and unsupported schema versions.
+Shadow members are optional for older schema-v1 files; omitted members load
+with shadows disabled and preserve the original unshadowed result.
 
 Scene Editor also uses the deterministic capture path while excluding editor
 panels and overlays:

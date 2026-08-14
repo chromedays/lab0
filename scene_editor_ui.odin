@@ -1444,6 +1444,46 @@ scene_editor_draw_directional_light :: proc(scene: ^Scene, bounds: rl.Rectangle)
     y += 18
     if scene_gui_color3(x, y, width, &light.color) { scene.dirty = true }
     y += 29
+    previous_casts_shadows := light.casts_shadows
+    _ = rl.GuiCheckBox(
+        {x, y, 20, 20},
+        "Pixel Hard Shadows",
+        &light.casts_shadows,
+    )
+    if previous_casts_shadows != light.casts_shadows { scene.dirty = true }
+    y += 25
+    if scene_gui_scaled_spinner(
+        {x, y, width * 0.48, 22},
+        "Strength",
+        &light.shadow_strength,
+        SCENE_MIN_SHADOW_STRENGTH,
+        SCENE_MAX_SHADOW_STRENGTH,
+        100,
+    ) {
+        scene.dirty = true
+    }
+    if scene_gui_scaled_spinner(
+        {x + width * 0.52, y, width * 0.48, 22},
+        "Extent",
+        &light.shadow_extent,
+        SCENE_MIN_SHADOW_EXTENT,
+        SCENE_MAX_SHADOW_EXTENT,
+        10,
+    ) {
+        scene.dirty = true
+    }
+    y += 27
+    if scene_gui_scaled_spinner(
+        {x, y, width, 22},
+        "Bias x100k",
+        &light.shadow_bias,
+        SCENE_MIN_SHADOW_BIAS,
+        SCENE_MAX_SHADOW_BIAS,
+        100000,
+    ) {
+        scene.dirty = true
+    }
+    y += 29
     if rl.GuiButton({x, y, width, 22}, "Reset Direction") {
         light.direction = scene_normalize_direction_stable({0.35, 0.8, 0.55})
         scene.dirty = true
@@ -1584,7 +1624,7 @@ scene_editor_draw_ui :: proc(
     scene_editor_draw_hierarchy(state, scene, resources)
 
     right_x := f32(SCENE_SCREEN_WIDTH) - SCENE_EDITOR_RIGHT_WIDTH
-    directional_height: f32 = 234
+    directional_height: f32 = 300
     inspector_height := f32(SCENE_SCREEN_HEIGHT) - SCENE_EDITOR_TOP_HEIGHT - directional_height
     rl.GuiPanel({right_x, SCENE_EDITOR_TOP_HEIGHT, SCENE_EDITOR_RIGHT_WIDTH, inspector_height}, "INSPECTOR")
     content_x := right_x + 10

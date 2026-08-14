@@ -7,7 +7,6 @@ set -eu
 
 scene_path="scenes/primitive-light-grid.json"
 video_duration_seconds="5"
-expected_video_frames="300"
 video_report=false
 report_dir=""
 
@@ -37,12 +36,36 @@ while [ "$#" -gt 0 ]; do
             scene_path=$1
             shift
             ;;
+        --video-duration)
+            shift
+            if [ "$#" -eq 0 ]; then
+                echo "error: --video-duration requires a positive whole number of seconds" >&2
+                exit 2
+            fi
+            video_duration_seconds=$1
+            shift
+            ;;
         *)
-            echo "usage: scripts/test-scene-editor.sh [--scene path.json] [--video-report [output-directory]]" >&2
+            echo "usage: scripts/test-scene-editor.sh [--scene path.json] [--video-duration seconds] [--video-report [output-directory]]" >&2
             exit 2
             ;;
     esac
 done
+
+case "$video_duration_seconds" in
+    ''|*[!0-9]*)
+        echo "error: --video-duration requires a positive whole number of seconds" >&2
+        exit 2
+        ;;
+esac
+if [ "$video_duration_seconds" -le 0 ]; then
+    echo "error: --video-duration requires a positive whole number of seconds" >&2
+    exit 2
+fi
+expected_video_frames=$((video_duration_seconds * 60))
+expected_last_orbit_angle=$(awk -v frames="$expected_video_frames" 'BEGIN {
+    printf "%.3f", 360.0 * (frames - 1) / frames
+}')
 
 if [ ! -f "$scene_path" ]; then
     echo "error: scene does not exist: $scene_path" >&2
@@ -159,7 +182,7 @@ if [ "$video_report" = true ]; then
         echo "error: streamed ${streamed_frame_count:-0} Scene Editor frames; expected $expected_video_frames" >&2
         exit 1
     fi
-    if ! rg -q "Streamed Scene camera orbit 0.000 through 358.800 degrees exactly once across 300 output frames" "$recording_log"; then
+    if ! rg -q "Streamed Scene camera orbit 0.000 through ${expected_last_orbit_angle} degrees exactly once across ${expected_video_frames} output frames" "$recording_log"; then
         echo "error: recording did not confirm a one-pass non-duplicated camera orbit" >&2
         exit 1
     fi

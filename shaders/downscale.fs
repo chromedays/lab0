@@ -35,6 +35,7 @@ void main() {
     vec2 sample_uvs[DOWNSAMPLE_SAMPLE_COUNT];
     int sample_bands[DOWNSAMPLE_SAMPLE_COUNT];
     int sample_accents[DOWNSAMPLE_SAMPLE_COUNT];
+    int sample_shadows[DOWNSAMPLE_SAMPLE_COUNT];
     float resolved_coverage = 0.0;
 
     for (int sample_index = 0;
@@ -50,6 +51,7 @@ void main() {
         vec4 encoded_sample = texture(u_cel_band_texture, sample_uv);
         sample_bands[sample_index] = decode_cel_band(encoded_sample);
         sample_accents[sample_index] = decode_cel_accents(encoded_sample);
+        sample_shadows[sample_index] = decode_cel_shadow(encoded_sample);
         resolved_coverage += encoded_sample.a;
     }
 
@@ -102,6 +104,50 @@ void main() {
         return;
     }
 
+    // Resolve the binary shadow state independently inside the dominant cel
+    // band. This keeps hard shadow boundaries from being erased by the later
+    // color-neighborhood vote. Unshadowed Viewer/Game metadata remains all zero
+    // and follows the exact historical selection path.
+    int winning_shadow = 0;
+    int winning_shadow_votes = -1;
+    float winning_shadow_center_distance = 2.0;
+    for (int candidate_index = 0;
+         candidate_index < DOWNSAMPLE_SAMPLE_COUNT;
+         candidate_index++) {
+        if (sample_bands[candidate_index] != winning_band) {
+            continue;
+        }
+        int candidate_shadow = sample_shadows[candidate_index];
+        int matching_shadow_votes = 0;
+        float nearest_center_distance = 2.0;
+        for (int sample_index = 0;
+             sample_index < DOWNSAMPLE_SAMPLE_COUNT;
+             sample_index++) {
+            if (sample_bands[sample_index] == winning_band &&
+                sample_shadows[sample_index] == candidate_shadow) {
+                matching_shadow_votes++;
+                vec2 grid_position = downsample_grid_position(sample_index);
+                nearest_center_distance = min(
+                    nearest_center_distance,
+                    dot(grid_position, grid_position)
+                );
+            }
+        }
+        bool wins_by_count = matching_shadow_votes > winning_shadow_votes;
+        bool wins_count_tie =
+            matching_shadow_votes == winning_shadow_votes &&
+            nearest_center_distance < winning_shadow_center_distance;
+        bool wins_stable_tie =
+            matching_shadow_votes == winning_shadow_votes &&
+            nearest_center_distance == winning_shadow_center_distance &&
+            candidate_shadow < winning_shadow;
+        if (wins_by_count || wins_count_tie || wins_stable_tie) {
+            winning_shadow = candidate_shadow;
+            winning_shadow_votes = matching_shadow_votes;
+            winning_shadow_center_distance = nearest_center_distance;
+        }
+    }
+
     const int CEL_ACCENT_RIM = 1;
     const int CEL_ACCENT_HIGHLIGHT = 2;
     int rim_votes = 0;
@@ -109,7 +155,8 @@ void main() {
     for (int sample_index = 0;
          sample_index < DOWNSAMPLE_SAMPLE_COUNT;
          sample_index++) {
-        if (sample_bands[sample_index] != winning_band) {
+        if (sample_bands[sample_index] != winning_band ||
+            sample_shadows[sample_index] != winning_shadow) {
             continue;
         }
         if ((sample_accents[sample_index] & CEL_ACCENT_RIM) != 0) {
@@ -146,7 +193,9 @@ void main() {
          sample_index++) {
         bool accent_matches = winning_accent == 0 ||
             (sample_accents[sample_index] & winning_accent) != 0;
-        if (sample_bands[sample_index] == winning_band && accent_matches) {
+        if (sample_bands[sample_index] == winning_band &&
+            sample_shadows[sample_index] == winning_shadow &&
+            accent_matches) {
             sample_colors[sample_index] = texture(
                 texture0,
                 sample_uvs[sample_index]
@@ -169,6 +218,7 @@ void main() {
         bool candidate_accent_matches = winning_accent == 0 ||
             (sample_accents[candidate_index] & winning_accent) != 0;
         if (sample_bands[candidate_index] != winning_band ||
+            sample_shadows[candidate_index] != winning_shadow ||
             !candidate_accent_matches) {
             continue;
         }
@@ -180,6 +230,7 @@ void main() {
             bool sample_accent_matches = winning_accent == 0 ||
                 (sample_accents[sample_index] & winning_accent) != 0;
             if (sample_bands[sample_index] == winning_band &&
+                sample_shadows[sample_index] == winning_shadow &&
                 sample_accent_matches &&
                 color_distance_squared(
                     sample_colors[candidate_index],

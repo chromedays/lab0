@@ -14,6 +14,11 @@ import rgl "vendor:raylib/rlgl"
 SCENE_VERTEX_SHADER_PATH   :: "shaders/scene_multi_light.vs"
 SCENE_FRAGMENT_SHADER_PATH :: "shaders/scene_multi_light.fs"
 SCENE_BAND_SHADER_PATH     :: "shaders/scene_multi_light_band.fs"
+SCENE_SHADOW_VERTEX_SHADER_PATH   :: "shaders/scene_shadow_depth.vs"
+SCENE_SHADOW_FRAGMENT_SHADER_PATH :: "shaders/scene_shadow_depth.fs"
+SCENE_RENDER_NEAR_CLIP :: f32(0.001)
+SCENE_RENDER_FAR_CLIP  :: f32(1000)
+SCENE_SHADOW_NEAR_CLIP :: f32(0.01)
 
 Scene_Light_Shader_Bindings :: struct {
     directional_enabled:   c.int,
@@ -35,6 +40,28 @@ Scene_Light_Shader_Bindings :: struct {
     spot_outer_cos:         c.int,
 }
 
+Scene_Shadow_Receiver_Bindings :: struct {
+    enabled:               c.int,
+    shadow_map:            c.int,
+    strength:              c.int,
+    bias:                  c.int,
+    light_view_projection: c.int,
+}
+
+Scene_Shadow_Depth_Bindings :: struct {
+    alpha_mode:   c.int,
+    alpha_cutoff: c.int,
+}
+
+Scene_Shadow_Frame :: struct {
+    enabled:               bool,
+    camera:                rl.Camera3D,
+    light_view_projection: rl.Matrix,
+    near_clip:             f32,
+    far_clip:              f32,
+    world_units_per_texel: f32,
+}
+
 Scene_Renderer :: struct {
     scene_shader:      rl.Shader,
     scene_source:      Preprocessed_Shader_Program_Source,
@@ -44,6 +71,11 @@ Scene_Renderer :: struct {
     band_source:       Preprocessed_Shader_Program_Source,
     band_style:        Cel_Shader_Bindings,
     band_lights:       Scene_Light_Shader_Bindings,
+    scene_shadow:      Scene_Shadow_Receiver_Bindings,
+    band_shadow:       Scene_Shadow_Receiver_Bindings,
+    shadow_shader:     rl.Shader,
+    shadow_source:     Preprocessed_Shader_Program_Source,
+    shadow_depth:      Scene_Shadow_Depth_Bindings,
     downscale_shader:  rl.Shader,
     downscale_source:  Preprocessed_Shader_Source,
     mask_shader:       rl.Shader,
@@ -57,6 +89,7 @@ Scene_Renderer :: struct {
     coverage_target:   rl.RenderTexture2D,
     outlined_target:   rl.RenderTexture2D,
     composite_target:  rl.RenderTexture2D,
+    shadow_target:     rl.RenderTexture2D,
     low_width:         c.int,
     low_height:        c.int,
     downscale_source_resolution: c.int,
@@ -74,6 +107,178 @@ Scene_Renderer :: struct {
     outline_color:               c.int,
     outline_coverage_threshold:  c.int,
     outline_edge_aa:             c.int,
+}
+
+scene_resolve_shadow_receiver_bindings :: proc(
+    shader: rl.Shader,
+) -> Scene_Shadow_Receiver_Bindings {
+    bindings := Scene_Shadow_Receiver_Bindings{
+        enabled = rl.GetShaderLocation(shader, "u_shadow_enabled"),
+        shadow_map = rl.GetShaderLocation(shader, "u_shadow_map"),
+        strength = rl.GetShaderLocation(shader, "u_shadow_strength"),
+        bias = rl.GetShaderLocation(shader, "u_shadow_bias"),
+        light_view_projection = rl.GetShaderLocation(
+            shader,
+            "u_light_view_projection",
+        ),
+    }
+    // DrawMesh binds material textures itself. Reserve the copied material's
+    // occlusion slot for the editor-only shadow map, just as the emission slot
+    // is reserved for the cel ramp.
+    shader.locs[rl.ShaderLocationIndex.MAP_OCCLUSION] = bindings.shadow_map
+    return bindings
+}
+
+// The directional shadow camera follows the serialized scene-camera target but
+// snaps its two light-plane coordinates to whole shadow texels. Moving the
+// authored target within one texel therefore cannot make the hard shadow crawl.
+scene_make_shadow_frame :: proc(scene: ^Scene) -> Scene_Shadow_Frame {
+    light := &scene.directional_light
+    frame := Scene_Shadow_Frame{
+        enabled = light.enabled && light.casts_shadows &&
+                  light.shadow_strength > 0,
+        near_clip = SCENE_SHADOW_NEAR_CLIP,
+    }
+    if !frame.enabled {
+        frame.light_view_projection = rl.Matrix(1)
+        return frame
+    }
+
+    direction := scene_normalize_direction_stable(light.direction)
+    forward := -direction
+    reference_up := rl.Vector3{0, 1, 0}
+    if math.abs(rl.Vector3DotProduct(forward, reference_up)) > 0.98 {
+        reference_up = {0, 0, 1}
+    }
+    right := rl.Vector3Normalize(
+        rl.Vector3CrossProduct(forward, reference_up),
+    )
+    up := rl.Vector3Normalize(rl.Vector3CrossProduct(right, forward))
+
+    frame.world_units_per_texel =
+        light.shadow_extent / f32(SCENE_SHADOW_MAP_SIZE)
+    target := scene.camera.target
+    horizontal := rl.Vector3DotProduct(target, right)
+    vertical := rl.Vector3DotProduct(target, up)
+    snapped_horizontal := math.round(horizontal / frame.world_units_per_texel) *
+                          frame.world_units_per_texel
+    snapped_vertical := math.round(vertical / frame.world_units_per_texel) *
+                        frame.world_units_per_texel
+    target += right * (snapped_horizontal - horizontal) +
+              up * (snapped_vertical - vertical)
+
+    frame.far_clip = max(light.shadow_extent * 4, f32(10))
+    frame.camera = {
+        position = target + direction * (frame.far_clip * 0.5),
+        target = target,
+        up = up,
+        fovy = light.shadow_extent,
+        projection = .ORTHOGRAPHIC,
+    }
+    // The exact matrix used by BeginMode3D is captured during the depth pass.
+    // Reconstructing it here risks a storage/order mismatch at the shader
+    // boundary, especially across rlgl backends.
+    frame.light_view_projection = rl.Matrix(1)
+    return frame
+}
+
+// LoadRenderTexture creates a depth renderbuffer, which cannot be sampled by
+// the receiver shaders. Directional shadows need a depth-only framebuffer with
+// a texture attachment so the depth pass and comparison use the same GPU value.
+scene_load_shadow_target :: proc(width, height: c.int) -> (rl.RenderTexture2D, bool) {
+    target: rl.RenderTexture2D
+    target.id = rgl.LoadFramebuffer()
+    if target.id == 0 { return target, false }
+
+    target.texture.width = width
+    target.texture.height = height
+    target.texture.mipmaps = 1
+    target.depth = {
+        id = rgl.LoadTextureDepth(width, height, false),
+        width = width,
+        height = height,
+        mipmaps = 1,
+        // rlgl exposes no public depth PixelFormat value; this metadata is not
+        // used for sampling or destruction, but a known uncompressed format
+        // keeps the Texture descriptor valid to raylib helpers.
+        format = .UNCOMPRESSED_R32,
+    }
+    if target.depth.id == 0 {
+        rgl.UnloadFramebuffer(target.id)
+        return {}, false
+    }
+
+    rgl.EnableFramebuffer(target.id)
+    rgl.FramebufferAttach(
+        target.id,
+        target.depth.id,
+        c.int(rgl.FramebufferAttachType.DEPTH),
+        c.int(rgl.FramebufferAttachTextureType.TEXTURE2D),
+        0,
+    )
+    complete := rgl.FramebufferComplete(target.id)
+    rgl.DisableFramebuffer()
+    if !complete {
+        rgl.UnloadTexture(target.depth.id)
+        rgl.UnloadFramebuffer(target.id)
+        return {}, false
+    }
+
+    rgl.TextureParameters(
+        target.depth.id,
+        rgl.TEXTURE_MIN_FILTER,
+        rgl.TEXTURE_FILTER_NEAREST,
+    )
+    rgl.TextureParameters(
+        target.depth.id,
+        rgl.TEXTURE_MAG_FILTER,
+        rgl.TEXTURE_FILTER_NEAREST,
+    )
+    rgl.TextureParameters(
+        target.depth.id,
+        rgl.TEXTURE_WRAP_S,
+        rgl.TEXTURE_WRAP_CLAMP,
+    )
+    rgl.TextureParameters(
+        target.depth.id,
+        rgl.TEXTURE_WRAP_T,
+        rgl.TEXTURE_WRAP_CLAMP,
+    )
+    return target, true
+}
+
+scene_unload_shadow_target :: proc(target: ^rl.RenderTexture2D) {
+    if target.depth.id != 0 { rgl.UnloadTexture(target.depth.id) }
+    if target.id != 0 { rgl.UnloadFramebuffer(target.id) }
+    target^ = {}
+}
+
+scene_apply_shadow_receiver :: proc(
+    shader: rl.Shader,
+    bindings: ^Scene_Shadow_Receiver_Bindings,
+    frame: ^Scene_Shadow_Frame,
+    light: ^Scene_Directional_Light,
+) {
+    enabled := c.int(0)
+    if frame.enabled { enabled = 1 }
+    rl.SetShaderValue(shader, bindings.enabled, &enabled, .INT)
+    rl.SetShaderValue(shader, bindings.strength, &light.shadow_strength, .FLOAT)
+    rl.SetShaderValue(shader, bindings.bias, &light.shadow_bias, .FLOAT)
+    rl.SetShaderValueMatrix(
+        shader,
+        bindings.light_view_projection,
+        frame.light_view_projection,
+    )
+}
+
+scene_apply_shadow_depth_style :: proc(
+    shader: rl.Shader,
+    bindings: ^Scene_Shadow_Depth_Bindings,
+    style: ^Cel_Style,
+) {
+    alpha_mode := c.int(style.alpha_mode)
+    rl.SetShaderValue(shader, bindings.alpha_mode, &alpha_mode, .INT)
+    rl.SetShaderValue(shader, bindings.alpha_cutoff, &style.alpha_cutoff, .FLOAT)
 }
 
 Scene_Model_Resource :: struct {
@@ -236,6 +441,9 @@ scene_renderer_init :: proc(
     }
     renderer.scene_style = resolve_cel_shader_bindings(renderer.scene_shader)
     renderer.scene_lights = scene_resolve_light_bindings(renderer.scene_shader)
+    renderer.scene_shadow = scene_resolve_shadow_receiver_bindings(
+        renderer.scene_shader,
+    )
 
     band_loaded: bool
     renderer.band_shader, renderer.band_source, band_loaded =
@@ -246,6 +454,24 @@ scene_renderer_init :: proc(
     }
     renderer.band_style = resolve_cel_shader_bindings(renderer.band_shader)
     renderer.band_lights = scene_resolve_light_bindings(renderer.band_shader)
+    renderer.band_shadow = scene_resolve_shadow_receiver_bindings(
+        renderer.band_shader,
+    )
+
+    shadow_loaded: bool
+    renderer.shadow_shader, renderer.shadow_source, shadow_loaded =
+        load_shader_with_includes(
+            SCENE_SHADOW_VERTEX_SHADER_PATH,
+            SCENE_SHADOW_FRAGMENT_SHADER_PATH,
+        )
+    if !shadow_loaded {
+        log.error("Failed to load the Scene Editor shadow-depth shader")
+        return false
+    }
+    renderer.shadow_depth = {
+        alpha_mode = rl.GetShaderLocation(renderer.shadow_shader, "u_alpha_mode"),
+        alpha_cutoff = rl.GetShaderLocation(renderer.shadow_shader, "u_alpha_cutoff"),
+    }
 
     downscale_loaded: bool
     renderer.downscale_shader, renderer.downscale_source, downscale_loaded =
@@ -276,9 +502,15 @@ scene_renderer_init :: proc(
     renderer.scene_target = rl.LoadRenderTexture(SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT)
     renderer.band_target = rl.LoadRenderTexture(SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT)
     renderer.composite_target = rl.LoadRenderTexture(SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT)
+    shadow_target_loaded: bool
+    renderer.shadow_target, shadow_target_loaded = scene_load_shadow_target(
+        SCENE_SHADOW_MAP_SIZE,
+        SCENE_SHADOW_MAP_SIZE,
+    )
     if !rl.IsRenderTextureValid(renderer.scene_target) ||
        !rl.IsRenderTextureValid(renderer.band_target) ||
        !rl.IsRenderTextureValid(renderer.composite_target) ||
+       !shadow_target_loaded ||
        !scene_renderer_ensure_low_targets(renderer, downscale_level) {
         log.error("Failed to create Scene Editor render targets")
         return false
@@ -306,6 +538,7 @@ scene_renderer_init :: proc(
 }
 
 scene_renderer_destroy :: proc(renderer: ^Scene_Renderer) {
+    scene_unload_shadow_target(&renderer.shadow_target)
     if rl.IsRenderTextureValid(renderer.composite_target) {
         rl.UnloadRenderTexture(renderer.composite_target)
     }
@@ -322,11 +555,13 @@ scene_renderer_destroy :: proc(renderer: ^Scene_Renderer) {
     if rl.IsShaderValid(renderer.outline_shader) { rl.UnloadShader(renderer.outline_shader) }
     if rl.IsShaderValid(renderer.mask_shader) { rl.UnloadShader(renderer.mask_shader) }
     if rl.IsShaderValid(renderer.downscale_shader) { rl.UnloadShader(renderer.downscale_shader) }
+    if rl.IsShaderValid(renderer.shadow_shader) { rl.UnloadShader(renderer.shadow_shader) }
     if rl.IsShaderValid(renderer.band_shader) { rl.UnloadShader(renderer.band_shader) }
     if rl.IsShaderValid(renderer.scene_shader) { rl.UnloadShader(renderer.scene_shader) }
     destroy_preprocessed_shader_source(&renderer.outline_source)
     destroy_preprocessed_shader_source(&renderer.mask_source)
     destroy_preprocessed_shader_source(&renderer.downscale_source)
+    destroy_preprocessed_shader_program_source(&renderer.shadow_source)
     destroy_preprocessed_shader_program_source(&renderer.band_source)
     destroy_preprocessed_shader_program_source(&renderer.scene_source)
     renderer^ = {}
@@ -447,6 +682,7 @@ scene_draw_model_meshes :: proc(
     tint: rl.Color,
     shader: rl.Shader,
     cel_ramp: rl.Texture2D,
+    shadow_map := rl.Texture2D{},
 ) {
     for mesh_index := 0; mesh_index < int(model.meshCount); mesh_index += 1 {
         material_index := int(model.meshMaterial[mesh_index])
@@ -463,6 +699,9 @@ scene_draw_model_meshes :: proc(
         material.maps = raw_data(material_maps[:])
         material.shader = shader
         material.maps[rl.MaterialMapIndex.EMISSION].texture = cel_ramp
+        if rl.IsTextureValid(shadow_map) {
+            material.maps[rl.MaterialMapIndex.OCCLUSION].texture = shadow_map
+        }
         material.maps[rl.MaterialMapIndex.ALBEDO].color = scene_color_multiply(
             source_material.maps[rl.MaterialMapIndex.ALBEDO].color,
             tint,
@@ -483,12 +722,20 @@ scene_draw_geometry :: proc(
     resources: ^Scene_Resources,
     shader: rl.Shader,
     cel_ramp: rl.Texture2D,
+    shadow_map := rl.Texture2D{},
 ) {
     for model_data, model_index in scene.models {
         if !model_data.visible || model_index >= len(resources.models) { continue }
         resource := &resources.models[model_index]
         transform := scene_transform_matrix(model_data.transform) * resource.model.transform
-        scene_draw_model_meshes(&resource.model, transform, model_data.tint, shader, cel_ramp)
+        scene_draw_model_meshes(
+            &resource.model,
+            transform,
+            model_data.tint,
+            shader,
+            cel_ramp,
+            shadow_map,
+        )
     }
     for primitive in scene.primitives {
         if !primitive.visible { continue }
@@ -496,7 +743,14 @@ scene_draw_geometry :: proc(
         transform := scene_transform_matrix(primitive.transform) *
                      scene_primitive_local_transform(primitive.shape) *
                      model.transform
-        scene_draw_model_meshes(model, transform, primitive.albedo, shader, cel_ramp)
+        scene_draw_model_meshes(
+            model,
+            transform,
+            primitive.albedo,
+            shader,
+            cel_ramp,
+            shadow_map,
+        )
     }
 }
 
@@ -510,6 +764,7 @@ scene_renderer_render :: proc(
         return false
     }
     camera := scene_camera_to_raylib(scene.camera)
+    shadow_frame := scene_make_shadow_frame(scene)
     source_resolution := [2]f32{SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT}
     target_resolution := [2]f32{f32(renderer.low_width), f32(renderer.low_height)}
     cluster_threshold := f32(DEFAULT_COLOR_CLUSTER_THRESHOLD)
@@ -538,12 +793,63 @@ scene_renderer_render :: proc(
     rl.SetShaderValue(renderer.outline_shader, renderer.outline_coverage_threshold, &style.outline.coverage_threshold, .FLOAT)
     rl.SetShaderValue(renderer.outline_shader, renderer.outline_edge_aa, &edge_aa, .INT)
 
+    if shadow_frame.enabled {
+        // BeginMode3D builds its projection from the active rlgl clip planes.
+        // Use the same values in the matrix sampled by the visible passes, then
+        // restore Lab0's normal camera range before drawing those passes.
+        rgl.SetClipPlanes(
+            f64(shadow_frame.near_clip),
+            f64(shadow_frame.far_clip),
+        )
+        rl.BeginTextureMode(renderer.shadow_target)
+            rl.ClearBackground(rl.WHITE)
+            rgl.DisableColorBlend()
+            rgl.DisableBackfaceCulling()
+            scene_apply_shadow_depth_style(
+                renderer.shadow_shader,
+                &renderer.shadow_depth,
+                style,
+            )
+            rl.BeginMode3D(shadow_frame.camera)
+                // Match raylib's shadow-map contract: capture the exact light
+                // matrices installed by BeginMode3D and combine them in rlgl's
+                // storage order. The visible passes consume this same matrix.
+                shadow_frame.light_view_projection =
+                    rgl.GetMatrixProjection() * rgl.GetMatrixModelview()
+                scene_draw_geometry(
+                    scene,
+                    resources,
+                    renderer.shadow_shader,
+                    renderer.cel_ramp_texture,
+                )
+            rl.EndMode3D()
+            rgl.EnableBackfaceCulling()
+            rgl.EnableColorBlend()
+        rl.EndTextureMode()
+        rgl.SetClipPlanes(
+            f64(SCENE_RENDER_NEAR_CLIP),
+            f64(SCENE_RENDER_FAR_CLIP),
+        )
+    }
+
     rl.BeginTextureMode(renderer.scene_target)
         rl.ClearBackground(rl.BLANK)
         apply_cel_style_to_shader(renderer.scene_shader, &renderer.scene_style, style, camera, rl.Matrix(1))
         scene_apply_lights(renderer.scene_shader, &renderer.scene_lights, scene)
+        scene_apply_shadow_receiver(
+            renderer.scene_shader,
+            &renderer.scene_shadow,
+            &shadow_frame,
+            &scene.directional_light,
+        )
         rl.BeginMode3D(camera)
-            scene_draw_geometry(scene, resources, renderer.scene_shader, renderer.cel_ramp_texture)
+            scene_draw_geometry(
+                scene,
+                resources,
+                renderer.scene_shader,
+                renderer.cel_ramp_texture,
+                renderer.shadow_target.depth,
+            )
         rl.EndMode3D()
     rl.EndTextureMode()
 
@@ -551,8 +857,20 @@ scene_renderer_render :: proc(
         rl.ClearBackground(rl.BLANK)
         apply_cel_style_to_shader(renderer.band_shader, &renderer.band_style, style, camera, rl.Matrix(1))
         scene_apply_lights(renderer.band_shader, &renderer.band_lights, scene)
+        scene_apply_shadow_receiver(
+            renderer.band_shader,
+            &renderer.band_shadow,
+            &shadow_frame,
+            &scene.directional_light,
+        )
         rl.BeginMode3D(camera)
-            scene_draw_geometry(scene, resources, renderer.band_shader, renderer.cel_ramp_texture)
+            scene_draw_geometry(
+                scene,
+                resources,
+                renderer.band_shader,
+                renderer.cel_ramp_texture,
+                renderer.shadow_target.depth,
+            )
         rl.EndMode3D()
     rl.EndTextureMode()
 

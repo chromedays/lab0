@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "Animated Model Fixed Pose",
+  "name": "Directional Shadow Alignment",
   "style": "styles/classic.json",
   "render": {
     "background": [22, 24, 32, 255],
@@ -9,48 +9,43 @@
   },
   "camera": {
     "projection": "perspective",
-    "position": [4.5, 3.0, 5.5],
-    "target": [0.0, 1.0, 0.0],
+    "position": [6.0, 5.0, 6.0],
+    "target": [0.0, 0.8, 0.0],
     "up": [0.0, 1.0, 0.0],
     "vertical_fov_deg": 42.0,
     "ortho_height": 7.0
   },
   "directional_light": {
     "enabled": true,
-    "direction": [0.35, 0.8, 0.55],
+    "direction": [-0.6, 1.0, 0.2],
     "color": [1.0, 0.96, 0.9],
     "intensity": 0.85,
     "casts_shadows": true,
-    "shadow_strength": 0.72,
+    "shadow_strength": 0.85,
     "shadow_bias": 0.00035,
-    "shadow_extent": 12.0
+    "shadow_extent": 10.0
   },
-  "models": [
-    {
-      "id": "model_001",
-      "name": "Cesium Man Frame 24",
-      "visible": true,
-      "source": "assets/CesiumMan.glb",
-      "position": [0.0, 0.0, 0.0],
-      "rotation_euler_deg": [0.0, 20.0, 0.0],
-      "scale": [1.8, 1.8, 1.8],
-      "tint": [255, 255, 255, 255],
-      "animation": {
-        "clip_index": 0,
-        "frame": 24
-      }
-    }
-  ],
+  "models": [],
   "primitives": [
     {
       "id": "primitive_001",
       "name": "Floor",
       "visible": true,
       "shape": "plane",
-      "position": [0.0, -0.03, 0.0],
+      "position": [0.0, -0.01, 0.0],
       "rotation_euler_deg": [0.0, 0.0, 0.0],
-      "scale": [6.0, 1.0, 6.0],
-      "albedo": [92, 104, 124, 255]
+      "scale": [7.0, 1.0, 7.0],
+      "albedo": [112, 122, 142, 255]
+    },
+    {
+      "id": "primitive_002",
+      "name": "Shadow Caster",
+      "visible": true,
+      "shape": "cube",
+      "position": [0.0, 0.75, 0.0],
+      "rotation_euler_deg": [0.0, 0.0, 0.0],
+      "scale": [1.5, 1.5, 1.5],
+      "albedo": [236, 119, 134, 255]
     }
   ],
   "point_lights": [],
