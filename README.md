@@ -17,6 +17,19 @@ Use the **Downscale level** spinner in **Camera Controls** to adjust the pixel
 downscale from 1× through 32×. The output-grid readout updates to show the
 active render-target resolution; the default remains 10× (128×72).
 
+The right-side **Inspector** keeps model, camera, cel shading, and background
+controls in one scrollable stack. Each section is independently collapsible;
+**Cel Shading** starts collapsed, and `C` toggles it and scrolls it into view.
+Its nested sections control light space and direction, two through eight diffuse
+bands, alpha masking, band brightness and tint, hard rim/highlight accents, and
+a zero-through-three-pixel silhouette outline. Edits apply immediately. Presets
+are stored as versioned JSON files in `styles/`; the bundled presets are
+**Classic**, **Anime**, and **Noir**.
+
+The outline is evaluated at the active downsample resolution and is therefore
+measured in output pixels. It appears in the pixelated/blended lens and exported
+downsample PNG, while the full-resolution scene target remains unoutlined.
+
 ## Non-interactive capture mode
 
 Capture mode initializes a hidden graphics window, fixes the requested render state, renders a small number of warmup frames, exports an internal render texture to PNG, and exits. It does not use desktop screenshots or live mouse and keyboard input.
@@ -36,6 +49,7 @@ The default output is `captures/<case-name>.png`. Give every concurrent worker a
 odin run . -- \
   --capture-case runner-frame-24 \
   --capture-model assets/CesiumMan.glb \
+  --capture-style styles/anime.json \
   --capture-frame 24 \
   --capture-target lens \
   --capture-output artifacts/worker-2/runner-frame-24.png
@@ -68,6 +82,7 @@ Available options:
 --capture-case <name>          Enable capture mode and name the case
 --capture-output <path.png>    Output path or sequence template
 --capture-model <source>       Exact asset path or builtin:cube|sphere|triangle
+--capture-style <path.json>    Cel style preset (default: built-in Classic)
 --capture-view <view>          default|x|y|z|isometric
 --capture-mode <mode>          pixelated|blended|coverage-mask
 --capture-target <target>      composite|lens|scene|downsample|coverage-mask
@@ -85,7 +100,7 @@ Capture targets:
 | `composite` | 1280×720 scene, active lens, overlays, and control panels; excludes the cursor-dependent magnifier |
 | `lens` | 400×400 crop of the active lens as shown in the composite |
 | `scene` | 1280×720 raw scene render target |
-| `downsample` | 128×72 raw pixel-downsample target |
+| `downsample` | 128×72 final pixel-downsample target, including the configured outline |
 | `coverage-mask` | 128×72 raw coverage-mask target |
 
 Capture mode still requires a working raylib graphics context; it is non-interactive, not a software renderer. On macOS, run it from a logged-in graphical session. For parallel workers, use isolated source directories and distinct output paths. Shader hot reload and desktop input are disabled during a capture.

@@ -36,6 +36,7 @@ capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
         "--capture-case", "cesium-walk",
         "--capture-output", "artifacts/cesium-walk.png",
         "--capture-model", "assets/CesiumMan.glb",
+        "--capture-style", "styles/anime.json",
         "--capture-view", "isometric",
         "--capture-mode", "coverage-mask",
         "--capture-target", "lens",
@@ -47,12 +48,25 @@ capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
 
     testing.expect_value(t, result.error, Capture_Parse_Error.NONE)
     testing.expect_value(t, result.options.output_path, "artifacts/cesium-walk.png")
+    testing.expect_value(t, result.options.style_path, "styles/anime.json")
     testing.expect_value(t, result.options.view, Capture_View.ISOMETRIC)
     testing.expect_value(t, result.options.lens_mode, Lens_Mode.COVERAGE_MASK)
     testing.expect_value(t, result.options.target, Capture_Target.LENS)
     testing.expect_value(t, result.options.animation_frame, f32(12.5))
     testing.expect_value(t, result.options.warmup_frames, 4)
     testing.expect(t, !result.options.hide_window)
+}
+
+@test
+capture_options_reject_an_invalid_style_path :: proc(t: ^testing.T) {
+    result := parse_capture_options({
+        "--capture-case", "smoke",
+        "--capture-style", "styles/anime.txt",
+    })
+    defer destroy_capture_options(&result.options)
+
+    testing.expect_value(t, result.error, Capture_Parse_Error.INVALID_STYLE)
+    testing.expect(t, !result.options.enabled)
 }
 
 @test

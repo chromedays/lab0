@@ -32,6 +32,7 @@ Capture_Parse_Error :: enum {
     MISSING_CASE,
     INVALID_CASE,
     INVALID_MODEL,
+    INVALID_STYLE,
     INVALID_MODE,
     INVALID_VIEW,
     INVALID_TARGET,
@@ -56,6 +57,7 @@ Capture_Options :: struct {
     output_path:         string,
     output_path_owned:   bool,
     model_source:        string,
+    style_path:          string,
     lens_mode:           Lens_Mode,
     view:                Capture_View,
     target:              Capture_Target,
@@ -97,6 +99,8 @@ capture_parse_error_message :: proc(parse_error: Capture_Parse_Error) -> string 
         return "capture case names may contain only letters, digits, '-' and '_'"
     case .INVALID_MODEL:
         return "capture model must be a non-empty asset path or built-in source"
+    case .INVALID_STYLE:
+        return "capture style must be a non-empty .json path"
     case .INVALID_MODE:
         return "capture mode must be pixelated, blended, or coverage-mask"
     case .INVALID_VIEW:
@@ -300,6 +304,14 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
             }
             result.options.model_source = value
 
+        case "--capture-style":
+            if len(value) == 0 || !strings.equal_fold(os.ext(value), ".json") {
+                result.error = .INVALID_STYLE
+                result.error_argument = value
+                return result
+            }
+            result.options.style_path = value
+
         case "--capture-mode":
             if value == "pixelated" {
                 result.options.lens_mode = .PIXELATED
@@ -440,6 +452,7 @@ print_capture_usage :: proc() {
     fmt.println("  --capture-case <name>          Enable capture mode and name the case")
     fmt.println("  --capture-output <path.png>    Output path or sequence template")
     fmt.println("  --capture-model <source>       Exact asset path or builtin:cube|sphere|triangle")
+    fmt.println("  --capture-style <path.json>    Cel style preset (default: built-in Classic)")
     fmt.println("  --capture-view <view>          default|x|y|z|isometric")
     fmt.println("  --capture-mode <mode>          pixelated|blended|coverage-mask")
     fmt.println("  --capture-target <target>      composite|lens|scene|downsample|coverage-mask")

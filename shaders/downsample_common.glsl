@@ -60,3 +60,10 @@ int decode_cel_band(vec4 encoded_sample) {
     }
     return int(floor(encoded_sample.r * 255.0 + 0.5)) - 1;
 }
+
+int decode_cel_accents(vec4 encoded_sample) {
+    if (encoded_sample.a <= 0.8) {
+        return 0;
+    }
+    return int(floor(encoded_sample.g * 255.0 + 0.5));
+}
