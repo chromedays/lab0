@@ -1377,6 +1377,7 @@ draw_camera_controls :: proc(
     model_center: rl.Vector3,
     scene_size: f32,
     downsample_width, downsample_height: i32,
+    lens_grid_visible: bool,
 ) {
     rl.GuiPanel(bounds, "CAMERA CONTROLS")
 
@@ -1460,7 +1461,14 @@ draw_camera_controls :: proc(
     content_y += line_height
     rl.GuiLabel({content_x, content_y, content_width, 18}, "Shift          Faster keyboard")
     content_y += line_height
-    rl.GuiLabel({content_x, content_y, content_width, 18}, "1 / 2 / 3      Pixel / blend / mask")
+    lens_grid_status: cstring = "OFF"
+    if lens_grid_visible {
+        lens_grid_status = "ON"
+    }
+    rl.GuiLabel(
+        {content_x, content_y, content_width, 18},
+        rl.TextFormat("1/2/3 Lens mode | G Grid: %s", lens_grid_status),
+    )
     content_y += line_height
     rl.GuiLabel(
         {content_x, content_y, content_width, 18},
@@ -1903,6 +1911,7 @@ draw_orthographic_snap_debug :: proc(
     pixel_target_height: i32,
     lens_bounds: rl.Rectangle,
     lens_mode: Lens_Mode,
+    lens_grid_visible: bool,
     coverage_alpha: f32,
 ) {
     world_units_per_pixel := camera.fovy / f32(pixel_target_height)
@@ -1983,33 +1992,35 @@ draw_orthographic_snap_debug :: proc(
         }
     }
 
-    grid_column_count := int(lens_bounds.width) / PIXEL_SCALE
-    grid_row_count := int(lens_bounds.height) / PIXEL_SCALE
+    if lens_grid_visible {
+        grid_column_count := int(lens_bounds.width) / PIXEL_SCALE
+        grid_row_count := int(lens_bounds.height) / PIXEL_SCALE
 
-    for column_index := 0; column_index <= grid_column_count; column_index += 1 {
-        grid_line_x := lens_bounds.x + f32(column_index * PIXEL_SCALE)
-        grid_line_color := rl.Color{255, 255, 255, 45}
-        if column_index % 5 == 0 {
-            grid_line_color = rl.Color{255, 230, 80, 100}
+        for column_index := 0; column_index <= grid_column_count; column_index += 1 {
+            grid_line_x := lens_bounds.x + f32(column_index * PIXEL_SCALE)
+            grid_line_color := rl.Color{255, 255, 255, 45}
+            if column_index % 5 == 0 {
+                grid_line_color = rl.Color{255, 230, 80, 100}
+            }
+            rl.DrawLineV(
+                {grid_line_x, lens_bounds.y},
+                {grid_line_x, lens_bounds.y + lens_bounds.height},
+                grid_line_color,
+            )
         }
-        rl.DrawLineV(
-            {grid_line_x, lens_bounds.y},
-            {grid_line_x, lens_bounds.y + lens_bounds.height},
-            grid_line_color,
-        )
-    }
 
-    for row_index := 0; row_index <= grid_row_count; row_index += 1 {
-        grid_line_y := lens_bounds.y + f32(row_index * PIXEL_SCALE)
-        grid_line_color := rl.Color{255, 255, 255, 45}
-        if row_index % 5 == 0 {
-            grid_line_color = rl.Color{255, 230, 80, 100}
+        for row_index := 0; row_index <= grid_row_count; row_index += 1 {
+            grid_line_y := lens_bounds.y + f32(row_index * PIXEL_SCALE)
+            grid_line_color := rl.Color{255, 255, 255, 45}
+            if row_index % 5 == 0 {
+                grid_line_color = rl.Color{255, 230, 80, 100}
+            }
+            rl.DrawLineV(
+                {lens_bounds.x, grid_line_y},
+                {lens_bounds.x + lens_bounds.width, grid_line_y},
+                grid_line_color,
+            )
         }
-        rl.DrawLineV(
-            {lens_bounds.x, grid_line_y},
-            {lens_bounds.x + lens_bounds.width, grid_line_y},
-            grid_line_color,
-        )
     }
 }
 
@@ -2304,6 +2315,7 @@ run_application :: proc() -> int {
     if capture_options.enabled {
         lens_mode = capture_options.lens_mode
     }
+    lens_grid_visible := true
     scene_background_color := rl.BLACK
     background_picker_open := false
     model_browser_bounds := rl.Rectangle{f32(screen_width) - 280, 10, 270, 310}
@@ -2427,6 +2439,14 @@ run_application :: proc() -> int {
             if rl.IsKeyPressed(.THREE) || rl.IsKeyPressed(.KP_3) {
                 lens_mode = .COVERAGE_MASK
                 log.info("Lens mode: 16-sample coverage mask")
+            }
+            if rl.IsKeyPressed(.G) {
+                lens_grid_visible = !lens_grid_visible
+                if lens_grid_visible {
+                    log.info("Lens grid: on")
+                } else {
+                    log.info("Lens grid: off")
+                }
             }
             if rl.IsKeyPressed(.P) {
                 export_requested = true
@@ -2663,6 +2683,7 @@ run_application :: proc() -> int {
                 downsample_height,
                 lens_bounds,
                 lens_mode,
+                lens_grid_visible,
                 coverage_alpha,
             )
             rl.DrawRectangleLinesEx(lens_bounds, 2, rl.WHITE)
@@ -2721,6 +2742,7 @@ run_application :: proc() -> int {
                 scene_size,
                 downsample_width,
                 downsample_height,
+                lens_grid_visible,
             )
             draw_background_controls(
                 background_controls_bounds,

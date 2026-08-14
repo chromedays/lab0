@@ -10,6 +10,9 @@ odin run .
 
 Run commands from the repository root because model and shader paths are relative to the working directory.
 
+Press `G` to toggle the pixel grid over the lens. The camera controls panel
+shows whether the grid is currently on or off.
+
 ## Non-interactive capture mode
 
 Capture mode initializes a hidden graphics window, fixes the requested render state, renders a small number of warmup frames, exports an internal render texture to PNG, and exits. It does not use desktop screenshots or live mouse and keyboard input.
