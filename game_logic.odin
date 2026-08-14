@@ -127,7 +127,7 @@ GAME_ROOMS := [?]Game_Room{
         floor_y = 0,
         spawn = {0, 0, 1.5},
         camera_follow = false,
-        color = {68, 91, 65, 255},
+        color = {28, 103, 102, 255},
     },
     {
         id = .R01_FOREST_PASSAGE,
@@ -136,7 +136,7 @@ GAME_ROOMS := [?]Game_Room{
         floor_y = 0,
         spawn = {10, 0, 0},
         camera_follow = true,
-        color = {61, 82, 61, 255},
+        color = {29, 82, 111, 255},
     },
     {
         id = .R02_CENTRAL_RUIN,
@@ -145,7 +145,7 @@ GAME_ROOMS := [?]Game_Room{
         floor_y = 0,
         spawn = {29, 0, 0},
         camera_follow = true,
-        color = {80, 86, 74, 255},
+        color = {57, 55, 116, 255},
     },
     {
         id = .R03_WIDE_GROVE,
@@ -154,7 +154,7 @@ GAME_ROOMS := [?]Game_Room{
         floor_y = 0,
         spawn = {50, 0, 0},
         camera_follow = false,
-        color = {70, 103, 66, 255},
+        color = {30, 108, 78, 255},
     },
     {
         id = .R04_RAVINE_CROSSING,
@@ -163,7 +163,7 @@ GAME_ROOMS := [?]Game_Room{
         floor_y = 1.5,
         spawn = {38, 1.5, -13.8},
         camera_follow = false,
-        color = {104, 94, 72, 255},
+        color = {99, 46, 92, 255},
     },
     {
         id = .R05_OVERLOOK,
@@ -172,7 +172,7 @@ GAME_ROOMS := [?]Game_Room{
         floor_y = 1.5,
         spawn = {24.2, 1.5, -20.5},
         camera_follow = false,
-        color = {91, 94, 75, 255},
+        color = {117, 55, 81, 255},
     },
     {
         id = .R06_LOWER_TRAIL,
@@ -181,7 +181,7 @@ GAME_ROOMS := [?]Game_Room{
         floor_y = 0,
         spawn = {9.2, 0, -20.5},
         camera_follow = true,
-        color = {54, 75, 67, 255},
+        color = {25, 64, 94, 255},
     },
 }
 

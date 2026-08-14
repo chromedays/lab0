@@ -76,32 +76,101 @@ Game_Decor :: struct {
 }
 
 GAME_DECOR := [?]Game_Decor{
-    {.DEAD_TREE, {-3.4, 0, 1.1}, 4.5, 18, {176, 166, 132, 255}},
-    {.TREE, {-6.2, 0, -3.1}, 4.2, -12, {178, 198, 164, 255}},
-    {.TREE, {5.8, 0, 3.2}, 3.8, 24, {165, 191, 151, 255}},
-    {.GRASS, {-1.0, 0, -2.8}, 0.7, 0, {180, 211, 143, 255}},
-    {.TREE, {12.0, 0, -3.1}, 4.1, 5, {163, 188, 148, 255}},
-    {.TREE, {16.5, 0, 3.0}, 4.6, -20, {172, 195, 153, 255}},
-    {.TREE, {23.5, 0, -3.0}, 4.0, 11, {156, 181, 142, 255}},
-    {.TRUNK, {21.0, 0, 2.5}, 0.7, 74, {186, 164, 122, 255}},
-    {.COLUMN, {34.6, 0, -1.4}, 2.4, 0, {172, 176, 159, 255}},
-    {.COLUMN, {41.4, 0, 3.1}, 2.1, 0, {157, 166, 151, 255}},
-    {.ROCK, {45.0, 0, -5.0}, 1.2, 0, {143, 151, 139, 255}},
-    {.GRASS, {31.0, 0, 5.5}, 0.8, 0, {186, 207, 148, 255}},
-    {.TREE, {52.0, 0, -5.0}, 4.2, 8, {174, 204, 148, 255}},
-    {.TRUNK, {58.0, 0, 0}, 2.4, 22, {184, 157, 110, 255}},
-    {.TREE, {64.0, 0, 4.5}, 4.8, -8, {158, 194, 137, 255}},
-    {.GRASS, {61.0, 0, -4.8}, 0.9, 0, {194, 221, 146, 255}},
-    {.ROCK, {31.6, 1.5, -21.5}, 1.0, 0, {157, 150, 130, 255}},
-    {.DEAD_TREE, {44.7, 1.5, -15.7}, 3.8, 35, {174, 157, 123, 255}},
-    {.GRASS, {40.5, 1.5, -21.2}, 0.7, 0, {202, 197, 132, 255}},
-    {.COLUMN, {14.6, 1.5, -15.4}, 2.2, 0, {173, 174, 145, 255}},
-    {.TREE, {22.4, 1.5, -15.2}, 3.6, 16, {174, 191, 145, 255}},
-    {.ROCK, {13.3, 1.5, -21.5}, 1.0, 0, {157, 151, 131, 255}},
-    {.TRUNK, {-6.8, 0, -18.4}, 3.0, 82, {169, 145, 105, 255}},
-    {.TREE, {-9.2, 0, -10.0}, 4.1, 7, {147, 174, 139, 255}},
-    {.TREE, {7.0, 0, -8.0}, 4.0, -14, {151, 180, 141, 255}},
-    {.GRASS, {1.5, 0, -15.0}, 0.8, 0, {171, 198, 148, 255}},
+    {.DEAD_TREE, {-3.4, 0, 1.1}, 4.5, 18, {224, 118, 154, 255}},
+    {.TREE, {-6.2, 0, -3.1}, 4.2, -12, {112, 232, 206, 255}},
+    {.TREE, {5.8, 0, 3.2}, 3.8, 24, {86, 214, 191, 255}},
+    {.GRASS, {-1.0, 0, -2.8}, 0.7, 0, {184, 245, 132, 255}},
+    {.TREE, {12.0, 0, -3.1}, 4.1, 5, {86, 195, 213, 255}},
+    {.TREE, {16.5, 0, 3.0}, 4.6, -20, {105, 218, 206, 255}},
+    {.TREE, {23.5, 0, -3.0}, 4.0, 11, {79, 184, 205, 255}},
+    {.TRUNK, {21.0, 0, 2.5}, 0.7, 74, {241, 146, 119, 255}},
+    {.COLUMN, {34.6, 0, -1.4}, 2.4, 0, {190, 176, 238, 255}},
+    {.COLUMN, {41.4, 0, 3.1}, 2.1, 0, {151, 189, 232, 255}},
+    {.ROCK, {45.0, 0, -5.0}, 1.2, 0, {142, 156, 211, 255}},
+    {.GRASS, {31.0, 0, 5.5}, 0.8, 0, {104, 226, 198, 255}},
+    {.TREE, {52.0, 0, -5.0}, 4.2, 8, {97, 232, 171, 255}},
+    {.TRUNK, {58.0, 0, 0}, 2.4, 22, {236, 133, 121, 255}},
+    {.TREE, {64.0, 0, 4.5}, 4.8, -8, {78, 211, 166, 255}},
+    {.GRASS, {61.0, 0, -4.8}, 0.9, 0, {211, 242, 108, 255}},
+    {.ROCK, {31.6, 1.5, -21.5}, 1.0, 0, {183, 142, 207, 255}},
+    {.DEAD_TREE, {44.7, 1.5, -15.7}, 3.8, 35, {235, 118, 149, 255}},
+    {.GRASS, {40.5, 1.5, -21.2}, 0.7, 0, {250, 184, 101, 255}},
+    {.COLUMN, {14.6, 1.5, -15.4}, 2.2, 0, {218, 161, 205, 255}},
+    {.TREE, {22.4, 1.5, -15.2}, 3.6, 16, {117, 221, 196, 255}},
+    {.ROCK, {13.3, 1.5, -21.5}, 1.0, 0, {191, 143, 190, 255}},
+    {.TRUNK, {-6.8, 0, -18.4}, 3.0, 82, {225, 115, 143, 255}},
+    {.TREE, {-9.2, 0, -10.0}, 4.1, 7, {77, 183, 195, 255}},
+    {.TREE, {7.0, 0, -8.0}, 4.0, -14, {89, 204, 201, 255}},
+    {.GRASS, {1.5, 0, -15.0}, 0.8, 0, {127, 224, 187, 255}},
+}
+
+Game_Floor_Accent :: struct {
+    room:   Game_Room_ID,
+    bounds: Game_Rect,
+    color:  rl.Color,
+}
+
+// Bright path fragments give the open floors a readable rhythm and point toward
+// exits without changing collision or the authored traversal route.
+GAME_FLOOR_ACCENTS := [?]Game_Floor_Accent{
+    {.R00_START_FOREST, {-0.8, -0.22, 7.7, 0.22}, {39, 154, 151, 255}},
+    {.R00_START_FOREST, {-0.22, -4.8, 0.22, -0.22}, {39, 154, 151, 255}},
+    {.R00_START_FOREST, {-1.8, 2.7, -0.8, 3.05}, {215, 70, 130, 255}},
+    {.R01_FOREST_PASSAGE, {9.2, -0.24, 26.8, 0.24}, {45, 132, 175, 255}},
+    {.R01_FOREST_PASSAGE, {18.0, -2.9, 19.1, -2.55}, {224, 86, 126, 255}},
+    {.R02_CENTRAL_RUIN, {28.2, -0.23, 47.8, 0.23}, {93, 93, 175, 255}},
+    {.R02_CENTRAL_RUIN, {37.77, -7.8, 38.23, 0.3}, {62, 164, 194, 255}},
+    {.R02_CENTRAL_RUIN, {36.2, 4.9, 39.8, 5.25}, {208, 80, 151, 255}},
+    {.R03_WIDE_GROVE, {49.2, -0.24, 56.3, 0.24}, {48, 161, 123, 255}},
+    {.R03_WIDE_GROVE, {59.8, -4.8, 63.1, -4.45}, {180, 204, 67, 255}},
+    {.R04_RAVINE_CROSSING, {37.76, -22.8, 38.24, -18.0}, {189, 65, 133, 255}},
+    {.R04_RAVINE_CROSSING, {37.76, -16.95, 38.24, -13.2}, {189, 65, 133, 255}},
+    {.R04_RAVINE_CROSSING, {29.2, -20.74, 34.6, -20.26}, {218, 115, 66, 255}},
+    {.R05_OVERLOOK, {18.0, -20.74, 24.8, -20.26}, {199, 71, 113, 255}},
+    {.R05_OVERLOOK, {17.76, -20.2, 18.24, -18.0}, {230, 132, 70, 255}},
+    {.R06_LOWER_TRAIL, {-11.8, -15.76, 9.8, -15.29}, {38, 115, 160, 255}},
+    {.R06_LOWER_TRAIL, {-0.24, -15.2, 0.24, -6.2}, {38, 115, 160, 255}},
+    {.R06_LOWER_TRAIL, {-9.3, -10.6, -7.8, -10.25}, {177, 65, 153, 255}},
+}
+
+GAME_ROOM_WALL_COLORS := [?]rl.Color{
+    {38, 59, 100, 255},
+    {37, 56, 104, 255},
+    {49, 45, 100, 255},
+    {35, 68, 91, 255},
+    {64, 42, 91, 255},
+    {76, 44, 88, 255},
+    {31, 45, 84, 255},
+}
+
+GAME_ROOM_OBSTACLE_COLORS := [?]rl.Color{
+    {83, 119, 150, 255},
+    {73, 113, 155, 255},
+    {115, 105, 169, 255},
+    {68, 129, 126, 255},
+    {147, 91, 146, 255},
+    {164, 102, 134, 255},
+    {69, 102, 143, 255},
+}
+
+GAME_ROOM_BACKGROUND_COLORS := [?]rl.Color{
+    {17, 25, 55, 255},
+    {16, 24, 56, 255},
+    {21, 20, 58, 255},
+    {15, 29, 53, 255},
+    {29, 18, 55, 255},
+    {38, 21, 55, 255},
+    {13, 23, 49, 255},
+}
+
+GAME_ROOM_HUD_ACCENT_COLORS := [?]rl.Color{
+    {80, 224, 207, 255},
+    {83, 198, 229, 255},
+    {151, 145, 235, 255},
+    {101, 229, 168, 255},
+    {244, 103, 162, 255},
+    {255, 143, 142, 255},
+    {83, 188, 224, 255},
 }
 
 Game_Renderer :: struct {
@@ -674,7 +743,7 @@ game_draw_wall_piece :: proc(
 }
 
 game_draw_room_walls :: proc(assets: ^Game_Assets, room: ^Game_Room) {
-    wall_color := rl.Color{83, 88, 77, 255}
+    wall_color := GAME_ROOM_WALL_COLORS[int(room.id)]
     wall_height: f32 = 0.55
     wall_thickness: f32 = 0.35
     wall_y := room.floor_y + wall_height * 0.5
@@ -757,7 +826,7 @@ game_exit_boundary_position :: proc(exit: Game_Room_Exit) -> rl.Vector3 {
 }
 
 game_draw_connections :: proc(assets: ^Game_Assets) {
-    connection_color := rl.Color{111, 112, 91, 255}
+    connection_color := rl.Color{103, 119, 178, 255}
     for exit in GAME_EXITS {
         // Reciprocal exits share one physical connector.
         if int(exit.source) > int(exit.target) && !exit.one_way_drop {
@@ -925,7 +994,7 @@ game_draw_decor :: proc(
         {0, 1, 0},
         0,
         {0.36, 1.0, 0.36},
-        {153, 211, 211, 255},
+        {228, 92, 158, 255},
     )
     rl.DrawModelEx(
         assets.sphere,
@@ -933,8 +1002,25 @@ game_draw_decor :: proc(
         {0, 1, 0},
         0,
         {beacon_pulse, beacon_pulse, beacon_pulse},
-        {201, 255, 239, 255},
+        {104, 244, 239, 255},
     )
+}
+
+game_draw_floor_accents :: proc(assets: ^Game_Assets) {
+    for accent in GAME_FLOOR_ACCENTS {
+        room := game_room(accent.room)
+        center := rl.Vector3{
+            (accent.bounds.min_x + accent.bounds.max_x) * 0.5,
+            room.floor_y + 0.025,
+            (accent.bounds.min_z + accent.bounds.max_z) * 0.5,
+        }
+        size := rl.Vector3{
+            accent.bounds.max_x - accent.bounds.min_x,
+            0.05,
+            accent.bounds.max_z - accent.bounds.min_z,
+        }
+        rl.DrawModelEx(assets.cube, center, {0, 1, 0}, 0, size, accent.color)
+    }
 }
 
 game_draw_obstacle_markers :: proc(assets: ^Game_Assets) {
@@ -956,7 +1042,7 @@ game_draw_obstacle_markers :: proc(assets: ^Game_Assets) {
             {0, 1, 0},
             0,
             size,
-            {105, 110, 100, 255},
+            GAME_ROOM_OBSTACLE_COLORS[int(obstacle.room)],
         )
     }
 }
@@ -964,6 +1050,20 @@ game_draw_obstacle_markers :: proc(assets: ^Game_Assets) {
 game_draw_player :: proc(assets: ^Game_Assets, state: ^Game_State) {
     facing := state.player.facing
     rotation := f32(math.atan2(f64(facing.x), f64(facing.y)) * 180.0 / math.PI)
+    marker_color := rl.Color{20, 24, 58, 255}
+    marker_scale := rl.Vector3{0.82, 0.055, 0.58}
+    if state.player.mode == .DASHING {
+        marker_color = {77, 235, 229, 255}
+        marker_scale = {1.08, 0.065, 0.66}
+    }
+    rl.DrawModelEx(
+        assets.sphere,
+        state.player.position + rl.Vector3{0, 0.035, 0},
+        {0, 1, 0},
+        rotation,
+        marker_scale,
+        marker_color,
+    )
     if assets.player.valid {
         game_draw_imported(
             &assets.player,
@@ -1020,6 +1120,7 @@ game_draw_world :: proc(
         game_draw_room_walls(assets, &room)
     }
     game_draw_connections(assets)
+    game_draw_floor_accents(assets)
 
     for hazard in GAME_HAZARDS {
         room := game_room(hazard.room)
@@ -1033,7 +1134,24 @@ game_draw_world :: proc(
             0.05,
             hazard.bounds.max_z - hazard.bounds.min_z,
         }
-        rl.DrawModelEx(assets.cube, center, {0, 1, 0}, 0, size, {24, 31, 34, 255})
+        rl.DrawModelEx(assets.cube, center, {0, 1, 0}, 0, size, {13, 17, 43, 255})
+        warning_size := rl.Vector3{size.x, 0.07, 0.12}
+        rl.DrawModelEx(
+            assets.cube,
+            {center.x, room.floor_y + 0.04, hazard.bounds.min_z + 0.06},
+            {0, 1, 0},
+            0,
+            warning_size,
+            {241, 77, 139, 255},
+        )
+        rl.DrawModelEx(
+            assets.cube,
+            {center.x, room.floor_y + 0.04, hazard.bounds.max_z - 0.06},
+            {0, 1, 0},
+            0,
+            warning_size,
+            {92, 225, 230, 255},
+        )
     }
 
     game_draw_obstacle_markers(assets)
@@ -1153,29 +1271,33 @@ game_draw_debug_overlay :: proc(state: ^Game_State, camera: rl.Camera3D) {
 
 game_draw_hud :: proc(state: ^Game_State, camera: rl.Camera3D) {
     room := game_room(state.current_room)
-    rl.DrawRectangle(12, 12, 310, 48, {15, 20, 19, 205})
+    accent := GAME_ROOM_HUD_ACCENT_COLORS[int(state.current_room)]
+    rl.DrawRectangle(12, 12, 310, 48, {12, 14, 38, 224})
+    rl.DrawRectangle(12, 12, 5, 48, accent)
     room_name := strings.clone_to_cstring(room.name, context.temp_allocator)
-    rl.DrawText(room_name, 24, 20, 20, rl.RAYWHITE)
+    rl.DrawText(room_name, 25, 20, 20, {244, 244, 255, 255})
     objective_text: cstring = "Reach the overlook"
     if state.overlook_reached {
         objective_text = "Return to the start forest"
     }
-    rl.DrawText(objective_text, 24, 42, 14, {190, 213, 194, 255})
+    rl.DrawText(objective_text, 25, 42, 14, accent)
 
-    rl.DrawRectangle(12, GAME_SCREEN_HEIGHT - 34, 420, 22, {15, 20, 19, 180})
+    rl.DrawRectangle(12, GAME_SCREEN_HEIGHT - 34, 420, 22, {12, 14, 38, 205})
+    rl.DrawRectangle(12, GAME_SCREEN_HEIGHT - 34, 5, 22, {239, 91, 145, 255})
     rl.DrawText(
         "Move: WASD / arrows    Dash: Space    Reset: R    Debug: F3",
         20,
         GAME_SCREEN_HEIGHT - 30,
         14,
-        {206, 216, 207, 255},
+        {221, 224, 247, 255},
     )
 
     if state.completed {
         panel := rl.Rectangle{390, 274, 500, 172}
-        rl.DrawRectangleRec(panel, {11, 17, 17, 232})
-        rl.DrawRectangleLinesEx(panel, 2, {190, 231, 211, 255})
-        rl.DrawText("TRAVERSAL COMPLETE", 473, 302, 28, {213, 255, 230, 255})
+        rl.DrawRectangleRec(panel, {14, 12, 42, 242})
+        rl.DrawRectangle(390, 274, 500, 7, {83, 226, 220, 255})
+        rl.DrawRectangleLinesEx(panel, 2, {241, 93, 151, 255})
+        rl.DrawText("TRAVERSAL COMPLETE", 473, 302, 28, {111, 242, 231, 255})
         rl.DrawText(
             rl.TextFormat("Time  %.1fs     Dashes  %d", state.elapsed_time, state.dash_count),
             493,
@@ -1183,7 +1305,13 @@ game_draw_hud :: proc(state: ^Game_State, camera: rl.Camera3D) {
             20,
             rl.RAYWHITE,
         )
-        rl.DrawText("Keep exploring or press R to reset this room", 458, 392, 16, rl.LIGHTGRAY)
+        rl.DrawText(
+            "Keep exploring or press R to reset this room",
+            458,
+            392,
+            16,
+            {218, 209, 239, 255},
+        )
     }
     if state.debug_visible {
         game_draw_debug_overlay(state, camera)
@@ -1444,6 +1572,59 @@ game_capture_texture :: proc(
     return {}
 }
 
+make_game_cel_style :: proc() -> Cel_Style {
+    style := make_classic_cel_style()
+    style.name = "Neon Twilight"
+    style.light_space = .WORLD
+    style.light_direction = {-0.35, 0.86, -0.42}
+    style.wrap_lighting = 0.10
+    style.band_count = 4
+    style.bands[0] = {
+        upper_bound = 0.22,
+        brightness = 0.46,
+        tint = {0.10, 0.06, 0.30},
+        tint_mix = 0.42,
+    }
+    style.bands[1] = {
+        upper_bound = 0.50,
+        brightness = 0.72,
+        tint = {0.08, 0.34, 0.50},
+        tint_mix = 0.20,
+    }
+    style.bands[2] = {
+        upper_bound = 0.78,
+        brightness = 0.88,
+        tint = {0.42, 0.86, 0.94},
+        tint_mix = 0.05,
+    }
+    style.bands[3] = {
+        brightness = 0.94,
+        tint = {1.00, 0.56, 0.72},
+        tint_mix = 0.04,
+    }
+    style.rim = {
+        enabled = true,
+        color = {0.24, 0.92, 0.96},
+        threshold = 0.80,
+        strength = 0.18,
+        preserve_samples = 2,
+    }
+    style.highlight = {
+        enabled = true,
+        color = {1.00, 0.42, 0.62},
+        threshold = 0.96,
+        strength = 0.12,
+        preserve_samples = 1,
+    }
+    style.outline = {
+        width = 1,
+        color = {12, 13, 37, 255},
+        coverage_threshold = 0.25,
+    }
+    style.revision += 1
+    return style
+}
+
 run_game_mode :: proc(arguments: []string) -> int {
     console_logger := log.create_console_logger()
     defer log.destroy_console_logger(console_logger)
@@ -1527,7 +1708,7 @@ run_game_mode :: proc(arguments: []string) -> int {
         }
     }
 
-    style := make_classic_cel_style()
+    style := make_game_cel_style()
     defer destroy_cel_style(&style)
     if capture.enabled && len(capture.style_path) > 0 {
         loaded_style, style_error := load_cel_style(capture.style_path)
@@ -1586,7 +1767,7 @@ run_game_mode :: proc(arguments: []string) -> int {
     recorded_frames := 0
     replay_player: Game_Replay_Player
     replay_complete := false
-    background_color := rl.Color{24, 31, 30, 255}
+    background_color := GAME_ROOM_BACKGROUND_COLORS[int(state.current_room)]
 
     for !rl.WindowShouldClose() && !capture_complete && !replay_complete {
         frame_dt := min(rl.GetFrameTime(), f32(0.25))
@@ -1663,6 +1844,8 @@ run_game_mode :: proc(arguments: []string) -> int {
                 state.dash_count,
             )
         }
+
+        background_color = GAME_ROOM_BACKGROUND_COLORS[int(state.current_room)]
 
         game_renderer_render(
             &renderer,

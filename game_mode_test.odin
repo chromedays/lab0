@@ -81,3 +81,14 @@ game_run_options_parse_record_directory :: proc(t: ^testing.T) {
     testing.expect(t, valid, error_argument)
     testing.expect_value(t, options.record_directory, "artifacts/report/frames")
 }
+
+@(test)
+game_default_cel_style_is_valid_and_keeps_neon_accents :: proc(t: ^testing.T) {
+    style := make_game_cel_style()
+    defer destroy_cel_style(&style)
+
+    testing.expect_value(t, validate_cel_style(&style), Cel_Style_Error.NONE)
+    testing.expect(t, style.rim.enabled, "the game style should preserve cyan rim light")
+    testing.expect(t, style.highlight.enabled, "the game style should preserve warm highlights")
+    testing.expect_value(t, style.outline.width, 1)
+}
