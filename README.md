@@ -328,6 +328,16 @@ Room time is charged to the room active at the start of each 60 Hz update and
 stops at the first completed tick, even if the replay keeps a few trailing
 ticks so the completed state remains visible.
 
+For camera and landmark review, the all-room replay pauses at readable entry,
+exit, and landmark beats while visiting R00 through R06 (including optional
+R03) and completing the authored loop:
+
+```sh
+scripts/test-game.sh \
+  --video-report artifacts/game-test-report-all-rooms-camera \
+  --replay replays/all-rooms-camera-review.json
+```
+
 The generated directory contains `game-test.mp4`, `contact-sheet.png`,
 `report.md`, `deterministic-completion.png`, and the test and capture logs. It
 does not contain a full PNG frame sequence. `ffmpeg` and `ffprobe` must be

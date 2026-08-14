@@ -5,6 +5,34 @@ import "core:testing"
 import rl "vendor:raylib"
 
 @(test)
+game_uses_the_rigged_meshy_zombie_asset :: proc(t: ^testing.T) {
+    testing.expect_value(
+        t,
+        GAME_ZOMBIE_MODEL_PATH,
+        "assets/Meshy_AI_zombie_rigged_biped_Meshy_AI_Meshy_Merged_Animations.glb",
+    )
+}
+
+@(test)
+game_uses_the_requested_meshy_zombie_animation_clips :: proc(t: ^testing.T) {
+    testing.expect_value(
+        t,
+        GAME_ZOMBIE_ATTACK_ANIMATION,
+        "Limping_Walk_3_inplace",
+    )
+    testing.expect_value(
+        t,
+        GAME_ZOMBIE_IDLE_ANIMATION,
+        "Mummy_Stagger_inplace",
+    )
+    testing.expect_value(
+        t,
+        GAME_ZOMBIE_WALK_ANIMATION,
+        "Mummy_Stagger_inplace",
+    )
+}
+
+@(test)
 game_player_animation_uses_eight_samples :: proc(t: ^testing.T) {
     playback: Animation_Playback
     game_configure_player_animation(&playback)
@@ -180,6 +208,140 @@ game_default_cel_style_is_valid_and_keeps_neon_accents :: proc(t: ^testing.T) {
     testing.expect(t, style.rim.enabled, "the game style should preserve cyan rim light")
     testing.expect(t, style.highlight.enabled, "the game style should preserve warm highlights")
     testing.expect_value(t, style.outline.width, 1)
+}
+
+@(test)
+game_authored_rooms_use_safe_frame_camera_follow :: proc(t: ^testing.T) {
+    for room_index in 0 ..< 7 {
+        room := game_room(Game_Room_ID(room_index))
+        testing.expectf(
+            t,
+            room.camera_follow,
+            "%s should keep the player inside the camera safe frame",
+            room.name,
+        )
+    }
+    testing.expect(t, !game_room(.TEST_OCCLUSION).camera_follow)
+    testing.expect(t, !game_room(.TEST_PIXEL_SNAP).camera_follow)
+}
+
+@(test)
+game_exit_foot_positions_stay_inside_the_low_resolution_safe_frame :: proc(
+    t: ^testing.T,
+) {
+    for exit in GAME_EXITS {
+        state := game_state_init(exit.source)
+        state.player.position = game_exit_boundary_position(exit)
+        camera_state: Game_Camera_State
+        camera := game_update_camera(&camera_state, &state, {}, GAME_FIXED_DT)
+        foot := rl.GetWorldToScreenEx(
+            state.player.position,
+            camera,
+            GAME_PIXEL_WIDTH,
+            GAME_PIXEL_HEIGHT,
+        )
+        testing.expectf(
+            t,
+            foot.x >= 8 && foot.x <= GAME_PIXEL_WIDTH - 8 &&
+                foot.y >= 8 && foot.y <= GAME_PIXEL_HEIGHT - 8,
+            "%s exit foot projected outside the safe frame at (%.2f, %.2f)",
+            game_room(exit.source).name,
+            foot.x,
+            foot.y,
+        )
+    }
+}
+
+@(test)
+game_room_entry_cameras_keep_authored_landmarks_visible :: proc(t: ^testing.T) {
+    landmarks := [7]rl.Vector3{
+        {-3.4, 2.25, 1.1},
+        {12.0, 2.05, -3.1},
+        {34.6, 1.2, -1.4},
+        {58.0, 1.2, 0.0},
+        {44.7, 3.4, -15.7},
+        GAME_OVERLOOK_POSITION,
+        {1.5, 0.4, -15.0},
+    }
+    for landmark, room_index in landmarks {
+        state := game_state_init(Game_Room_ID(room_index))
+        camera_state: Game_Camera_State
+        camera := game_update_camera(&camera_state, &state, {}, GAME_FIXED_DT)
+        screen := rl.GetWorldToScreenEx(
+            landmark,
+            camera,
+            GAME_PIXEL_WIDTH,
+            GAME_PIXEL_HEIGHT,
+        )
+        testing.expectf(
+            t,
+            screen.x >= 2 && screen.x <= GAME_PIXEL_WIDTH - 2 &&
+                screen.y >= 2 && screen.y <= GAME_PIXEL_HEIGHT - 2,
+            "%s landmark projected outside the frame at (%.2f, %.2f)",
+            game_room(Game_Room_ID(room_index)).name,
+            screen.x,
+            screen.y,
+        )
+    }
+}
+
+@(test)
+game_camera_look_ahead_is_smoothed_and_bounded :: proc(t: ^testing.T) {
+    state := game_state_init(.R01_FOREST_PASSAGE)
+    camera_state: Game_Camera_State
+    _ = game_update_camera(&camera_state, &state, {}, GAME_FIXED_DT)
+    _ = game_update_camera(
+        &camera_state,
+        &state,
+        {1, 0},
+        GAME_FIXED_DT,
+    )
+    testing.expectf(
+        t,
+        camera_state.look_ahead.x > 0 &&
+            camera_state.look_ahead.x < GAME_CAMERA_LOOK_AHEAD,
+        "look-ahead should ease toward its bound, got %.6f",
+        camera_state.look_ahead.x,
+    )
+    testing.expect_value(t, camera_state.look_ahead.y, f32(0))
+}
+
+@(test)
+game_room_transition_camera_reaches_its_entry_framing_exactly :: proc(
+    t: ^testing.T,
+) {
+    state := game_state_init(.R00_START_FOREST)
+    camera_state: Game_Camera_State
+    _ = game_update_camera(&camera_state, &state, {}, GAME_FIXED_DT)
+    game_start_room_transition(&state, GAME_EXITS[0])
+    _ = game_update_camera(&camera_state, &state, {1, 0}, GAME_FIXED_DT)
+
+    start := camera_state.transition_start_target
+    finish := camera_state.transition_end_target
+    state.player.transition_elapsed = state.player.transition_duration * 0.5
+    _ = game_update_camera(&camera_state, &state, {1, 0}, GAME_FIXED_DT)
+    expected_middle := start + (finish - start) * 0.5
+    testing.expectf(
+        t,
+        rl.Vector3Distance(camera_state.target, expected_middle) < 0.00001,
+        "transition midpoint should be an unsmoothed smootherstep midpoint",
+    )
+
+    state.player.transition_elapsed = state.player.transition_duration
+    _ = game_update_camera(&camera_state, &state, {1, 0}, GAME_FIXED_DT)
+    testing.expectf(
+        t,
+        rl.Vector3Distance(camera_state.target, finish) < 0.00001,
+        "transition should land exactly on its entry framing",
+    )
+}
+
+@(test)
+game_camera_and_entity_snap_share_negative_half_pixel_rounding :: proc(
+    t: ^testing.T,
+) {
+    testing.expect_value(t, game_camera_round_pixel_coordinate(-1.5), f32(-1))
+    testing.expect_value(t, game_camera_round_pixel_coordinate(1.5), f32(2))
 }
 
 game_test_occlusion_assets :: proc() -> Game_Assets {
