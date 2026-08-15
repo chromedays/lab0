@@ -1,4 +1,4 @@
-package main
+package shared
 
 // Runtime data and pure math for the visual-test-only Scene Editor. File
 // compatibility is kept in scene_file.odin so raylib resource ownership and

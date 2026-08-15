@@ -1,16 +1,17 @@
 package main
 
-// Scene Editor video capture keeps the authored scene and fixed animation
+// shared.Scene Editor video capture keeps the authored scene and fixed animation
 // poses unchanged while moving only the serialized camera around its target.
 // Frames stream directly from the composite RenderTexture through the shared
 // FFmpeg encoder; PNGs remain the deterministic regression source of truth.
 
 import "core:math"
 import "core:strconv"
+import shared "./shared"
 import rl "vendor:raylib"
 
-SCENE_VIDEO_WIDTH                 :: SCENE_SCREEN_WIDTH
-SCENE_VIDEO_HEIGHT                :: SCENE_SCREEN_HEIGHT
+SCENE_VIDEO_WIDTH                 :: shared.SCENE_SCREEN_WIDTH
+SCENE_VIDEO_HEIGHT                :: shared.SCENE_SCREEN_HEIGHT
 SCENE_VIDEO_FRAMES_PER_SECOND     :: 60
 SCENE_VIDEO_DEFAULT_DURATION      :: 5
 SCENE_VIDEO_DEFAULT_FRAME_COUNT   :: u64(
@@ -49,7 +50,7 @@ scene_video_duration_frame_count :: proc(value: string) -> (
 
 validate_scene_video_options :: proc(
     run_options: ^Scene_Run_Options,
-    capture: ^Capture_Options,
+    capture: ^shared.Capture_Options,
 ) -> Scene_Video_Options_Error {
     if len(run_options.video_output) == 0 {
         if run_options.video_duration_set {
@@ -57,7 +58,7 @@ validate_scene_video_options :: proc(
         }
         return .NONE
     }
-    if !video_stream_output_path_valid(run_options.video_output) {
+    if !shared.video_stream_output_path_valid(run_options.video_output) {
         return .INVALID_OUTPUT
     }
     if !run_options.scene_path_set {
@@ -94,7 +95,7 @@ scene_video_options_error_message :: proc(
     case .CONFLICTING_CAPTURE_OUTPUT:
         return "--scene-video-output cannot be combined with --capture-output"
     }
-    return "unknown Scene Editor video option error"
+    return "unknown shared.Scene Editor video option error"
 }
 
 // The last output frame stops one frame interval before 360 degrees, avoiding
@@ -108,12 +109,12 @@ scene_video_orbit_degrees :: proc(
 }
 
 scene_video_orbit_camera :: proc(
-    authored_camera: Scene_Camera,
+    authored_camera: shared.Scene_Camera,
     output_frame_index, frame_count: u64,
-) -> Scene_Camera {
+) -> shared.Scene_Camera {
     result := authored_camera
     if frame_count == 0 { return result }
-    axis := scene_normalize_direction_stable(authored_camera.up)
+    axis := shared.scene_normalize_direction_stable(authored_camera.up)
     offset := authored_camera.position - authored_camera.target
     angle_radians := scene_video_orbit_degrees(
         output_frame_index,

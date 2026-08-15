@@ -5,6 +5,7 @@ package main
 // produce the same particles without depending on render frame timing.
 
 import "core:math"
+import shared "./shared"
 import rl "vendor:raylib"
 
 GAME_PARTICLE_CAPACITY           :: 128
@@ -185,7 +186,7 @@ game_particles_track_steps :: proc(
     from, to: rl.Vector3,
 ) {
     displacement := rl.Vector2{to.x - from.x, to.z - from.z}
-    distance := game_vector_length(displacement)
+    distance := shared.game_vector_length(displacement)
     if distance <= 0.0001 {
         return
     }

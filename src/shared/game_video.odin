@@ -1,4 +1,4 @@
-package main
+package shared
 
 // Video reports stream a normal composite RenderTexture directly to an ffmpeg
 // child process. PNG capture remains a separate deterministic regression path;

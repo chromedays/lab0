@@ -1,6 +1,6 @@
 package main
 
-// Top-level lifecycle and CLI contract for Scene Editor. The mode loads its
+// Top-level lifecycle and CLI contract for shared.Scene Editor. The mode loads its
 // complete CPU state before opening a window, then owns separate GPU resources
 // and deterministic capture behavior.
 
@@ -8,10 +8,11 @@ import "core:fmt"
 import "core:log"
 import "core:os"
 import "core:strings"
+import shared "./shared"
 import rl "vendor:raylib"
 import rgl "vendor:raylib/rlgl"
 
-// Scene-specific CLI state is parsed separately from shared Capture_Options.
+// shared.Scene-specific CLI state is parsed separately from shared shared.Capture_Options.
 // Paths borrow argument storage; no field in this value requires destruction.
 Scene_Run_Options :: struct {
     scene_path:         string,
@@ -31,7 +32,7 @@ scene_editor_mode_requested :: proc(arguments: []string) -> bool {
     return false
 }
 
-// Consume only Scene mode flags and reject other mode namespaces eagerly. The
+// Consume only shared.Scene mode flags and reject other mode namespaces eagerly. The
 // shared capture parser independently validates --capture-* syntax.
 parse_scene_run_options :: proc(arguments: []string) -> (
     options: Scene_Run_Options,
@@ -103,18 +104,18 @@ parse_scene_run_options :: proc(arguments: []string) -> (
 }
 
 print_scene_editor_usage :: proc() {
-    fmt.println("Lab0 Scene Editor")
+    fmt.println("Lab0 shared.Scene Editor")
     fmt.println("")
     fmt.println("Usage:")
     fmt.println("  lab0 --mode scene-editor [options]")
     fmt.println("")
     fmt.println("Options:")
-    fmt.println("  -h, --help                  Print help for Scene Editor")
+    fmt.println("  -h, --help                  Print help for shared.Scene Editor")
     fmt.println("  --mode scene-editor          Run the visual-test scene editor")
     fmt.println("  --scene <path.json>          Open a strict-JSON scene file")
     fmt.println("  --scene-video-output <mp4>  Stream one camera orbit through FFmpeg")
     fmt.println("  --scene-video-duration <s>  Orbit duration at 60 fps (default: 5)")
-    fmt.println("  --scene-help                 Print Scene Editor help")
+    fmt.println("  --scene-help                 Print shared.Scene Editor help")
     fmt.println("")
     fmt.println("Capture options:")
     fmt.println("  --capture-case <name>        Enable deterministic scene capture")
@@ -130,7 +131,7 @@ print_scene_editor_usage :: proc() {
 validate_scene_capture_options :: proc(
     arguments: []string,
     run_options: ^Scene_Run_Options,
-    capture: ^Capture_Options,
+    capture: ^shared.Capture_Options,
 ) -> bool {
     if !capture.enabled { return true }
     if !run_options.scene_path_set {
@@ -145,7 +146,7 @@ validate_scene_capture_options :: proc(
        len(capture.style_path) > 0 ||
        len(capture.video_output) > 0 ||
        capture.video_frame_count > 0 ||
-        cli_argument_present(arguments, "--capture-edge-aa") {
+        shared.cli_argument_present(arguments, "--capture-edge-aa") {
         return false
     }
     return true
@@ -159,8 +160,8 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     defer log.destroy_console_logger(console_logger)
     context.logger = console_logger
 
-    if standard_help_requested(arguments) ||
-       cli_argument_present(arguments, "--scene-help") {
+    if shared.standard_help_requested(arguments) ||
+       shared.cli_argument_present(arguments, "--scene-help") {
         print_scene_editor_usage()
         return 0
     }
@@ -168,29 +169,29 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     run_options, run_options_valid, bad_scene_argument :=
         parse_scene_run_options(arguments)
     if !run_options_valid {
-        log.errorf("Invalid Scene Editor argument: %s", bad_scene_argument)
+        log.errorf("Invalid shared.Scene Editor argument: %s", bad_scene_argument)
         print_scene_editor_usage()
         return 2
     }
 
-    capture_result := parse_capture_options(arguments)
-    defer destroy_capture_options(&capture_result.options)
+    capture_result := shared.parse_capture_options(arguments)
+    defer shared.destroy_capture_options(&capture_result.options)
     if run_options.help_requested || capture_result.options.help_requested {
         print_scene_editor_usage()
         if capture_result.options.help_requested {
             fmt.println("")
-            print_capture_usage()
+            shared.print_capture_usage()
         }
         return 0
     }
     if capture_result.error != .NONE {
-        log.errorf("Invalid Scene Editor capture argument: %s", capture_result.error_argument)
+        log.errorf("Invalid shared.Scene Editor capture argument: %s", capture_result.error_argument)
         print_scene_editor_usage()
         return 2
     }
     capture := &capture_result.options
     if !validate_scene_capture_options(arguments, &run_options, capture) {
-        log.error("Scene Editor capture requires --scene and accepts only scene-owned render state plus composite, scene, downsample, or coverage-mask targets")
+        log.error("shared.Scene Editor capture requires --scene and accepts only scene-owned render state plus composite, scene, downsample, or coverage-mask targets")
         return 2
     }
     video_options_error := validate_scene_video_options(&run_options, capture)
@@ -200,30 +201,30 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     }
     video_enabled := len(run_options.video_output) > 0
 
-    scene: Scene
-    scene_error: Scene_Error
+    scene: shared.Scene
+    scene_error: shared.Scene_Error
     if run_options.scene_path_set {
-        scene, scene_error = load_scene(run_options.scene_path)
+        scene, scene_error = shared.load_scene(run_options.scene_path)
     } else {
-        scene = make_default_scene()
+        scene = shared.make_default_scene()
     }
-    defer destroy_scene(&scene)
+    defer shared.destroy_scene(&scene)
     if scene_error != .NONE {
         log.errorf(
             "Failed to load scene %s: %s",
             run_options.scene_path,
-            scene_error_message(scene_error),
+            shared.scene_error_message(scene_error),
         )
         return 2
     }
 
-    style, style_error := load_cel_style(scene.style_path)
-    defer destroy_cel_style(&style)
+    style, style_error := shared.load_cel_style(scene.style_path)
+    defer shared.destroy_cel_style(&style)
     if style_error != .NONE {
         log.errorf(
             "Failed to load scene cel style %s: %s",
             scene.style_path,
-            cel_style_error_message(style_error),
+            shared.cel_style_error_message(style_error),
         )
         return 2
     }
@@ -237,7 +238,7 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     } else {
         rl.SetConfigFlags({.WINDOW_TOPMOST})
     }
-    rl.InitWindow(SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT, "Lab0 - Scene Editor")
+    rl.InitWindow(shared.SCENE_SCREEN_WIDTH, shared.SCENE_SCREEN_HEIGHT, "Lab0 - shared.Scene Editor")
     defer rl.CloseWindow()
     rl.SetExitKey(.KEY_NULL)
     if capture.enabled {
@@ -246,17 +247,17 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     rgl.SetClipPlanes(0.001, 100000.0)
     rl.SetTargetFPS(60)
 
-    renderer: Scene_Renderer
-    if !scene_renderer_init(&renderer, &style, scene.render.downscale_level) {
-        scene_renderer_destroy(&renderer)
+    renderer: shared.Scene_Renderer
+    if !shared.scene_renderer_init(&renderer, &style, scene.render.downscale_level) {
+        shared.scene_renderer_destroy(&renderer)
         return 1
     }
-    defer scene_renderer_destroy(&renderer)
+    defer shared.scene_renderer_destroy(&renderer)
 
-    resources, resource_error := scene_load_resources(&scene)
-    defer scene_resources_destroy(&resources)
+    resources, resource_error := shared.scene_load_resources(&scene)
+    defer shared.scene_resources_destroy(&resources)
     if resource_error != .NONE {
-        log.errorf("Failed to load scene resources: %s", scene_error_message(resource_error))
+        log.errorf("Failed to load scene resources: %s", shared.scene_error_message(resource_error))
         return 2
     }
 
@@ -265,9 +266,9 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
 
     if capture.enabled {
         if video_enabled {
-            video_encoder: Video_Stream_Encoder
-            defer destroy_video_stream_encoder(&video_encoder)
-            video_start_error := start_video_stream_encoder(
+            video_encoder: shared.Video_Stream_Encoder
+            defer shared.destroy_video_stream_encoder(&video_encoder)
+            video_start_error := shared.start_video_stream_encoder(
                 &video_encoder,
                 run_options.video_output,
                 SCENE_VIDEO_WIDTH,
@@ -282,7 +283,7 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
             // avoiding incremental orbit drift across hundreds of frames.
             authored_camera := scene.camera
             for _ in 0 ..< capture.warmup_frames {
-                if !scene_renderer_render(&renderer, &resources, &scene, &style) {
+                if !shared.scene_renderer_render(&renderer, &resources, &scene, &style) {
                     return 1
                 }
             }
@@ -294,22 +295,22 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
                     frame_index,
                     run_options.video_frame_count,
                 )
-                if !scene_renderer_render(&renderer, &resources, &scene, &style) {
+                if !shared.scene_renderer_render(&renderer, &resources, &scene, &style) {
                     return 1
                 }
-                if !video_stream_write_render_texture(
+                if !shared.video_stream_write_render_texture(
                     &video_encoder,
                     renderer.composite_target.texture,
                 ) {
                     log.errorf(
-                        "Failed to stream Scene Editor case %s at orbit frame %d",
+                        "Failed to stream shared.Scene Editor case %s at orbit frame %d",
                         capture.case_name,
                         int(frame_index),
                     )
                     return 1
                 }
             }
-            if !finish_video_stream_encoder(
+            if !shared.finish_video_stream_encoder(
                 &video_encoder,
                 run_options.video_output,
                 run_options.video_frame_count,
@@ -318,7 +319,7 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
                 return 1
             }
             log.infof(
-                "Streamed Scene camera orbit %.3f through %.3f degrees exactly once across %d output frames",
+                "Streamed shared.Scene camera orbit %.3f through %.3f degrees exactly once across %d output frames",
                 scene_video_orbit_degrees(0, run_options.video_frame_count),
                 scene_video_orbit_degrees(
                     run_options.video_frame_count - 1,
@@ -329,24 +330,24 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
             return 0
         }
         for frame_index := 0; frame_index <= capture.warmup_frames; frame_index += 1 {
-            if !scene_renderer_render(&renderer, &resources, &scene, &style) {
+            if !shared.scene_renderer_render(&renderer, &resources, &scene, &style) {
                 return 1
             }
         }
-        texture := scene_capture_texture(&renderer, capture.target)
+        texture := shared.scene_capture_texture(&renderer, capture.target)
         if !rl.IsTextureValid(texture) {
             return 1
         }
-        if !export_render_texture_png(texture, capture.output_path) {
+        if !shared.export_render_texture_png(texture, capture.output_path) {
             log.errorf(
-                "Failed to capture Scene Editor case %s to %s",
+                "Failed to capture shared.Scene Editor case %s to %s",
                 capture.case_name,
                 capture.output_path,
             )
             return 1
         }
         log.infof(
-            "Captured Scene Editor case %s to %s",
+            "Captured shared.Scene Editor case %s to %s",
             capture.case_name,
             capture.output_path,
         )
@@ -413,7 +414,7 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
             if shift_down {
                 scene_editor_request_save_as(&editor_ui)
             } else {
-                save_error := save_scene(
+                save_error := shared.save_scene(
                     scene_ui_buffer_string(editor_ui.scene_path[:]),
                     &scene,
                 )
@@ -425,7 +426,7 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
                 }
             }
         }
-        if !scene_renderer_render(&renderer, &resources, &scene, &style) {
+        if !shared.scene_renderer_render(&renderer, &resources, &scene, &style) {
             return 1
         }
         rl.BeginDrawing()

@@ -1,4 +1,4 @@
-package main
+package shared
 
 // This module owns the non-interactive capture command-line contract. It keeps
 // parsing and PNG export deterministic so visual regression jobs exercise the

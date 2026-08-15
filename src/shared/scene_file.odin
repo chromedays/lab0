@@ -1,4 +1,4 @@
-package main
+package shared
 
 // Strict-JSON wire schema, validation, and transactional persistence for Scene
 // Editor files. Runtime structs deliberately use raylib types while these file

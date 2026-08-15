@@ -7,12 +7,13 @@ package main
 // behavior, render-pass ordering, and the inlined UI composition.
 
 import "core:fmt"
-import json "core:encoding/json"
+import "core:c"
 import "core:os"
 import "core:log"
 import "core:math"
 import "core:slice"
 import "core:strings"
+import shared "./shared"
 import rl "vendor:raylib"
 import rgl "vendor:raylib/rlgl"
 
@@ -54,998 +55,8 @@ SUPPORTED_MODEL_EXTENSIONS := [?]string{
     ".m3d",
 }
 
-// Lens_Mode selects how the low-resolution render is composited into the 400px
+// shared.Lens_Mode selects how the low-resolution render is composited into the 400px
 // lens: nearest pixels, a 50/50 blend, or raw subpixel coverage visualization.
-Lens_Mode :: enum {
-    PIXELATED,
-    BLENDED,
-    COVERAGE_MASK,
-}
-
-// Edge_AA_Mode controls only the viewer's low-resolution silhouette resolve.
-// HARD preserves the historical binary output; COVERAGE exposes the existing
-// deterministic 4x4 occupancy as fractional alpha.
-Edge_AA_Mode :: enum {
-    HARD,
-    COVERAGE,
-}
-
-// Model_Source_Kind distinguishes disk assets from generated primitives because
-// loading, animation availability, and camera framing differ by source.
-Model_Source_Kind :: enum {
-    ASSET,
-    CUBE,
-    SPHERE,
-    TRIANGLE,
-}
-
-// Builtin_Model_Source supplies the path-like ID and browser label for a
-// generated primitive.
-Builtin_Model_Source :: struct {
-    kind:  Model_Source_Kind,
-    path:  string,
-    label: string,
-}
-
-// Built-ins are appended after sorted disk assets in this stable order.
-BUILTIN_MODEL_SOURCES := [?]Builtin_Model_Source{
-    {.CUBE,     "builtin:cube",     "Built-in / Cube"},
-    {.SPHERE,   "builtin:sphere",   "Built-in / Sphere"},
-    {.TRIANGLE, "builtin:triangle", "Built-in / Triangle"},
-}
-
-// get_downsample_dimension performs integer downscaling while guaranteeing a
-// valid RenderTexture dimension. Non-positive levels preserve the source size.
-get_downsample_dimension :: proc(
-    source_dimension, downscale_level: c.int,
-) -> c.int {
-    if source_dimension <= 0 {
-        return 1
-    }
-    if downscale_level <= 0 {
-        return source_dimension
-    }
-    return max(source_dimension / downscale_level, 1)
-}
-
-// Model_Assets stores parallel arrays indexed by one canonical source index.
-// paths and labels are owned strings released by destroy_model_assets.
-Model_Assets :: struct {
-    paths:  [dynamic]string,
-    labels: [dynamic]cstring,
-    kinds:  [dynamic]Model_Source_Kind,
-}
-
-// Model_Search_Result preserves the source index while sorting by fuzzy score.
-Model_Search_Result :: struct {
-    source_index: c.int,
-    score:        int,
-}
-
-// Model_Browser_State separates filtered result indices from source storage and
-// retains raygui list/search interaction state across frames.
-Model_Browser_State :: struct {
-    search_text:          [MODEL_SEARCH_TEXT_CAPACITY]u8,
-    previous_search_text: [MODEL_SEARCH_TEXT_CAPACITY]u8,
-    results:              [dynamic]Model_Search_Result,
-    result_labels:        [dynamic]cstring,
-    scroll_index:         c.int,
-    active_index:         c.int,
-    focus_index:          c.int,
-    search_editing:       bool,
-}
-
-import "core:c"
-
-// Animation_Playback owns raylib animation data, a filtered list of compatible
-// clips, and both continuous and sampled timeline state. pose_dirty avoids
-// redundant CPU skinning updates when the displayed pose has not changed.
-Animation_Playback :: struct {
-    animations:      [^]rl.ModelAnimation,
-    animation_count: c.int,
-    valid_indices:   [dynamic]c.int,
-    clip_options:    cstring,
-    active_index:    c.int,
-    current_frame:   f32,
-    applied_frame:   f32,
-    speed:           f32,
-    is_playing:      bool,
-    loop:            bool,
-    sampled_playback: bool,
-    sample_count:    c.int,
-    dropdown_open:   bool,
-    pose_dirty:      bool,
-}
-
-// load_fragment_shader_with_includes preprocesses one fragment stage, compiles
-// it from memory, and returns dependency state even when compilation fails.
-load_fragment_shader_with_includes :: proc(fragment_path: string) -> (
-    shader: rl.Shader,
-    preprocessed_source: Preprocessed_Shader_Source,
-    loaded: bool,
-) {
-    preprocess_succeeded: bool
-    preprocessed_source, preprocess_succeeded = preprocess_shader_file(fragment_path)
-    if !preprocess_succeeded {
-        return {}, preprocessed_source, false
-    }
-
-    source_code_cstr := strings.clone_to_cstring(
-        preprocessed_source.code,
-        context.temp_allocator,
-    )
-    shader = rl.LoadShaderFromMemory(nil, source_code_cstr)
-    return shader, preprocessed_source, rl.IsShaderValid(shader)
-}
-
-// load_shader_with_includes preprocesses both program stages and compiles them
-// together. The caller owns both the raylib shader and preprocessed sources.
-load_shader_with_includes :: proc(vertex_path, fragment_path: string) -> (
-    shader: rl.Shader,
-    preprocessed_program: Preprocessed_Shader_Program_Source,
-    loaded: bool,
-) {
-    // Preprocess both shader stages inline at this sole program-load site.
-    vertex_preprocess_succeeded, fragment_preprocess_succeeded: bool
-    preprocessed_program.vertex, vertex_preprocess_succeeded =
-        preprocess_shader_file(vertex_path)
-    preprocessed_program.fragment, fragment_preprocess_succeeded =
-        preprocess_shader_file(fragment_path)
-    preprocess_succeeded := vertex_preprocess_succeeded &&
-                            fragment_preprocess_succeeded
-    if !preprocess_succeeded {
-        return {}, preprocessed_program, false
-    }
-
-    vertex_code_cstr := strings.clone_to_cstring(
-        preprocessed_program.vertex.code,
-        context.temp_allocator,
-    )
-    fragment_code_cstr := strings.clone_to_cstring(
-        preprocessed_program.fragment.code,
-        context.temp_allocator,
-    )
-    shader = rl.LoadShaderFromMemory(vertex_code_cstr, fragment_code_cstr)
-    return shader, preprocessed_program, rl.IsShaderValid(shader)
-}
-
-// reload_fragment_shader_with_includes recompiles only after a dependency
-// snapshot changes. A failed replacement is unloaded and the working shader is
-// retained, while dependency state advances to prevent retrying every frame.
-reload_fragment_shader_with_includes :: proc(
-    fragment_path: string,
-    shader: ^rl.Shader,
-    preprocessed_source: ^Preprocessed_Shader_Source,
-) -> bool {
-    if !shader_source_dependencies_changed(preprocessed_source) {
-        return false
-    }
-
-    log.info("Shader dependency changed; reloading %s", fragment_path)
-    replacement_shader, replacement_source, reload_succeeded :=
-        load_fragment_shader_with_includes(fragment_path)
-    destroy_preprocessed_shader_source(preprocessed_source)
-    preprocessed_source^ = replacement_source
-
-    if !reload_succeeded {
-        log.error("Failed to reload %s. Keeping the old shader.", fragment_path)
-        if rl.IsShaderValid(replacement_shader) {
-            rl.UnloadShader(replacement_shader)
-        }
-        return false
-    }
-
-    rl.UnloadShader(shader^)
-    shader^ = replacement_shader
-    return true
-}
-
-// reload_shader_with_includes applies the same safe replacement policy to a
-// vertex/fragment program and transfers ownership of the new dependency state.
-reload_shader_with_includes :: proc(
-    vertex_path, fragment_path: string,
-    shader: ^rl.Shader,
-    preprocessed_program: ^Preprocessed_Shader_Program_Source,
-) -> bool {
-    // Check both stage dependency sets inline before attempting a reload.
-    dependencies_changed :=
-        shader_source_dependencies_changed(&preprocessed_program.vertex) ||
-        shader_source_dependencies_changed(&preprocessed_program.fragment)
-    if !dependencies_changed {
-        return false
-    }
-
-    log.info(
-        "Shader dependency changed; reloading %s and %s",
-        vertex_path,
-        fragment_path,
-    )
-    replacement_shader, replacement_program, reload_succeeded := load_shader_with_includes(
-        vertex_path,
-        fragment_path,
-    )
-    destroy_preprocessed_shader_program_source(preprocessed_program)
-    preprocessed_program^ = replacement_program
-
-    if !reload_succeeded {
-        log.error("Failed to reload %s. Keeping the old shader.", fragment_path)
-        if rl.IsShaderValid(replacement_shader) {
-            rl.UnloadShader(replacement_shader)
-        }
-        return false
-    }
-
-    rl.UnloadShader(shader^)
-    shader^ = replacement_shader
-    return true
-}
-
-// destroy_model_assets frees every cloned path/label and all parallel arrays.
-destroy_model_assets :: proc(assets: ^Model_Assets) {
-    for asset_path in assets.paths do delete(asset_path)
-    for asset_label in assets.labels do delete(asset_label)
-    delete(assets.paths)
-    delete(assets.labels)
-    delete(assets.kinds)
-}
-
-// ascii_search_lower provides allocation-free case folding for asset filenames.
-ascii_search_lower :: proc(value: u8) -> u8 {
-    if value >= 'A' && value <= 'Z' {
-        return value + ('a' - 'A')
-    }
-    return value
-}
-
-// is_model_search_separator defines optional query delimiters and word boundaries.
-is_model_search_separator :: proc(value: u8) -> bool {
-    switch value {
-    case ' ', '\t', '_', '-', '/', '\\', '.', ':':
-        return true
-    }
-    return false
-}
-
-// fuzzy_model_score matches query characters in order, rewarding consecutive
-// matches, exact case, and word boundaries while penalizing gaps. Query
-// separators are optional, so "female run" matches underscore-delimited names.
-fuzzy_model_score :: proc(query, candidate: string) -> (
-    score: int,
-    matched: bool,
-) {
-    candidate_cursor := 0
-    previous_match_index := -2
-    consecutive_matches := 0
-    matched_character_count := 0
-
-    for query_index := 0; query_index < len(query); query_index += 1 {
-        query_character := query[query_index]
-        if is_model_search_separator(query_character) {
-            continue
-        }
-
-        match_index := -1
-        for candidate_index := candidate_cursor;
-            candidate_index < len(candidate);
-            candidate_index += 1 {
-            if ascii_search_lower(candidate[candidate_index]) ==
-               ascii_search_lower(query_character) {
-                match_index = candidate_index
-                break
-            }
-        }
-        if match_index < 0 {
-            return 0, false
-        }
-
-        gap_size := match_index - candidate_cursor
-        score -= gap_size * 2
-        if match_index == previous_match_index + 1 {
-            consecutive_matches += 1
-            score += 12 * consecutive_matches
-        } else {
-            consecutive_matches = 0
-        }
-        // Reward a boundary directly where the fuzzy score consumes it.
-        match_is_boundary := match_index == 0 ||
-                             is_model_search_separator(candidate[match_index - 1])
-        if match_is_boundary {
-            score += 24
-        }
-        if candidate[match_index] == query_character {
-            score += 1
-        }
-
-        matched_character_count += 1
-        previous_match_index = match_index
-        candidate_cursor = match_index + 1
-    }
-
-    // A query containing only separators behaves like an empty query.
-    if matched_character_count == 0 {
-        return 0, true
-    }
-    score += matched_character_count * 10
-    score -= (len(candidate) - matched_character_count) / 6
-    return score, true
-}
-
-// rebuild_model_search_results scores both full paths and display labels, keeps
-// the better score, sorts deterministically, and resets list navigation state.
-rebuild_model_search_results :: proc(
-    model_assets: ^Model_Assets,
-    browser: ^Model_Browser_State,
-) {
-    resize(&browser.results, 0)
-    resize(&browser.result_labels, 0)
-
-    search_query := string(cstring(&browser.search_text[0]))
-    for model_path, source_index in model_assets.paths {
-        path_score, path_matches := fuzzy_model_score(search_query, model_path)
-        label_score, label_matches := fuzzy_model_score(
-            search_query,
-            string(model_assets.labels[source_index]),
-        )
-        if !path_matches && !label_matches {
-            continue
-        }
-
-        match_score := path_score
-        if label_matches && (!path_matches || label_score > path_score) {
-            match_score = label_score
-        }
-        append(
-            &browser.results,
-            Model_Search_Result{c.int(source_index), match_score},
-        )
-    }
-
-    slice.sort_by(
-        browser.results[:],
-        proc(left, right: Model_Search_Result) -> bool {
-            if left.score == right.score {
-                return left.source_index < right.source_index
-            }
-            return left.score > right.score
-        },
-    )
-    for result in browser.results {
-        append(
-            &browser.result_labels,
-            model_assets.labels[result.source_index],
-        )
-    }
-
-    browser.previous_search_text = browser.search_text
-    browser.scroll_index = 0
-    browser.focus_index = -1
-    if len(browser.results) > 0 {
-        browser.active_index = 0
-    } else {
-        browser.active_index = -1
-    }
-}
-
-// destroy_model_browser_state frees result arrays; labels remain asset-owned.
-destroy_model_browser_state :: proc(browser: ^Model_Browser_State) {
-    delete(browser.results)
-    delete(browser.result_labels)
-}
-
-// set_model_browser_active_source maps a canonical source index back into the
-// current filtered list, or clears selection when the source is filtered out.
-set_model_browser_active_source :: proc(
-    browser: ^Model_Browser_State,
-    source_index: c.int,
-) {
-    for result, result_index in browser.results {
-        if result.source_index == source_index {
-            browser.active_index = c.int(result_index)
-            return
-        }
-    }
-    browser.active_index = -1
-}
-
-// load_model_source dispatches disk loading or procedural mesh generation from
-// one canonical source index. The caller owns and must unload a valid model.
-load_model_source :: proc(model_assets: ^Model_Assets, source_index: int) -> rl.Model {
-    switch model_assets.kinds[source_index] {
-    case .ASSET:
-        return rl.LoadModel(
-            strings.clone_to_cstring(
-                model_assets.paths[source_index],
-                context.temp_allocator,
-            ),
-        )
-    case .CUBE:
-        return rl.LoadModelFromMesh(rl.GenMeshCube(1, 1, 1))
-    case .SPHERE:
-        // A denser silhouette prevents low-resolution pixels from changing
-        // merely because the camera orbited around an otherwise round sphere.
-        return rl.LoadModelFromMesh(rl.GenMeshSphere(0.5, 64, 64))
-    case .TRIANGLE:
-        return rl.LoadModelFromMesh(rl.GenMeshPoly(3, 0.65))
-    }
-    return {}
-}
-
-// is_model_loaded accepts drawable geometry even when raylib rejects a model for
-// a missing material texture; texture warnings are validated separately.
-is_model_loaded :: proc(model: rl.Model) -> bool {
-    // IsModelValid() also fails when an otherwise usable model has a missing
-    // or unsupported material texture. The browser only needs drawable meshes.
-    return model.meshCount > 0 && model.meshes != nil
-}
-
-// has_playable_animations checks both raylib storage and the compatible clip list.
-has_playable_animations :: proc(playback: ^Animation_Playback) -> bool {
-    return playback.animations != nil && len(playback.valid_indices) > 0
-}
-
-// get_active_animation validates both filtered and raw indices before returning
-// a raylib animation value, protecting UI/capture code from stale selection.
-get_active_animation :: proc(
-    playback: ^Animation_Playback,
-) -> (animation: rl.ModelAnimation, animation_found: bool) {
-    if !has_playable_animations(playback) ||
-       playback.active_index < 0 ||
-       int(playback.active_index) >= len(playback.valid_indices) {
-        return {}, false
-    }
-
-    animation_index := int(playback.valid_indices[playback.active_index])
-    if animation_index < 0 || animation_index >= int(playback.animation_count) {
-        return {}, false
-    }
-    return playback.animations[animation_index], true
-}
-
-// destroy_animation_playback unloads raylib animations, owned option text, and
-// dynamic indices, then clears the complete playback state.
-destroy_animation_playback :: proc(playback: ^Animation_Playback) {
-    if playback.animations != nil {
-        rl.UnloadModelAnimations(playback.animations, playback.animation_count)
-    }
-    delete(playback.valid_indices)
-    if playback.clip_options != nil {
-        delete(playback.clip_options)
-    }
-    playback^ = {}
-}
-
-// get_pure_uniform_scale_from_matrix accepts only positive, origin-centered,
-// axis-aligned uniform scales. Any translation, rotation, shear, or non-uniform
-// component is rejected because the later correction handles scale alone.
-get_pure_uniform_scale_from_matrix :: proc(
-    transform: [16]f32,
-) -> (scale: f32, valid: bool) {
-    // glTF matrices are column-major. Only compensate transforms that are a
-    // positive uniform scale around the origin; translation, rotation, shear,
-    // or non-uniform scale require a full skin-matrix conversion instead.
-    zero_indices := [?]int{1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14}
-    for index in zero_indices {
-        if math.abs(transform[index]) > GLTF_SKIN_SCALE_EPSILON {
-            return 1, false
-        }
-    }
-    if math.abs(transform[15] - 1) > GLTF_SKIN_SCALE_EPSILON {
-        return 1, false
-    }
-
-    scale = transform[0]
-    if scale <= GLTF_SKIN_SCALE_EPSILON ||
-       math.abs(transform[5] - scale) > GLTF_SKIN_SCALE_EPSILON ||
-       math.abs(transform[10] - scale) > GLTF_SKIN_SCALE_EPSILON {
-        return 1, false
-    }
-    return scale, true
-}
-
-// GLTF_Skin_Node_Metadata contains only fields required to trace transforms from
-// skinned mesh nodes to the scene roots; Maybe distinguishes absent JSON values.
-GLTF_Skin_Node_Metadata :: struct {
-    mesh:             Maybe(int),
-    skin:             Maybe(int),
-    children:         []int,
-    transform_matrix: Maybe([16]f32) `json:"matrix"`,
-    translation:      Maybe([3]f32),
-    rotation:         Maybe([4]f32),
-    scale:            Maybe([3]f32),
-}
-
-// GLTF_Skin_Metadata is the minimal temporary JSON decode target.
-GLTF_Skin_Metadata :: struct {
-    nodes: []GLTF_Skin_Node_Metadata,
-}
-
-// get_gltf_skinned_mesh_uniform_scale parses GLB/GLTF metadata without loading a
-// second raylib model. It requires every skinned mesh to share one pure ancestor
-// scale so a model-wide skeleton translation correction is mathematically valid.
-get_gltf_skinned_mesh_uniform_scale :: proc(
-    model_path: string,
-) -> (scale: f32, found: bool) {
-    is_gltf := strings.has_suffix(model_path, ".glb") ||
-               strings.has_suffix(model_path, ".gltf") ||
-               strings.has_suffix(model_path, ".GLB") ||
-               strings.has_suffix(model_path, ".GLTF")
-    if !is_gltf {
-        return 1, false
-    }
-
-    file_data, read_error := os.read_entire_file(model_path, context.allocator)
-    if read_error != nil {
-        return 1, false
-    }
-    defer delete(file_data)
-
-    // Extract the JSON payload inline for the only metadata decoder.
-    json_bytes := file_data
-    gltf_valid := true
-    is_binary_gltf := len(file_data) >= 4 &&
-                      file_data[0] == 'g' && file_data[1] == 'l' &&
-                      file_data[2] == 'T' && file_data[3] == 'F'
-    if is_binary_gltf {
-        if len(file_data) < 20 {
-            gltf_valid = false
-        } else {
-            chunk_length := int(u32(file_data[12]) |
-                                u32(file_data[13]) << 8 |
-                                u32(file_data[14]) << 16 |
-                                u32(file_data[15]) << 24)
-            is_json_chunk := file_data[16] == 'J' &&
-                             file_data[17] == 'S' &&
-                             file_data[18] == 'O' &&
-                             file_data[19] == 'N'
-            if !is_json_chunk || chunk_length < 0 ||
-               chunk_length > len(file_data) - 20 {
-                gltf_valid = false
-            } else {
-                json_bytes = file_data[20:20 + chunk_length]
-            }
-        }
-    }
-    if !gltf_valid {
-        return 1, false
-    }
-    metadata: GLTF_Skin_Metadata
-    unmarshal_error := json.unmarshal(
-        json_bytes,
-        &metadata,
-        spec = .JSON,
-    )
-    // Release decoded node child arrays when this sole metadata scope exits.
-    defer {
-        for metadata_node in metadata.nodes {
-            delete(metadata_node.children)
-        }
-        delete(metadata.nodes)
-    }
-    if unmarshal_error != nil || len(metadata.nodes) == 0 {
-        return 1, false
-    }
-
-    parents := make([]int, len(metadata.nodes))
-    defer delete(parents)
-    for &parent in parents {
-        parent = -1
-    }
-    for node, parent_index in metadata.nodes {
-        for child_index in node.children {
-            if child_index < 0 || child_index >= len(metadata.nodes) {
-                return 1, false
-            }
-            if parents[child_index] >= 0 {
-                return 1, false
-            }
-            parents[child_index] = parent_index
-        }
-    }
-
-    uniform_scale := f32(1)
-    scale_found := false
-    for node, node_index in metadata.nodes {
-        mesh_index, mesh_present := node.mesh.?
-        skin_index, skin_present := node.skin.?
-        if !mesh_present || !skin_present {
-            continue
-        }
-        if mesh_index < 0 || skin_index < 0 {
-            return 1, false
-        }
-
-        node_scale := f32(1)
-        ancestor_index := node_index
-        ancestor_count := 0
-        for ancestor_index >= 0 {
-            if ancestor_count >= len(metadata.nodes) {
-                return 1, false
-            }
-            ancestor := metadata.nodes[ancestor_index]
-            // Validate and accumulate the ancestor's local uniform scale here.
-            local_scale := f32(1)
-            local_valid := true
-            if ancestor_matrix, matrix_present := ancestor.transform_matrix.?;
-               matrix_present {
-                if ancestor.translation != nil || ancestor.rotation != nil ||
-                   ancestor.scale != nil {
-                    local_valid = false
-                } else {
-                    local_scale, local_valid =
-                        get_pure_uniform_scale_from_matrix(ancestor_matrix)
-                }
-            } else {
-                if translation, translation_present := ancestor.translation.?;
-                   translation_present {
-                    if math.abs(translation[0]) > GLTF_SKIN_SCALE_EPSILON ||
-                       math.abs(translation[1]) > GLTF_SKIN_SCALE_EPSILON ||
-                       math.abs(translation[2]) > GLTF_SKIN_SCALE_EPSILON {
-                        local_valid = false
-                    }
-                }
-                if rotation, rotation_present := ancestor.rotation.?;
-                   rotation_present {
-                    if math.abs(rotation[0]) > GLTF_SKIN_SCALE_EPSILON ||
-                       math.abs(rotation[1]) > GLTF_SKIN_SCALE_EPSILON ||
-                       math.abs(rotation[2]) > GLTF_SKIN_SCALE_EPSILON ||
-                       math.abs(math.abs(rotation[3]) - 1) >
-                           GLTF_SKIN_SCALE_EPSILON {
-                        local_valid = false
-                    }
-                }
-                if ancestor_scale, scale_present := ancestor.scale.?;
-                   scale_present {
-                    if ancestor_scale[0] <= GLTF_SKIN_SCALE_EPSILON ||
-                       math.abs(ancestor_scale[1] - ancestor_scale[0]) >
-                           GLTF_SKIN_SCALE_EPSILON ||
-                       math.abs(ancestor_scale[2] - ancestor_scale[0]) >
-                           GLTF_SKIN_SCALE_EPSILON {
-                        local_valid = false
-                    } else {
-                        local_scale = ancestor_scale[0]
-                    }
-                }
-            }
-            if !local_valid {
-                return 1, false
-            }
-            node_scale *= local_scale
-            ancestor_index = parents[ancestor_index]
-            ancestor_count += 1
-        }
-        if scale_found &&
-           math.abs(node_scale - uniform_scale) > GLTF_SKIN_SCALE_EPSILON {
-            // A model-wide pose correction cannot represent differently
-            // scaled skinned meshes sharing raylib's single skeleton.
-            return 1, false
-        }
-        uniform_scale = node_scale
-        scale_found = true
-    }
-    return uniform_scale, scale_found
-}
-
-// load_animation_playback loads all clips, filters empty/incompatible entries,
-// builds raygui option text, applies the glTF scale correction, and initializes
-// the model to the first valid pose. Non-asset primitives return empty playback.
-load_animation_playback :: proc(
-    model: rl.Model,
-    model_path: string,
-    source_kind: Model_Source_Kind,
-) -> Animation_Playback {
-    if source_kind != .ASSET {
-        return {}
-    }
-
-    playback := Animation_Playback{
-        speed = 1.0,
-        loop = true,
-        sample_count = 4,
-    }
-    model_path_cstr := strings.clone_to_cstring(
-        model_path,
-        context.temp_allocator,
-    )
-    playback.animations = rl.LoadModelAnimations(
-        model_path_cstr,
-        &playback.animation_count,
-    )
-    if playback.animations == nil || playback.animation_count <= 0 {
-        return playback
-    }
-
-    clip_options_builder := strings.builder_make()
-    defer strings.builder_destroy(&clip_options_builder)
-
-    for animation_index := 0;
-        animation_index < int(playback.animation_count);
-        animation_index += 1 {
-        animation := playback.animations[animation_index]
-        if animation.keyframeCount <= 0 {
-            log.warnf(
-                "Ignoring animation %d in %s because it has no keyframes",
-                animation_index,
-                model_path,
-            )
-            continue
-        }
-        if !rl.IsModelAnimationValid(model, animation) {
-            log.warnf(
-                "Ignoring animation %d in %s because its skeleton is incompatible",
-                animation_index,
-                model_path,
-            )
-            continue
-        }
-
-        if len(playback.valid_indices) > 0 {
-            strings.write_byte(&clip_options_builder, ';')
-        }
-        append(&playback.valid_indices, c.int(animation_index))
-
-        animation_name := string(cstring(&animation.name[0]))
-        if len(animation_name) > 0 {
-            strings.write_string(&clip_options_builder, animation_name)
-        } else {
-            strings.write_string(
-                &clip_options_builder,
-                fmt.tprintf("Animation %d", animation_index + 1),
-            )
-        }
-    }
-
-    if len(playback.valid_indices) == 0 {
-        destroy_animation_playback(&playback)
-        return {}
-    }
-
-    playback.clip_options = strings.clone_to_cstring(
-        strings.to_string(clip_options_builder),
-    )
-    playback.active_index = 0
-    playback.current_frame = 0
-    playback.applied_frame = 0
-    playback.pose_dirty = true
-
-    // Correct glTF skin translation scale inline after loading the sole playback.
-    if model.skeleton.boneCount > 0 &&
-       model.skeleton.bindPose != nil &&
-       playback.animations != nil {
-        uniform_scale, scale_found :=
-            get_gltf_skinned_mesh_uniform_scale(model_path)
-        if scale_found &&
-           math.abs(uniform_scale - 1) > GLTF_SKIN_SCALE_EPSILON {
-            // raylib bakes this node scale into mesh vertices but leaves absolute
-            // bone translations in the unscaled skeleton space.
-            for bone_index := 0;
-                bone_index < int(model.skeleton.boneCount);
-                bone_index += 1 {
-                model.skeleton.bindPose[bone_index].translation *= uniform_scale
-            }
-            for valid_index in playback.valid_indices {
-                corrected_animation := playback.animations[valid_index]
-                for frame_index := 0;
-                    frame_index < int(corrected_animation.keyframeCount);
-                    frame_index += 1 {
-                    for bone_index := 0;
-                        bone_index < int(corrected_animation.boneCount);
-                        bone_index += 1 {
-                        corrected_animation.keyframePoses[frame_index][bone_index].translation *=
-                            uniform_scale
-                    }
-                }
-            }
-
-            log.infof(
-                "Applied glTF skin scale correction %.6f to %s",
-                uniform_scale,
-                model_path,
-            )
-        }
-    }
-
-    animation, animation_found := get_active_animation(&playback)
-    if animation_found {
-        rl.UpdateModelAnimation(model, animation, playback.current_frame)
-        playback.pose_dirty = false
-    }
-
-    log.infof(
-        "Loaded %d playable animation(s) from %s",
-        len(playback.valid_indices),
-        model_path,
-    )
-    return playback
-}
-
-// get_max_sample_count excludes the duplicate terminal loop keyframe while
-// retaining a minimum of one sample for degenerate clips.
-get_max_sample_count :: proc(animation: rl.ModelAnimation) -> c.int {
-    // The terminal keyframe marks the end of the loop, so a 120-frame cycle
-    // exposes the distinct frames 0...119 for sampled playback.
-    return max(animation.keyframeCount - 1, 1)
-}
-
-// get_sampled_frame_at_index maps an evenly spaced sample slot to a keyframe,
-// clamping both count and index to the distinct loop-frame range.
-get_sampled_frame_at_index :: proc(
-    animation: rl.ModelAnimation,
-    sample_count, sample_index: c.int,
-) -> f32 {
-    last_frame := f32(max(animation.keyframeCount - 1, 0))
-    if last_frame <= 0 {
-        return 0
-    }
-
-    clamped_count := clamp(sample_count, 1, get_max_sample_count(animation))
-    clamped_index := clamp(sample_index, 0, clamped_count - 1)
-    return f32(c.int(
-        f32(clamped_index) * last_frame / f32(clamped_count),
-    ))
-}
-
-// get_sample_index_for_frame finds the nearest sampled slot for a continuous
-// frame so toggling sampled playback does not produce a surprising large jump.
-get_sample_index_for_frame :: proc(
-    animation: rl.ModelAnimation,
-    sample_count: c.int,
-    frame: f32,
-) -> c.int {
-    last_frame := f32(max(animation.keyframeCount - 1, 0))
-    if last_frame <= 0 {
-        return 0
-    }
-
-    clamped_count := clamp(sample_count, 1, get_max_sample_count(animation))
-    clamped_frame := clamp(frame, 0, last_frame)
-    sample_index := c.int(clamped_frame / last_frame * f32(clamped_count))
-    return clamp(sample_index, 0, clamped_count - 1)
-}
-
-// get_animation_pose_frame resolves the actual frame displayed by the model,
-// applying sample quantization only when sampled playback is enabled.
-get_animation_pose_frame :: proc(
-    playback: ^Animation_Playback,
-    animation: rl.ModelAnimation,
-) -> f32 {
-    last_frame := f32(max(animation.keyframeCount - 1, 0))
-    if !playback.sampled_playback {
-        return clamp(playback.current_frame, 0, last_frame)
-    }
-
-    sample_index := get_sample_index_for_frame(
-        animation,
-        playback.sample_count,
-        playback.current_frame,
-    )
-    return get_sampled_frame_at_index(
-        animation,
-        playback.sample_count,
-        sample_index,
-    )
-}
-
-// animation_reset_to_first_frame stops playback and marks frame zero for upload.
-animation_reset_to_first_frame :: proc(playback: ^Animation_Playback) {
-    playback.current_frame = 0
-    playback.is_playing = false
-    playback.pose_dirty = true
-}
-
-// animation_step_frame advances either one keyframe or one sample slot. It wraps
-// only when looping is enabled and always pauses continuous playback.
-animation_step_frame :: proc(
-    playback: ^Animation_Playback,
-    direction: int,
-) -> bool {
-    animation, animation_found := get_active_animation(playback)
-    if !animation_found || direction == 0 {
-        return false
-    }
-    if playback.sampled_playback {
-        sample_index := get_sample_index_for_frame(
-            animation,
-            playback.sample_count,
-            playback.current_frame,
-        )
-        playback.current_frame = get_sampled_frame_at_index(
-            animation,
-            playback.sample_count,
-            sample_index + c.int(direction),
-        )
-    } else {
-        last_frame := f32(max(animation.keyframeCount - 1, 0))
-        playback.current_frame = clamp(
-            playback.current_frame + f32(direction),
-            f32(0),
-            last_frame,
-        )
-    }
-    playback.is_playing = false
-    playback.pose_dirty = true
-    return true
-}
-
-// animation_cycle_clip selects the previous/next compatible clip with wrapping,
-// resets timeline state, and marks the new first pose dirty.
-animation_cycle_clip :: proc(
-    playback: ^Animation_Playback,
-    direction: int,
-) -> bool {
-    clip_count := c.int(len(playback.valid_indices))
-    if clip_count <= 1 || direction == 0 {
-        return false
-    }
-    playback.active_index = clamp(
-        playback.active_index + c.int(direction),
-        c.int(0),
-        clip_count - 1,
-    )
-    playback.current_frame = 0
-    playback.is_playing = false
-    playback.pose_dirty = true
-    return true
-}
-
-// update_animation_playback advances time, applies loop/end rules, quantizes the
-// pose when requested, and calls raylib only when the resolved pose changed.
-update_animation_playback :: proc(
-    playback: ^Animation_Playback,
-    model: rl.Model,
-) {
-    animation, animation_found := get_active_animation(playback)
-    if !animation_found {
-        return
-    }
-
-    last_frame := f32(max(animation.keyframeCount - 1, 0))
-    playback.sample_count = clamp(
-        playback.sample_count,
-        1,
-        get_max_sample_count(animation),
-    )
-    if playback.is_playing {
-        if last_frame <= 0 {
-            playback.current_frame = 0
-            playback.is_playing = false
-        } else {
-            playback.current_frame += rl.GetFrameTime() *
-                                      f32(ANIMATION_SAMPLE_FPS) *
-                                      playback.speed
-            if playback.sampled_playback && !playback.loop {
-                final_sample_frame := get_sampled_frame_at_index(
-                    animation,
-                    playback.sample_count,
-                    playback.sample_count - 1,
-                )
-                if playback.current_frame >= final_sample_frame {
-                    playback.current_frame = final_sample_frame
-                    playback.is_playing = false
-                }
-            } else if playback.loop {
-                if playback.current_frame >= last_frame {
-                    playback.current_frame = math.mod(
-                        playback.current_frame,
-                        last_frame,
-                    )
-                }
-            } else if playback.current_frame >= last_frame {
-                playback.current_frame = last_frame
-                playback.is_playing = false
-            }
-        }
-    }
-
-    playback.current_frame = clamp(playback.current_frame, 0, last_frame)
-    pose_frame := get_animation_pose_frame(playback, animation)
-    if playback.pose_dirty || pose_frame != playback.applied_frame {
-        rl.UpdateModelAnimation(model, animation, pose_frame)
-        playback.applied_frame = pose_frame
-        playback.pose_dirty = false
-    }
-}
-
-// get_model_center returns the midpoint of the current world-space bounding box.
 get_model_center :: proc(model: rl.Model) -> rl.Vector3 {
     model_bounds := rl.GetModelBoundingBox(model)
     return {
@@ -1081,7 +92,7 @@ reset_camera_to_axis_view :: proc(
 // Built-ins receive lens-aware front/top framing; assets use an isometric view.
 frame_camera_to_model :: proc(
     model: rl.Model,
-    source_kind: Model_Source_Kind,
+    source_kind: shared.Model_Source_Kind,
     camera: ^rl.Camera3D,
 ) -> f32 {
     model_bounds := rl.GetModelBoundingBox(model)
@@ -1198,7 +209,7 @@ inspector_cel_section_offset :: proc(state: ^Inspector_UI_State) -> f32 {
 inspector_content_height :: proc(
     state: ^Inspector_UI_State,
     cel_style_ui: ^Cel_Style_UI_State,
-    cel_style: ^Cel_Style,
+    cel_style: ^shared.Cel_Style,
 ) -> f32 {
     return inspector_cel_section_offset(state) +
            cel_style_editor_height(cel_style_ui, cel_style) +
@@ -1277,7 +288,7 @@ camera_input_permissions :: proc(
         return {}
     }
 
-    // A drag keeps the owner chosen on its press frame. Scene drags may cross
+    // A drag keeps the owner chosen on its press frame. shared.Scene drags may cross
     // the UI without stopping, while UI-originated drags may leave the UI
     // without leaking their held button into the camera controls.
     return {
@@ -1295,15 +306,15 @@ App_UI_Command_Context :: struct {
     quit_requested:          ^bool,
     shortcuts_help_open:     ^bool,
     export_requested:        ^bool,
-    lens_mode:               ^Lens_Mode,
+    lens_mode:               ^shared.Lens_Mode,
     lens_grid_visible:       ^bool,
     downscale_level:         ^c.int,
     inspector:               ^Inspector_UI_State,
     inspector_max_scroll:    f32,
-    model_browser:           ^Model_Browser_State,
+    model_browser:           ^shared.Model_Browser_State,
     cel_ui:                  ^Cel_Style_UI_State,
-    cel_style:               ^Cel_Style,
-    animation:               ^Animation_Playback,
+    cel_style:               ^shared.Cel_Style,
+    animation:               ^shared.Animation_Playback,
     camera:                  ^rl.Camera3D,
     model_center:            rl.Vector3,
     scene_size:              f32,
@@ -1315,7 +326,7 @@ App_UI_Command_Context :: struct {
 // maintains modal exclusivity, focus transfer, scroll positioning, and bounds
 // clamping so keyboard actions match their corresponding visible controls.
 execute_ui_command :: proc(
-    command: UI_Command,
+    command: shared.UI_Command,
     command_context: ^App_UI_Command_Context,
 ) {
     #partial switch command {
@@ -1323,9 +334,9 @@ execute_ui_command :: proc(
         command_context.shortcuts_help_open^ =
             !command_context.shortcuts_help_open^
         if command_context.shortcuts_help_open^ {
-            ui_keyboard_set_focus(.HELP_CLOSE)
+            shared.ui_keyboard_set_focus(.HELP_CLOSE)
         } else {
-            ui_keyboard_clear_focus()
+            shared.ui_keyboard_clear_focus()
         }
     case .QUIT:
         command_context.quit_requested^ = true
@@ -1336,7 +347,7 @@ execute_ui_command :: proc(
         command_context.animation.dropdown_open = false
         command_context.background_picker_open^ = false
         command_context.cel_ui.color_target = .NONE
-        ui_keyboard_set_focus(.MODEL_SEARCH)
+        shared.ui_keyboard_set_focus(.MODEL_SEARCH)
         // Prevent the shortcut key from becoming search text.
         for rl.GetCharPressed() != 0 {}
     case .TOGGLE_MODEL_SECTION:
@@ -1369,7 +380,7 @@ execute_ui_command :: proc(
             command_context.inspector.scroll_y = inspector_cel_section_offset(
                 command_context.inspector,
             )
-            ui_keyboard_set_focus(.CEL_HEADER)
+            shared.ui_keyboard_set_focus(.CEL_HEADER)
         } else {
             command_context.cel_ui.color_target = .NONE
         }
@@ -1459,33 +470,33 @@ execute_ui_command :: proc(
             c.int(MAX_DOWNSCALE_LEVEL),
         )
     case .ANIMATION_PLAY_PAUSE:
-        if has_playable_animations(command_context.animation) {
+        if shared.has_playable_animations(command_context.animation) {
             command_context.animation.is_playing =
                 !command_context.animation.is_playing
         }
     case .ANIMATION_FIRST_FRAME:
-        if has_playable_animations(command_context.animation) {
-            animation_reset_to_first_frame(command_context.animation)
+        if shared.has_playable_animations(command_context.animation) {
+            shared.animation_reset_to_first_frame(command_context.animation)
         }
     case .ANIMATION_PREVIOUS_FRAME:
-        _ = animation_step_frame(command_context.animation, -1)
+        _ = shared.animation_step_frame(command_context.animation, -1)
     case .ANIMATION_NEXT_FRAME:
-        _ = animation_step_frame(command_context.animation, 1)
+        _ = shared.animation_step_frame(command_context.animation, 1)
     case .ANIMATION_PREVIOUS_CLIP:
-        _ = animation_cycle_clip(command_context.animation, -1)
+        _ = shared.animation_cycle_clip(command_context.animation, -1)
     case .ANIMATION_NEXT_CLIP:
-        _ = animation_cycle_clip(command_context.animation, 1)
+        _ = shared.animation_cycle_clip(command_context.animation, 1)
     case .ANIMATION_TOGGLE_LOOP:
-        if has_playable_animations(command_context.animation) {
+        if shared.has_playable_animations(command_context.animation) {
             command_context.animation.loop = !command_context.animation.loop
         }
     case .ANIMATION_TOGGLE_SAMPLED:
-        if animation, found := get_active_animation(command_context.animation);
+        if animation, found := shared.get_active_animation(command_context.animation);
            found {
             command_context.animation.sampled_playback =
                 !command_context.animation.sampled_playback
             if command_context.animation.sampled_playback {
-                command_context.animation.current_frame = get_animation_pose_frame(
+                command_context.animation.current_frame = shared.get_animation_pose_frame(
                     command_context.animation,
                     animation,
                 )
@@ -1526,7 +537,7 @@ execute_ui_command :: proc(
         if command_context.background_picker_open^ {
             command_context.cel_ui.color_target = .NONE
             command_context.animation.dropdown_open = false
-            ui_keyboard_set_focus(.BACKGROUND_PICKER)
+            shared.ui_keyboard_set_focus(.BACKGROUND_PICKER)
         }
     case .RESET_BACKGROUND:
         command_context.background_color^ = rl.BLACK
@@ -1539,7 +550,7 @@ execute_ui_command :: proc(
 // and 2 invalid capture configuration or state.
 main :: proc() {
     if scene_editor_mode_requested(os.args[1:]) ||
-       cli_argument_present(os.args[1:], "--scene-help") {
+       shared.cli_argument_present(os.args[1:], "--scene-help") {
         scene_editor_exit_code := run_scene_editor_mode(os.args[1:])
         if scene_editor_exit_code != 0 {
             os.exit(scene_editor_exit_code)
@@ -1547,15 +558,15 @@ main :: proc() {
         return
     }
     if game_mode_requested(os.args[1:]) ||
-       cli_argument_present(os.args[1:], "--game-help") {
+       shared.cli_argument_present(os.args[1:], "--game-help") {
         game_exit_code := run_game_mode(os.args[1:])
         if game_exit_code != 0 {
             os.exit(game_exit_code)
         }
         return
     }
-    if standard_help_requested(os.args[1:]) {
-        print_viewer_usage()
+    if shared.standard_help_requested(os.args[1:]) {
+        shared.print_viewer_usage()
         return
     }
 
@@ -1566,10 +577,10 @@ main :: proc() {
         defer log.destroy_console_logger(console_logger)
         context.logger = console_logger
 
-        capture_parse_result := parse_capture_options(os.args[1:])
-        defer destroy_capture_options(&capture_parse_result.options)
+        capture_parse_result := shared.parse_capture_options(os.args[1:])
+        defer shared.destroy_capture_options(&capture_parse_result.options)
         if capture_parse_result.options.help_requested {
-            print_capture_usage()
+            shared.print_capture_usage()
             exit_code = 0
             break application_scope
         }
@@ -1621,7 +632,7 @@ main :: proc() {
                 capture_error_message,
                 capture_parse_result.error_argument,
             )
-            print_capture_usage()
+            shared.print_capture_usage()
             exit_code = 2
             break application_scope
         }
@@ -1633,32 +644,32 @@ main :: proc() {
             log.error(
                 viewer_video_options_error_message(viewer_video_options_error),
             )
-            print_capture_usage()
+            shared.print_capture_usage()
             exit_code = 2
             break application_scope
         }
         viewer_video_enabled := len(capture_options.video_output) > 0
-        viewer_video_encoder: Video_Stream_Encoder
-        defer destroy_video_stream_encoder(&viewer_video_encoder)
+        viewer_video_encoder: shared.Video_Stream_Encoder
+        defer shared.destroy_video_stream_encoder(&viewer_video_encoder)
 
-        cel_style := make_classic_cel_style()
-        defer destroy_cel_style(&cel_style)
+        cel_style := shared.make_classic_cel_style()
+        defer shared.destroy_cel_style(&cel_style)
         if capture_options.enabled && len(capture_options.style_path) > 0 {
-            loaded_style, style_error := load_cel_style(capture_options.style_path)
+            loaded_style, style_error := shared.load_cel_style(capture_options.style_path)
             if style_error != .NONE {
                 log.errorf(
                     "Failed to load capture cel style %s: %s",
                     capture_options.style_path,
-                    cel_style_error_message(style_error),
+                    shared.cel_style_error_message(style_error),
                 )
                 exit_code = 2
                 break application_scope
             }
-            replace_cel_style(&cel_style, loaded_style)
+            shared.replace_cel_style(&cel_style, loaded_style)
         }
 
         // Scan and label model sources inline during the application's only startup.
-        model_assets: Model_Assets
+        model_assets: shared.Model_Assets
         {
             directory_walker := os.walker_create(ASSETS_PATH)
             defer os.walker_destroy(&directory_walker)
@@ -1692,7 +703,7 @@ main :: proc() {
                 proc(asset_path: string) -> string { return asset_path },
             )
             for asset_path in model_assets.paths {
-                append(&model_assets.kinds, Model_Source_Kind.ASSET)
+                append(&model_assets.kinds, shared.Model_Source_Kind.ASSET)
                 display_label := asset_path
                 asset_marker := "/" + ASSETS_PATH + "/"
                 if marker_index := strings.last_index(asset_path, asset_marker);
@@ -1717,7 +728,7 @@ main :: proc() {
                 )
             }
 
-            for builtin_source in BUILTIN_MODEL_SOURCES {
+            for builtin_source in shared.BUILTIN_MODEL_SOURCES {
                 append(&model_assets.paths, strings.clone(builtin_source.path))
                 append(
                     &model_assets.labels,
@@ -1732,7 +743,7 @@ main :: proc() {
                 ASSETS_PATH,
             )
         }
-        defer destroy_model_assets(&model_assets)
+        defer shared.destroy_model_assets(&model_assets)
 
         rl.SetTraceLogLevel(.WARNING);
         if capture_options.enabled {
@@ -1757,43 +768,43 @@ main :: proc() {
         rl.SetTargetFPS(60);
 
         scene_shader, scene_shader_source, scene_shader_loaded :=
-            load_shader_with_includes(VS_PATH, FS_PATH)
+            shared.load_shader_with_includes(VS_PATH, FS_PATH)
         defer rl.UnloadShader(scene_shader)
-        defer destroy_preprocessed_shader_program_source(&scene_shader_source)
+        defer shared.destroy_preprocessed_shader_program_source(&scene_shader_source)
         assert(scene_shader_loaded)
-        scene_cel_bindings := resolve_cel_shader_bindings(scene_shader)
+        scene_cel_bindings := shared.resolve_cel_shader_bindings(scene_shader)
 
         downscale_shader, downscale_shader_source, downscale_shader_loaded :=
-            load_fragment_shader_with_includes(DOWNSCALE_FS_PATH)
+            shared.load_fragment_shader_with_includes(DOWNSCALE_FS_PATH)
         defer rl.UnloadShader(downscale_shader)
-        defer destroy_preprocessed_shader_source(&downscale_shader_source)
+        defer shared.destroy_preprocessed_shader_source(&downscale_shader_source)
         assert(downscale_shader_loaded)
 
-        cel_band_shader, cel_band_shader_source, cel_band_shader_loaded := load_shader_with_includes(
+        cel_band_shader, cel_band_shader_source, cel_band_shader_loaded := shared.load_shader_with_includes(
             VS_PATH,
             CEL_BAND_FS_PATH,
         )
-        defer destroy_preprocessed_shader_program_source(&cel_band_shader_source)
+        defer shared.destroy_preprocessed_shader_program_source(&cel_band_shader_source)
         assert(cel_band_shader_loaded)
-        cel_band_bindings := resolve_cel_shader_bindings(cel_band_shader)
+        cel_band_bindings := shared.resolve_cel_shader_bindings(cel_band_shader)
 
         mask_downscale_shader, mask_downscale_shader_source, mask_downscale_shader_loaded :=
-            load_fragment_shader_with_includes(MASK_DOWNSCALE_FS_PATH)
+            shared.load_fragment_shader_with_includes(MASK_DOWNSCALE_FS_PATH)
         defer rl.UnloadShader(mask_downscale_shader)
-        defer destroy_preprocessed_shader_source(&mask_downscale_shader_source)
+        defer shared.destroy_preprocessed_shader_source(&mask_downscale_shader_source)
         assert(mask_downscale_shader_loaded)
 
         outline_shader, outline_shader_source, outline_shader_loaded :=
-            load_fragment_shader_with_includes(OUTLINE_FS_PATH)
+            shared.load_fragment_shader_with_includes(OUTLINE_FS_PATH)
         defer rl.UnloadShader(outline_shader)
-        defer destroy_preprocessed_shader_source(&outline_shader_source)
+        defer shared.destroy_preprocessed_shader_source(&outline_shader_source)
         assert(outline_shader_loaded)
 
         // Build the ramp texture inline at its only creation site.
-        cel_ramp_pixels := build_cel_ramp_pixels(&cel_style)
+        cel_ramp_pixels := shared.build_cel_ramp_pixels(&cel_style)
         cel_ramp_image := rl.Image{
             data = raw_data(cel_ramp_pixels[:]),
-            width = CEL_RAMP_WIDTH,
+            width = shared.CEL_RAMP_WIDTH,
             height = 1,
             mipmaps = 1,
             format = .UNCOMPRESSED_R8G8B8A8,
@@ -1808,10 +819,10 @@ main :: proc() {
         applied_cel_ramp_revision := cel_style.revision
 
         active_model: rl.Model
-        animation_playback: Animation_Playback
+        animation_playback: shared.Animation_Playback
         defer {
-            destroy_animation_playback(&animation_playback)
-            if is_model_loaded(active_model) {
+            shared.destroy_animation_playback(&animation_playback)
+            if shared.is_model_loaded(active_model) {
                 rl.UnloadModel(active_model)
             }
         }
@@ -1828,18 +839,18 @@ main :: proc() {
         loaded_model_index: c.int = -1
         model_active_index: c.int = -1
         model_load_failed := false
-        model_browser := Model_Browser_State{
+        model_browser := shared.Model_Browser_State{
             active_index = -1,
             focus_index = -1,
         }
-        defer destroy_model_browser_state(&model_browser)
-        rebuild_model_search_results(&model_assets, &model_browser)
+        defer shared.destroy_model_browser_state(&model_browser)
+        shared.rebuild_model_search_results(&model_assets, &model_browser)
 
         if len(model_assets.paths) > 0 {
             initial_model_index := 0
             if capture_options.enabled && len(capture_options.model_source) > 0 {
                 requested_model_index, requested_model_found :=
-                    find_capture_model_source(
+                    shared.find_capture_model_source(
                         &model_assets,
                         capture_options.model_source,
                     )
@@ -1862,10 +873,10 @@ main :: proc() {
                 }
             }
 
-            initial_model := load_model_source(&model_assets, initial_model_index)
-            if is_model_loaded(initial_model) {
+            initial_model := shared.load_model_source(&model_assets, initial_model_index)
+            if shared.is_model_loaded(initial_model) {
                 active_model = initial_model
-                animation_playback = load_animation_playback(
+                animation_playback = shared.load_animation_playback(
                     active_model,
                     model_assets.paths[initial_model_index],
                     model_assets.kinds[initial_model_index],
@@ -1873,7 +884,7 @@ main :: proc() {
                 model_center = get_model_center(active_model)
                 loaded_model_index = c.int(initial_model_index)
                 model_active_index = loaded_model_index
-                set_model_browser_active_source(
+                shared.set_model_browser_active_source(
                     &model_browser,
                     loaded_model_index,
                 )
@@ -1923,7 +934,7 @@ main :: proc() {
                     if capture_options.animation_frame_set ||
                        capture_options.frame_range_set {
                         capture_animation, capture_animation_found :=
-                            get_active_animation(&animation_playback)
+                            shared.get_active_animation(&animation_playback)
                         if !capture_animation_found {
                             if capture_options.frame_range_set {
                                 log.errorf(
@@ -1966,7 +977,7 @@ main :: proc() {
                         }
                         animation_playback.current_frame = requested_first_frame
                         animation_playback.pose_dirty = true
-                        update_animation_playback(
+                        shared.update_animation_playback(
                             &animation_playback,
                             active_model,
                         )
@@ -2005,8 +1016,8 @@ main :: proc() {
 
         downscale_level := c.int(DEFAULT_DOWNSCALE_LEVEL)
         applied_downscale_level := downscale_level
-        downsample_width := get_downsample_dimension(screen_width, downscale_level)
-        downsample_height := get_downsample_dimension(screen_height, downscale_level)
+        downsample_width := shared.get_downsample_dimension(screen_width, downscale_level)
+        downsample_height := shared.get_downsample_dimension(screen_height, downscale_level)
         downsample_render_target := rl.LoadRenderTexture(
             downsample_width,
             downsample_height,
@@ -2031,7 +1042,7 @@ main :: proc() {
         defer rl.UnloadRenderTexture(composite_render_target)
         rl.SetTextureFilter(composite_render_target.texture, .POINT)
         if viewer_video_enabled {
-            video_start_error := start_video_stream_encoder(
+            video_start_error := shared.start_video_stream_encoder(
                 &viewer_video_encoder,
                 capture_options.video_output,
                 VIEWER_VIDEO_WIDTH,
@@ -2115,8 +1126,8 @@ main :: proc() {
             "u_edge_aa_mode",
         )
 
-        lens_mode := Lens_Mode.PIXELATED
-        edge_aa_mode := Edge_AA_Mode.HARD
+        lens_mode := shared.Lens_Mode.PIXELATED
+        edge_aa_mode := shared.Edge_AA_Mode.HARD
         if capture_options.enabled {
             lens_mode = capture_options.lens_mode
             edge_aa_mode = capture_options.edge_aa_mode
@@ -2169,11 +1180,11 @@ main :: proc() {
                     c.int(MIN_DOWNSCALE_LEVEL),
                     c.int(MAX_DOWNSCALE_LEVEL),
                 )
-                requested_width := get_downsample_dimension(
+                requested_width := shared.get_downsample_dimension(
                     screen_width,
                     requested_downscale_level,
                 )
-                requested_height := get_downsample_dimension(
+                requested_height := shared.get_downsample_dimension(
                     screen_height,
                     requested_downscale_level,
                 )
@@ -2257,49 +1268,49 @@ main :: proc() {
             for {
                 enabled := window_focused
                 trap_tab := active_modal
-                ui_keyboard.enabled = enabled
-                ui_keyboard.current_count = 0
+                shared.ui_keyboard.enabled = enabled
+                shared.ui_keyboard.current_count = 0
                 if !enabled {
-                    ui_keyboard.focused = .NONE
+                    shared.ui_keyboard.focused = .NONE
                     break
                 }
 
-                if !trap_tab && rl.IsKeyPressed(.TAB) && ui_keyboard.previous_count > 0 {
-                    focused_index := ui_find_focus_index(
-                        &ui_keyboard.previous_order[0],
-                        ui_keyboard.previous_count,
-                        ui_keyboard.focused,
+                if !trap_tab && rl.IsKeyPressed(.TAB) && shared.ui_keyboard.previous_count > 0 {
+                    focused_index := shared.ui_find_focus_index(
+                        &shared.ui_keyboard.previous_order[0],
+                        shared.ui_keyboard.previous_count,
+                        shared.ui_keyboard.focused,
                     )
                     move_backward := rl.IsKeyDown(.LEFT_SHIFT) ||
                                      rl.IsKeyDown(.RIGHT_SHIFT)
                     if move_backward {
                         if focused_index < 0 {
-                            focused_index = ui_keyboard.previous_count - 1
+                            focused_index = shared.ui_keyboard.previous_count - 1
                         } else {
-                            focused_index = (focused_index - 1 + ui_keyboard.previous_count) %
-                                            ui_keyboard.previous_count
+                            focused_index = (focused_index - 1 + shared.ui_keyboard.previous_count) %
+                                            shared.ui_keyboard.previous_count
                         }
                     } else {
-                        focused_index = (focused_index + 1) % ui_keyboard.previous_count
+                        focused_index = (focused_index + 1) % shared.ui_keyboard.previous_count
                     }
-                    ui_keyboard.focused = ui_keyboard.previous_order[focused_index]
+                    shared.ui_keyboard.focused = shared.ui_keyboard.previous_order[focused_index]
                 }
                 break
             }
             if shortcuts_help_open {
-                ui_keyboard_set_focus(.HELP_CLOSE)
+                shared.ui_keyboard_set_focus(.HELP_CLOSE)
             } else if model_browser.search_editing {
-                ui_keyboard_set_focus(.MODEL_SEARCH)
+                shared.ui_keyboard_set_focus(.MODEL_SEARCH)
             } else if animation_playback.dropdown_open {
-                ui_keyboard_set_focus(.ANIMATION_CLIP)
+                shared.ui_keyboard_set_focus(.ANIMATION_CLIP)
             } else if background_picker_open {
-                ui_keyboard_set_focus(.BACKGROUND_PICKER)
+                shared.ui_keyboard_set_focus(.BACKGROUND_PICKER)
             } else {
                 switch cel_style_ui.color_target {
-                case .BAND_TINT: ui_keyboard_set_focus(.CEL_BAND_TINT_PICKER)
-                case .RIM:       ui_keyboard_set_focus(.CEL_RIM_PICKER)
-                case .HIGHLIGHT: ui_keyboard_set_focus(.CEL_HIGHLIGHT_PICKER)
-                case .OUTLINE:   ui_keyboard_set_focus(.CEL_OUTLINE_PICKER)
+                case .BAND_TINT: shared.ui_keyboard_set_focus(.CEL_BAND_TINT_PICKER)
+                case .RIM:       shared.ui_keyboard_set_focus(.CEL_RIM_PICKER)
+                case .HIGHLIGHT: shared.ui_keyboard_set_focus(.CEL_HIGHLIGHT_PICKER)
+                case .OUTLINE:   shared.ui_keyboard_set_focus(.CEL_OUTLINE_PICKER)
                 case .NONE:
                 }
             }
@@ -2307,26 +1318,26 @@ main :: proc() {
             if window_focused && rl.IsKeyPressed(.ESCAPE) {
                 if shortcuts_help_open {
                     shortcuts_help_open = false
-                    ui_keyboard_clear_focus()
+                    shared.ui_keyboard_clear_focus()
                 } else if animation_playback.dropdown_open {
                     animation_playback.dropdown_open = false
-                    ui_keyboard_set_focus(.ANIMATION_CLIP)
+                    shared.ui_keyboard_set_focus(.ANIMATION_CLIP)
                 } else if background_picker_open {
                     background_picker_open = false
-                    ui_keyboard_set_focus(.BACKGROUND_PICKER_TOGGLE)
+                    shared.ui_keyboard_set_focus(.BACKGROUND_PICKER_TOGGLE)
                 } else if cel_style_ui.color_target != .NONE {
                     cel_style_ui.color_target = .NONE
                 } else if !model_browser.search_editing {
-                    ui_keyboard_clear_focus()
+                    shared.ui_keyboard_clear_focus()
                 }
             }
 
             // Resolve the active shortcut inline at its only dispatch point.
-            shortcut_command := UI_Command.NONE
+            shortcut_command := shared.UI_Command.NONE
             if window_focused {
-                shortcut_modifiers := ui_modifier_mask()
-                for binding in UI_SHORTCUT_BINDINGS {
-                    if !ui_shortcut_matches(binding, shortcut_modifiers, false) ||
+                shortcut_modifiers := shared.ui_modifier_mask()
+                for binding in shared.UI_SHORTCUT_BINDINGS {
+                    if !shared.ui_shortcut_matches(binding, shortcut_modifiers, false) ||
                        !rl.IsKeyPressed(binding.key) {
                         continue
                     }
@@ -2339,9 +1350,9 @@ main :: proc() {
             shortcut_conflicts_with_focus := false
             #partial switch shortcut_command {
             case .ANIMATION_PLAY_PAUSE:
-                shortcut_conflicts_with_focus = ui_keyboard.focused != .NONE
+                shortcut_conflicts_with_focus = shared.ui_keyboard.focused != .NONE
             case .ANIMATION_FIRST_FRAME:
-                #partial switch ui_keyboard.focused {
+                #partial switch shared.ui_keyboard.focused {
                 case .ANIMATION_TIMELINE, .ANIMATION_SPEED,
                      .ANIMATION_SAMPLE_COUNT, .MODEL_LIST, .CAMERA_DOWNSCALE,
                      .CAMERA_EDGE_AA,
@@ -2360,10 +1371,10 @@ main :: proc() {
                 }
             case .INSPECTOR_PAGE_UP, .INSPECTOR_PAGE_DOWN:
                 shortcut_conflicts_with_focus =
-                    ui_keyboard.focused == .MODEL_LIST ||
-                    ui_keyboard.focused == .INSPECTOR_SCROLLBAR
+                    shared.ui_keyboard.focused == .MODEL_LIST ||
+                    shared.ui_keyboard.focused == .INSPECTOR_SCROLLBAR
             }
-            if ui_keyboard_has_focus() && shortcut_conflicts_with_focus {
+            if shared.ui_keyboard_has_focus() && shortcut_conflicts_with_focus {
                 shortcut_command = .NONE
             }
             if active_modal && shortcut_command != .TOGGLE_HELP &&
@@ -2403,7 +1414,7 @@ main :: proc() {
             )
             mouse_over_background_picker := background_picker_open &&
                 rl.CheckCollisionPointRec(ui_mouse_position, background_picker_bounds)
-            mouse_over_animation_controls := has_playable_animations(
+            mouse_over_animation_controls := shared.has_playable_animations(
                 &animation_playback,
             ) && rl.CheckCollisionPointRec(
                 ui_mouse_position,
@@ -2455,16 +1466,16 @@ main :: proc() {
                 left_mouse_down || middle_mouse_down,
             )
             // Reserve primary/Alt-modified keys inline before camera handling.
-            camera_shortcut_modifiers := ui_modifier_mask()
+            camera_shortcut_modifiers := shared.ui_modifier_mask()
             shortcut_uses_command_modifier :=
-                camera_shortcut_modifiers & (UI_MOD_PRIMARY | UI_MOD_ALT) != 0
-            if ui_keyboard_has_focus() || shortcut_uses_command_modifier {
+                camera_shortcut_modifiers & (shared.UI_MOD_PRIMARY | shared.UI_MOD_ALT) != 0
+            if shared.ui_keyboard_has_focus() || shortcut_uses_command_modifier {
                 camera_input.keyboard = false
             }
             if !mouse_over_ui &&
                (rl.IsMouseButtonPressed(.LEFT) ||
                 rl.IsMouseButtonPressed(.MIDDLE)) {
-                ui_keyboard_clear_focus()
+                shared.ui_keyboard_clear_focus()
             }
             if camera_input.keyboard || camera_input.mouse {
                 // Apply keyboard, orbit, pan, and zoom input inline at the sole update site.
@@ -2669,28 +1680,28 @@ main :: proc() {
                 render_camera.target += snap_correction
             }
 
-            update_animation_playback(&animation_playback, active_model)
+            shared.update_animation_playback(&animation_playback, active_model)
 
             if !capture_options.enabled {
-                if reload_shader_with_includes(
+                if shared.reload_shader_with_includes(
                     VS_PATH,
                     FS_PATH,
                     &scene_shader,
                     &scene_shader_source,
                 ) {
-                    scene_cel_bindings = resolve_cel_shader_bindings(scene_shader)
+                    scene_cel_bindings = shared.resolve_cel_shader_bindings(scene_shader)
                 }
 
-                if reload_shader_with_includes(
+                if shared.reload_shader_with_includes(
                     VS_PATH,
                     CEL_BAND_FS_PATH,
                     &cel_band_shader,
                     &cel_band_shader_source,
                 ) {
-                    cel_band_bindings = resolve_cel_shader_bindings(cel_band_shader)
+                    cel_band_bindings = shared.resolve_cel_shader_bindings(cel_band_shader)
                 }
 
-                if reload_fragment_shader_with_includes(
+                if shared.reload_fragment_shader_with_includes(
                     DOWNSCALE_FS_PATH,
                     &downscale_shader,
                     &downscale_shader_source,
@@ -2725,7 +1736,7 @@ main :: proc() {
                     )
                 }
 
-                if reload_fragment_shader_with_includes(
+                if shared.reload_fragment_shader_with_includes(
                     MASK_DOWNSCALE_FS_PATH,
                     &mask_downscale_shader,
                     &mask_downscale_shader_source,
@@ -2740,7 +1751,7 @@ main :: proc() {
                     )
                 }
 
-                if reload_fragment_shader_with_includes(
+                if shared.reload_fragment_shader_with_includes(
                     OUTLINE_FS_PATH,
                     &outline_shader,
                     &outline_shader_source,
@@ -2774,7 +1785,7 @@ main :: proc() {
 
             if cel_style.revision != applied_cel_ramp_revision {
                 // Upload revised ramp pixels inline at the sole update point.
-                revised_cel_ramp_pixels := build_cel_ramp_pixels(&cel_style)
+                revised_cel_ramp_pixels := shared.build_cel_ramp_pixels(&cel_style)
                 rl.UpdateTexture(
                     cel_ramp_texture,
                     raw_data(revised_cel_ramp_pixels[:]),
@@ -2874,7 +1885,7 @@ main :: proc() {
             )
 
             rl.BeginTextureMode(scene_render_target)
-                apply_cel_style_to_shader(
+                shared.apply_cel_style_to_shader(
                     scene_shader,
                     &scene_cel_bindings,
                     &cel_style,
@@ -2889,7 +1900,7 @@ main :: proc() {
                     rl.ClearBackground(rl.BLANK)
 
                     rl.BeginMode3D(camera)
-                        if is_model_loaded(model) {
+                        if shared.is_model_loaded(model) {
                             // Keep each mesh's textures and material tint, but replace its
                             // shader for this draw only. The model still owns its materials.
                             for mesh_index := 0; mesh_index < int(model.meshCount); mesh_index += 1 {
@@ -2914,7 +1925,7 @@ main :: proc() {
             rl.EndTextureMode()
 
             rl.BeginTextureMode(cel_band_render_target)
-                apply_cel_style_to_shader(
+                shared.apply_cel_style_to_shader(
                     cel_band_shader,
                     &cel_band_bindings,
                     &cel_style,
@@ -2927,7 +1938,7 @@ main :: proc() {
                     camera := render_camera
                     rl.ClearBackground(rl.BLANK)
                     rl.BeginMode3D(camera)
-                        if is_model_loaded(model) {
+                        if shared.is_model_loaded(model) {
                             for mesh_index := 0; mesh_index < int(model.meshCount); mesh_index += 1 {
                                 material_index := int(model.meshMaterial[mesh_index])
                                 if material_index < 0 || material_index >= int(model.materialCount) {
@@ -3134,7 +2145,7 @@ main :: proc() {
                     rl.BeginMode3D(camera)
                         // Seed only the final framebuffer's depth buffer so the overlay remains
                         // spatially legible around the model without re-drawing its color.
-                        if is_model_loaded(model) {
+                        if shared.is_model_loaded(model) {
                             rl.DrawModel(model, {}, 1.0, rl.BLANK)
                         }
 
@@ -3319,7 +2330,7 @@ main :: proc() {
                     300,
                     28,
                 }
-                if ui_gui_button(
+                if shared.ui_gui_button(
                     .EXPORT_PNG,
                     export_button_bounds,
                     rl.TextFormat(
@@ -3357,7 +2368,7 @@ main :: proc() {
                 for {
                     bounds := animation_controls_bounds
                     playback := &animation_playback
-                    animation, animation_found := get_active_animation(playback)
+                    animation, animation_found := shared.get_active_animation(playback)
                     if !animation_found {
                         break
                     }
@@ -3385,20 +2396,20 @@ main :: proc() {
                     step_width: f32 = 40
                     play_width := content_width - reset_width - step_width * 2 - button_gap * 3
 
-                    if ui_gui_button(
+                    if shared.ui_gui_button(
                         .ANIMATION_FIRST,
                         {content_x, transport_y, reset_width, 24},
                         "|<",
                     ) {
-                        animation_reset_to_first_frame(playback)
+                        shared.animation_reset_to_first_frame(playback)
                     }
                     previous_button_x := content_x + reset_width + button_gap
-                    if ui_gui_button(
+                    if shared.ui_gui_button(
                         .ANIMATION_PREVIOUS,
                         {previous_button_x, transport_y, step_width, 24},
                         "<",
                     ) {
-                        _ = animation_step_frame(playback, -1)
+                        _ = shared.animation_step_frame(playback, -1)
                     }
 
                     play_button_x := previous_button_x + step_width + button_gap
@@ -3406,7 +2417,7 @@ main :: proc() {
                     if playback.is_playing {
                         play_label = "Pause [Space]"
                     }
-                    if ui_gui_button(
+                    if shared.ui_gui_button(
                         .ANIMATION_PLAY,
                         {play_button_x, transport_y, play_width, 24},
                         play_label,
@@ -3416,16 +2427,16 @@ main :: proc() {
 
                     next_button_x := play_button_x + play_width + button_gap
                     last_frame := f32(max(animation.keyframeCount - 1, 0))
-                    if ui_gui_button(
+                    if shared.ui_gui_button(
                         .ANIMATION_NEXT,
                         {next_button_x, transport_y, step_width, 24},
                         ">",
                     ) {
-                        _ = animation_step_frame(playback, 1)
+                        _ = shared.animation_step_frame(playback, 1)
                     }
 
                     timeline_label_y := bounds.y + 88
-                    display_frame := get_animation_pose_frame(playback, animation)
+                    display_frame := shared.get_animation_pose_frame(playback, animation)
                     rl.GuiLabel(
                         {content_x, timeline_label_y, content_width, 18},
                         rl.TextFormat(
@@ -3435,7 +2446,7 @@ main :: proc() {
                         ),
                     )
                     previous_frame := playback.current_frame
-                    _ = ui_gui_slider_bar(
+                    _ = shared.ui_gui_slider_bar(
                         .ANIMATION_TIMELINE,
                         {content_x, bounds.y + 108, content_width, 18},
                         nil,
@@ -3448,7 +2459,7 @@ main :: proc() {
                     )
                     if playback.current_frame != previous_frame {
                         if playback.sampled_playback {
-                            playback.current_frame = get_animation_pose_frame(
+                            playback.current_frame = shared.get_animation_pose_frame(
                                 playback,
                                 animation,
                             )
@@ -3459,7 +2470,7 @@ main :: proc() {
 
                     options_y := bounds.y + 136
                     rl.GuiLabel({content_x, options_y, 40, 18}, "Speed")
-                    _ = ui_gui_slider_bar(
+                    _ = shared.ui_gui_slider_bar(
                         .ANIMATION_SPEED,
                         {content_x + 42, options_y, 105, 18},
                         nil,
@@ -3474,7 +2485,7 @@ main :: proc() {
                         {content_x + 152, options_y, 48, 18},
                         rl.TextFormat("%.2fx", playback.speed),
                     )
-                    _ = ui_gui_check_box(
+                    _ = shared.ui_gui_check_box(
                         .ANIMATION_LOOP,
                         {content_x + 202, options_y + 1, 16, 16},
                         nil,
@@ -3484,7 +2495,7 @@ main :: proc() {
 
                     sample_options_y := bounds.y + 162
                     previous_sampled_playback := playback.sampled_playback
-                    _ = ui_gui_check_box(
+                    _ = shared.ui_gui_check_box(
                         .ANIMATION_SAMPLED,
                         {content_x, sample_options_y + 1, 16, 16},
                         nil,
@@ -3493,13 +2504,13 @@ main :: proc() {
                     rl.GuiLabel({content_x + 20, sample_options_y, 66, 18}, "Sampled")
                     rl.GuiLabel({content_x + 91, sample_options_y, 42, 18}, "Count")
                     previous_sample_count := playback.sample_count
-                    _ = ui_gui_spinner(
+                    _ = shared.ui_gui_spinner(
                         .ANIMATION_SAMPLE_COUNT,
                         {content_x + 136, sample_options_y - 2, content_width - 136, 22},
                         nil,
                         &playback.sample_count,
                         1,
-                        get_max_sample_count(animation),
+                        shared.get_max_sample_count(animation),
                         1,
                         4,
                         false,
@@ -3509,10 +2520,10 @@ main :: proc() {
                         playback.sample_count = clamp(
                             playback.sample_count,
                             1,
-                            get_max_sample_count(animation),
+                            shared.get_max_sample_count(animation),
                         )
                         if playback.sampled_playback {
-                            playback.current_frame = get_animation_pose_frame(
+                            playback.current_frame = shared.get_animation_pose_frame(
                                 playback,
                                 animation,
                             )
@@ -3529,7 +2540,7 @@ main :: proc() {
                     } else {
                         previous_active_index := playback.active_index
                         // Run the focus-aware dropdown inline in its sole clip selector.
-                        clip_focused := ui_register_control(.ANIMATION_CLIP, clip_bounds)
+                        clip_focused := shared.ui_register_control(.ANIMATION_CLIP, clip_bounds)
                         clip_toggled := rl.GuiDropdownBox(
                             clip_bounds,
                             playback.clip_options,
@@ -3537,9 +2548,9 @@ main :: proc() {
                             playback.dropdown_open,
                         )
                         if clip_focused && playback.dropdown_open &&
-                           !ui_primary_modifier_down() &&
+                           !shared.ui_primary_modifier_down() &&
                            !(rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)) {
-                            _ = ui_adjust_int(
+                            _ = shared.ui_adjust_int(
                                 &playback.active_index,
                                 0,
                                 max(c.int(len(playback.valid_indices)) - 1, 0),
@@ -3547,14 +2558,14 @@ main :: proc() {
                                 1,
                             )
                         }
-                        if clip_focused && ui_activation_pressed() {
+                        if clip_focused && shared.ui_activation_pressed() {
                             clip_toggled = true
                         }
-                        ui_draw_focus(clip_bounds, clip_focused)
+                        shared.ui_draw_focus(clip_bounds, clip_focused)
                         if clip_toggled {
                             playback.dropdown_open = !playback.dropdown_open
                             if playback.dropdown_open {
-                                ui_keyboard_set_focus(.ANIMATION_CLIP)
+                                shared.ui_keyboard_set_focus(.ANIMATION_CLIP)
                             }
                         }
                         if playback.active_index != previous_active_index {
@@ -3619,8 +2630,8 @@ main :: proc() {
                     c.int(view.height),
                 )
                     // Limit keyboard focus registration to the visible inspector viewport.
-                    ui_keyboard.clip_active = true
-                    ui_keyboard.clip_bounds = view
+                    shared.ui_keyboard.clip_active = true
+                    shared.ui_keyboard.clip_bounds = view
                     model_height := inspector_section_height(state.model_open, 310)
                     // Render the model browser inline in its only inspector location.
                     for {
@@ -3658,7 +2669,7 @@ main :: proc() {
                         }
                         search_was_editing := browser.search_editing
                         // Run the focus-aware text box inline in its sole search field.
-                        search_focused := ui_register_control(.MODEL_SEARCH, search_bounds)
+                        search_focused := shared.ui_register_control(.MODEL_SEARCH, search_bounds)
                         search_was_locked := rl.GuiIsLocked()
                         unlock_for_keyboard_edit := search_was_locked && search_focused &&
                                                     browser.search_editing
@@ -3674,11 +2685,11 @@ main :: proc() {
                         if unlock_for_keyboard_edit {
                             rl.GuiLock()
                         }
-                        if search_focused && !browser.search_editing && ui_modifier_mask() == 0 &&
+                        if search_focused && !browser.search_editing && shared.ui_modifier_mask() == 0 &&
                            (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.KP_ENTER)) {
                             search_toggled = true
                         }
-                        ui_draw_focus(search_bounds, search_focused || browser.search_editing)
+                        shared.ui_draw_focus(search_bounds, search_focused || browser.search_editing)
                         if search_toggled {
                             browser.search_editing = !browser.search_editing
                         }
@@ -3697,7 +2708,7 @@ main :: proc() {
                                 ),
                             )
                         }
-                        if ui_gui_button(
+                        if shared.ui_gui_button(
                             .MODEL_CLEAR,
                             clear_bounds,
                             rl.GuiIconText(.ICON_CROSS_SMALL, nil),
@@ -3707,7 +2718,7 @@ main :: proc() {
                         }
 
                         search_keyboard_active := search_was_editing || browser.search_editing
-                        list_has_keyboard_focus := ui_keyboard.focused == .MODEL_LIST
+                        list_has_keyboard_focus := shared.ui_keyboard.focused == .MODEL_LIST
                         enter_pressed := (search_keyboard_active || list_has_keyboard_focus) &&
                                          (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.KP_ENTER))
                         if search_keyboard_active && rl.IsKeyPressed(.ESCAPE) {
@@ -3718,7 +2729,7 @@ main :: proc() {
                             }
                         }
                         if browser.search_text != browser.previous_search_text {
-                            rebuild_model_search_results(&model_assets, browser)
+                            shared.rebuild_model_search_results(&model_assets, browser)
                         }
 
                         if (search_keyboard_active || list_has_keyboard_focus) &&
@@ -3766,7 +2777,7 @@ main :: proc() {
                             bounds.height - 92,
                         }
                         if len(browser.result_labels) > 0 {
-                            list_focused := ui_register_control(.MODEL_LIST, list_bounds)
+                            list_focused := shared.ui_register_control(.MODEL_LIST, list_bounds)
                             rl.GuiListViewEx(
                                 list_bounds,
                                 raw_data(browser.result_labels[:]),
@@ -3775,7 +2786,7 @@ main :: proc() {
                                 &browser.active_index,
                                 &browser.focus_index,
                             )
-                            ui_draw_focus(list_bounds, list_focused)
+                            shared.ui_draw_focus(list_bounds, list_focused)
                             result_clicked := !rl.GuiIsLocked() && rl.CheckCollisionPointRec(
                                 rl.GetMousePosition(),
                                 list_bounds,
@@ -3844,7 +2855,7 @@ main :: proc() {
 
                         button_gap: f32 = 6
                         button_width := (content_width - button_gap * 2) / 3
-                        if ui_gui_button(
+                        if shared.ui_gui_button(
                             .CAMERA_X,
                             {content_x, content_y, button_width, 24},
                             "X",
@@ -3858,7 +2869,7 @@ main :: proc() {
                             )
                             log.info("Camera reset to +X axis view")
                         }
-                        if ui_gui_button(
+                        if shared.ui_gui_button(
                             .CAMERA_Y,
                             {content_x + button_width + button_gap, content_y, button_width, 24},
                             "Y",
@@ -3872,7 +2883,7 @@ main :: proc() {
                             )
                             log.info("Camera reset to +Y axis view")
                         }
-                        if ui_gui_button(
+                        if shared.ui_gui_button(
                             .CAMERA_Z,
                             {
                                 content_x + (button_width + button_gap) * 2,
@@ -3893,7 +2904,7 @@ main :: proc() {
                         }
                         content_y += 28
 
-                        if ui_gui_button(
+                        if shared.ui_gui_button(
                             .CAMERA_ISOMETRIC,
                             {content_x, content_y, content_width, 24},
                             "Isometric [I]",
@@ -3910,7 +2921,7 @@ main :: proc() {
                         content_y += 30
 
                         rl.GuiLabel({content_x, content_y, 104, 22}, "Downscale level")
-                        _ = ui_gui_spinner(
+                        _ = shared.ui_gui_spinner(
                             .CAMERA_DOWNSCALE,
                             {content_x + 108, content_y, content_width - 108, 22},
                             nil,
@@ -3940,7 +2951,7 @@ main :: proc() {
                         rl.GuiLabel({content_x, content_y, 104, 22}, "Edge AA")
                         edge_aa_mode_index := c.int(edge_aa_mode_ptr^)
                         previous_edge_aa_mode := edge_aa_mode_index
-                        _ = ui_gui_combo_box(
+                        _ = shared.ui_gui_combo_box(
                             .CAMERA_EDGE_AA,
                             {content_x + 108, content_y, content_width - 108, 22},
                             "Hard;Coverage",
@@ -3948,7 +2959,7 @@ main :: proc() {
                             2,
                         )
                         if edge_aa_mode_index != previous_edge_aa_mode {
-                            edge_aa_mode_ptr^ = Edge_AA_Mode(edge_aa_mode_index)
+                            edge_aa_mode_ptr^ = shared.Edge_AA_Mode(edge_aa_mode_index)
                             if edge_aa_mode_ptr^ == .COVERAGE {
                                 log.info("Edge AA: coverage")
                             } else {
@@ -4006,7 +3017,7 @@ main :: proc() {
                         save_width: f32 = 44
                         reset_width := width - combo_width - reload_width - save_width - button_gap * 3
                         previous_preset := state.preset_index
-                        _ = ui_gui_combo_box(
+                        _ = shared.ui_gui_combo_box(
                             .CEL_PRESET,
                             {x, y, combo_width, 24},
                             CEL_STYLE_PRESET_OPTIONS,
@@ -4017,15 +3028,15 @@ main :: proc() {
                             _ = load_selected_cel_style_preset(state, style)
                         }
                         button_x := x + combo_width + button_gap
-                        if ui_gui_button(.CEL_RELOAD, {button_x, y, reload_width, 24}, "Reload") {
+                        if shared.ui_gui_button(.CEL_RELOAD, {button_x, y, reload_width, 24}, "Reload") {
                             _ = load_selected_cel_style_preset(state, style)
                         }
                         button_x += reload_width + button_gap
-                        if ui_gui_button(.CEL_SAVE, {button_x, y, save_width, 24}, "Save") {
+                        if shared.ui_gui_button(.CEL_SAVE, {button_x, y, save_width, 24}, "Save") {
                             _ = save_selected_cel_style_preset(state, style)
                         }
                         button_x += save_width + button_gap
-                        if ui_gui_button(.CEL_RESET, {button_x, y, reset_width, 24}, "Reset") {
+                        if shared.ui_gui_button(.CEL_RESET, {button_x, y, reset_width, 24}, "Reset") {
                             reset_cel_style_to_classic(state, style)
                         }
                         y += 30
@@ -4053,9 +3064,9 @@ main :: proc() {
                             tinted := band.tint * band.brightness
                             preview := base * (1 - band.tint_mix) + tinted * band.tint_mix
                             color := rl.Color{
-                                cel_color_component_to_byte(preview.x),
-                                cel_color_component_to_byte(preview.y),
-                                cel_color_component_to_byte(preview.z),
+                                shared.cel_color_component_to_byte(preview.x),
+                                shared.cel_color_component_to_byte(preview.y),
+                                shared.cel_color_component_to_byte(preview.z),
                                 255,
                             }
                             band_x := ramp_bounds.x + lower_bound * ramp_bounds.width
@@ -4096,7 +3107,7 @@ main :: proc() {
                             rl.GuiLabel({content_x, cursor_y, 104, 22}, "Light space")
                             light_space := c.int(style.light_space)
                             previous_light_space := light_space
-                            _ = ui_gui_combo_box(
+                            _ = shared.ui_gui_combo_box(
                                 .CEL_LIGHT_SPACE,
                                 {content_x + 108, cursor_y, content_width - 108, 22},
                                 "World;Camera;Model",
@@ -4104,7 +3115,7 @@ main :: proc() {
                                 3,
                             )
                             if light_space != previous_light_space {
-                                style.light_space = Cel_Light_Space(light_space)
+                                style.light_space = shared.Cel_Light_Space(light_space)
                                 content_changed = true
                             }
                             cursor_y += 30
@@ -4193,7 +3204,7 @@ main :: proc() {
 
                             rl.GuiLabel({bands_x, cursor_y, 38, 22}, "Band")
                             selected_display := state.selected_band + 1
-                            _ = ui_gui_spinner(
+                            _ = shared.ui_gui_spinner(
                                 .CEL_BAND_SELECT,
                                 {bands_x + 40, cursor_y, 62, 22},
                                 nil,
@@ -4206,7 +3217,7 @@ main :: proc() {
                             )
                             state.selected_band = selected_display - 1
                             add_width := (bands_width - 110) * 0.5
-                            if ui_gui_button(
+                            if shared.ui_gui_button(
                                 .CEL_BAND_ADD,
                                 {bands_x + 108, cursor_y, add_width, 22},
                                 "Add after",
@@ -4216,7 +3227,7 @@ main :: proc() {
                                     bands_changed = true
                                 }
                             }
-                            if ui_gui_button(
+                            if shared.ui_gui_button(
                                 .CEL_BAND_REMOVE,
                                 {
                                     bands_x + 112 + add_width,
@@ -4251,12 +3262,12 @@ main :: proc() {
                                 band_lower_bound := f32(0)
                                 if band_index > 0 {
                                     band_lower_bound = style.bands[band_index - 1].upper_bound +
-                                                       CEL_BOUNDARY_MINIMUM_GAP
+                                                       shared.CEL_BOUNDARY_MINIMUM_GAP
                                 }
-                                band_upper_bound := f32(1) - CEL_BOUNDARY_MINIMUM_GAP
+                                band_upper_bound := f32(1) - shared.CEL_BOUNDARY_MINIMUM_GAP
                                 if band_index < style.band_count - 2 {
                                     band_upper_bound = style.bands[band_index + 1].upper_bound -
-                                                       CEL_BOUNDARY_MINIMUM_GAP
+                                                       shared.CEL_BOUNDARY_MINIMUM_GAP
                                 }
                                 bands_changed = draw_cel_style_slider(
                                     .CEL_BAND_UPPER_BOUND,
@@ -4313,7 +3324,7 @@ main :: proc() {
                             cursor_y += 28
                             if state.color_target == .BAND_TINT {
                                 previous_tint_color := tint_color
-                                _ = ui_gui_color_picker(
+                                _ = shared.ui_gui_color_picker(
                                     .CEL_BAND_TINT_PICKER,
                                     {bands_x, cursor_y, 150, 150},
                                     &tint_color,
@@ -4329,7 +3340,7 @@ main :: proc() {
                             rl.GuiLabel({bands_x, cursor_y, 104, 22}, "Alpha")
                             alpha_mode := c.int(style.alpha_mode)
                             previous_alpha_mode := alpha_mode
-                            _ = ui_gui_combo_box(
+                            _ = shared.ui_gui_combo_box(
                                 .CEL_ALPHA_MODE,
                                 {bands_x + 108, cursor_y, bands_width - 108, 22},
                                 "Opaque;Mask",
@@ -4337,7 +3348,7 @@ main :: proc() {
                                 2,
                             )
                             if alpha_mode != previous_alpha_mode {
-                                style.alpha_mode = Cel_Alpha_Mode(alpha_mode)
+                                style.alpha_mode = shared.Cel_Alpha_Mode(alpha_mode)
                                 bands_changed = true
                             }
                             cursor_y += 30
@@ -4428,7 +3439,7 @@ main :: proc() {
                             rl.GuiLabel({outline_x, cursor_y, 104, 22}, "Width (pixels)")
                             outline_width := c.int(style.outline.width)
                             previous_width := outline_width
-                            _ = ui_gui_spinner(
+                            _ = shared.ui_gui_spinner(
                                 .CEL_OUTLINE_WIDTH,
                                 {
                                     outline_x + 108,
@@ -4477,7 +3488,7 @@ main :: proc() {
                             cursor_y += 32
                             if state.color_target == .OUTLINE {
                                 previous_color := outline_color
-                                _ = ui_gui_color_picker(
+                                _ = shared.ui_gui_color_picker(
                                     .CEL_OUTLINE_PICKER,
                                     {outline_x, cursor_y, 160, 160},
                                     &outline_color,
@@ -4507,7 +3518,7 @@ main :: proc() {
                                 0.1,
                             ) || outline_changed
                             if alpha != previous_alpha {
-                                style.outline.color.a = cel_color_component_to_byte(alpha)
+                                style.outline.color.a = shared.cel_color_component_to_byte(alpha)
                             }
                             changed = outline_changed || changed
                         }
@@ -4576,17 +3587,17 @@ main :: proc() {
                         if picker_open^ {
                             picker_button_text = "Close color picker"
                         }
-                        if ui_gui_button(
+                        if shared.ui_gui_button(
                             .BACKGROUND_PICKER_TOGGLE,
                             {button_x, bounds.y + 30, button_width, 25},
                             picker_button_text,
                         ) {
                             picker_open^ = !picker_open^
                             if picker_open^ {
-                                ui_keyboard_set_focus(.BACKGROUND_PICKER)
+                                shared.ui_keyboard_set_focus(.BACKGROUND_PICKER)
                             }
                         }
-                        if ui_gui_button(
+                        if shared.ui_gui_button(
                             .BACKGROUND_RESET,
                             {button_x, bounds.y + 59, button_width, 25},
                             "Reset to black",
@@ -4607,7 +3618,7 @@ main :: proc() {
                         break
                     }
                     // End the inspector's sole focus-clipping region.
-                    ui_keyboard.clip_active = false
+                    shared.ui_keyboard.clip_active = false
                 rl.EndScissorMode()
                 if content_locked_here {
                     rl.GuiUnlock()
@@ -4635,13 +3646,13 @@ main :: proc() {
                     }
                     thumb := rl.Rectangle{track.x + 2, thumb_y, track.width - 4, thumb_height}
                     mouse_position := rl.GetMousePosition()
-                    scrollbar_focused := ui_register_control(.INSPECTOR_SCROLLBAR, track)
+                    scrollbar_focused := shared.ui_register_control(.INSPECTOR_SCROLLBAR, track)
 
                     if scrollbar_focused {
-                        if ui_key_pressed_or_repeat(.UP) {
+                        if shared.ui_key_pressed_or_repeat(.UP) {
                             state.scroll_y = max(state.scroll_y - 42, f32(0))
                         }
-                        if ui_key_pressed_or_repeat(.DOWN) {
+                        if shared.ui_key_pressed_or_repeat(.DOWN) {
                             state.scroll_y = min(state.scroll_y + 42, max_scroll)
                         }
                         if rl.IsKeyPressed(.PAGE_UP) {
@@ -4690,7 +3701,7 @@ main :: proc() {
                         thumb_color = rl.Color{180, 180, 180, 255}
                     }
                     rl.DrawRectangleRec(thumb, thumb_color)
-                    ui_draw_focus(track, scrollbar_focused)
+                    shared.ui_draw_focus(track, scrollbar_focused)
                     break
                 }
                 // Render the floating background picker inline at its only draw point.
@@ -4704,7 +3715,7 @@ main :: proc() {
                         picker_open^ = false
                         break
                     }
-                    _ = ui_gui_color_picker(
+                    _ = shared.ui_gui_color_picker(
                         .BACKGROUND_PICKER,
                         {
                             picker_bounds.x + 12,
@@ -4733,13 +3744,13 @@ main :: proc() {
                         open := &shortcuts_help_open
                         rl.DrawRectangle(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight(), rl.Color{0, 0, 0, 170})
                         rl.GuiPanel(bounds, "KEYBOARD SHORTCUTS")
-                        if ui_gui_button(
+                        if shared.ui_gui_button(
                             .HELP_CLOSE,
                             {bounds.x + bounds.width - 34, bounds.y + 4, 28, 22},
                             "X",
                         ) {
                             open^ = false
-                            ui_keyboard_clear_focus()
+                            shared.ui_keyboard_clear_focus()
                             break
                         }
 
@@ -4748,7 +3759,7 @@ main :: proc() {
                         left_x := bounds.x + 16
                         right_x := left_x + column_width + 10
                         start_y := bounds.y + 36
-                        for line, line_index in UI_SHORTCUT_HELP_LEFT {
+                        for line, line_index in shared.UI_SHORTCUT_HELP_LEFT {
                             color := rl.Color{45, 45, 45, 255}
                             if line == "GENERAL" || line == "MODEL & INSPECTOR" ||
                                line == "LENS & CAMERA" {
@@ -4762,7 +3773,7 @@ main :: proc() {
                                 color,
                             )
                         }
-                        for line, line_index in UI_SHORTCUT_HELP_RIGHT {
+                        for line, line_index in shared.UI_SHORTCUT_HELP_RIGHT {
                             color := rl.Color{45, 45, 45, 255}
                             if line == "ANIMATION" || line == "CEL & BACKGROUND" ||
                                line == "FOCUSED CONTROLS" {
@@ -4781,33 +3792,33 @@ main :: proc() {
                 }
                 // Finalize keyboard focus order inline at the only frame end.
                 for {
-                    if !ui_keyboard.enabled {
+                    if !shared.ui_keyboard.enabled {
                         break
                     }
-                    if ui_keyboard.focused != .NONE &&
-                       ui_find_focus_index(
-                           &ui_keyboard.current_order[0],
-                           ui_keyboard.current_count,
-                           ui_keyboard.focused,
+                    if shared.ui_keyboard.focused != .NONE &&
+                       shared.ui_find_focus_index(
+                           &shared.ui_keyboard.current_order[0],
+                           shared.ui_keyboard.current_count,
+                           shared.ui_keyboard.focused,
                        ) < 0 {
-                        fallback := ui_focus_fallback(ui_keyboard.focused)
+                        fallback := shared.ui_focus_fallback(shared.ui_keyboard.focused)
                         if fallback != .NONE &&
-                           ui_find_focus_index(
-                               &ui_keyboard.current_order[0],
-                               ui_keyboard.current_count,
+                           shared.ui_find_focus_index(
+                               &shared.ui_keyboard.current_order[0],
+                               shared.ui_keyboard.current_count,
                                fallback,
                            ) >= 0 {
-                            ui_keyboard.focused = fallback
+                            shared.ui_keyboard.focused = fallback
                         } else {
-                            ui_keyboard.focused = .NONE
+                            shared.ui_keyboard.focused = .NONE
                         }
                     }
-                    ui_keyboard.previous_count = ui_keyboard.current_count
+                    shared.ui_keyboard.previous_count = shared.ui_keyboard.current_count
                     for control_index := 0;
-                        control_index < ui_keyboard.current_count;
+                        control_index < shared.ui_keyboard.current_count;
                         control_index += 1 {
-                        ui_keyboard.previous_order[control_index] =
-                            ui_keyboard.current_order[control_index]
+                        shared.ui_keyboard.previous_order[control_index] =
+                            shared.ui_keyboard.current_order[control_index]
                     }
                     break
                 }
@@ -5016,7 +4027,7 @@ main :: proc() {
                 rendered_capture_frames += 1
                 if rendered_capture_frames >= capture_options.warmup_frames {
                     if viewer_video_enabled {
-                        frame_streamed := video_stream_write_render_texture(
+                        frame_streamed := shared.video_stream_write_render_texture(
                             &viewer_video_encoder,
                             composite_render_target.texture,
                         )
@@ -5037,7 +4048,7 @@ main :: proc() {
                             if u64(captured_sequence_frames) >=
                                expected_video_frames {
                                 capture_complete = true
-                                capture_succeeded = finish_video_stream_encoder(
+                                capture_succeeded = shared.finish_video_stream_encoder(
                                     &viewer_video_encoder,
                                     capture_options.video_output,
                                     expected_video_frames,
@@ -5067,7 +4078,7 @@ main :: proc() {
                         capture_output_path := capture_options.output_path
                         capture_output_path_owned := false
                         if capture_options.frame_range_set {
-                            capture_output_path = format_capture_sequence_output_path(
+                            capture_output_path = shared.format_capture_sequence_output_path(
                                 capture_options.output_path,
                                 capture_options.output_template,
                                 capture_sequence_frame,
@@ -5078,28 +4089,28 @@ main :: proc() {
                         lens_crop_bounds := lens_bounds
                         switch capture_options.target {
                         case .COMPOSITE:
-                            capture_succeeded = export_render_texture_png(
+                            capture_succeeded = shared.export_render_texture_png(
                                 composite_render_target.texture,
                                 capture_output_path,
                             )
                         case .LENS:
-                            capture_succeeded = export_render_texture_png(
+                            capture_succeeded = shared.export_render_texture_png(
                                 composite_render_target.texture,
                                 capture_output_path,
                                 &lens_crop_bounds,
                             )
                         case .SCENE:
-                            capture_succeeded = export_render_texture_png(
+                            capture_succeeded = shared.export_render_texture_png(
                                 scene_render_target.texture,
                                 capture_output_path,
                             )
                         case .DOWNSAMPLE:
-                            capture_succeeded = export_render_texture_png(
+                            capture_succeeded = shared.export_render_texture_png(
                                 outlined_render_target.texture,
                                 capture_output_path,
                             )
                         case .COVERAGE_MASK:
-                            capture_succeeded = export_render_texture_png(
+                            capture_succeeded = shared.export_render_texture_png(
                                 coverage_mask_render_target.texture,
                                 capture_output_path,
                             )
@@ -5158,25 +4169,25 @@ main :: proc() {
                 int(model_active_index) < len(model_assets.paths) {
                 requested_model_index := int(model_active_index)
                 requested_model_label := model_assets.labels[requested_model_index]
-                requested_model := load_model_source(
+                requested_model := shared.load_model_source(
                     &model_assets,
                     requested_model_index,
                 )
-                if is_model_loaded(requested_model) {
-                    requested_animation_playback := load_animation_playback(
+                if shared.is_model_loaded(requested_model) {
+                    requested_animation_playback := shared.load_animation_playback(
                         requested_model,
                         model_assets.paths[requested_model_index],
                         model_assets.kinds[requested_model_index],
                     )
-                    destroy_animation_playback(&animation_playback)
-                    if is_model_loaded(active_model) {
+                    shared.destroy_animation_playback(&animation_playback)
+                    if shared.is_model_loaded(active_model) {
                         rl.UnloadModel(active_model)
                     }
                     active_model = requested_model
                     animation_playback = requested_animation_playback
                     model_center = get_model_center(active_model)
                     loaded_model_index = model_active_index
-                    set_model_browser_active_source(
+                    shared.set_model_browser_active_source(
                         &model_browser,
                         loaded_model_index,
                     )
@@ -5191,7 +4202,7 @@ main :: proc() {
                 } else {
                     rl.UnloadModel(requested_model)
                     model_active_index = loaded_model_index
-                    set_model_browser_active_source(
+                    shared.set_model_browser_active_source(
                         &model_browser,
                         loaded_model_index,
                     )

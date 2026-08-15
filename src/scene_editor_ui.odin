@@ -1,7 +1,7 @@
 package main
 
 // Interactive raygui hierarchy, inspector, file controls, picking, and camera
-// navigation for Scene Editor mode. Editor-only overlays are drawn after the
+// navigation for shared.Scene Editor mode. Editor-only overlays are drawn after the
 // deterministic composite texture and therefore never enter captures.
 
 import "core:c"
@@ -10,6 +10,7 @@ import "core:math"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import shared "./shared"
 import rl "vendor:raylib"
 
 SCENE_EDITOR_TOP_HEIGHT   :: f32(40)
@@ -17,7 +18,7 @@ SCENE_EDITOR_LEFT_WIDTH   :: f32(250)
 SCENE_EDITOR_RIGHT_WIDTH  :: f32(320)
 SCENE_EDITOR_PATH_CAPACITY :: 384
 SCENE_EDITOR_MODEL_PATH_CAPACITY :: 256
-SCENE_EDITOR_NAME_CAPACITY :: SCENE_MAX_NAME_BYTES + 1
+SCENE_EDITOR_NAME_CAPACITY :: shared.SCENE_MAX_NAME_BYTES + 1
 
 Scene_Selection_Kind :: enum {
     NONE,
@@ -27,8 +28,8 @@ Scene_Selection_Kind :: enum {
     SPOT_LIGHT,
 }
 
-// Selection indexes one of Scene's four dynamic arrays. Model selection also
-// indexes Scene_Resources.models; mutation helpers must keep those arrays in
+// Selection indexes one of shared.Scene's four dynamic arrays. Model selection also
+// indexes shared.Scene_Resources.models; mutation helpers must keep those arrays in
 // identical order and clear selection after an index-removing operation.
 Scene_Selection :: struct {
     kind:  Scene_Selection_Kind,
@@ -145,9 +146,9 @@ scene_editor_complete_pending_action :: proc(
 scene_ui_status_text :: proc(status: Scene_UI_Status) -> cstring {
     switch status {
     case .NONE:                 return "Ready"
-    case .SAVED:                return "Scene saved"
+    case .SAVED:                return "shared.Scene saved"
     case .SAVE_FAILED:          return "Save failed - check validation and path"
-    case .LOADED:               return "Scene loaded"
+    case .LOADED:               return "shared.Scene loaded"
     case .LOAD_FAILED:          return "Load failed - previous scene kept"
     case .UNSAVED_LOAD_BLOCKED: return "Save changes before loading another scene"
     case .MODEL_ADDED:          return "Model added"
@@ -163,10 +164,10 @@ scene_editor_viewport_bounds :: proc() -> rl.Rectangle {
     available := rl.Rectangle{
         SCENE_EDITOR_LEFT_WIDTH,
         SCENE_EDITOR_TOP_HEIGHT,
-        f32(SCENE_SCREEN_WIDTH) - SCENE_EDITOR_LEFT_WIDTH - SCENE_EDITOR_RIGHT_WIDTH,
-        f32(SCENE_SCREEN_HEIGHT) - SCENE_EDITOR_TOP_HEIGHT,
+        f32(shared.SCENE_SCREEN_WIDTH) - SCENE_EDITOR_LEFT_WIDTH - SCENE_EDITOR_RIGHT_WIDTH,
+        f32(shared.SCENE_SCREEN_HEIGHT) - SCENE_EDITOR_TOP_HEIGHT,
     }
-    target_aspect := f32(SCENE_SCREEN_WIDTH) / f32(SCENE_SCREEN_HEIGHT)
+    target_aspect := f32(shared.SCENE_SCREEN_WIDTH) / f32(shared.SCENE_SCREEN_HEIGHT)
     width := available.width
     height := width / target_aspect
     if height > available.height {
@@ -181,7 +182,7 @@ scene_editor_viewport_bounds :: proc() -> rl.Rectangle {
     }
 }
 
-scene_selection_valid :: proc(selection: Scene_Selection, scene: ^Scene) -> bool {
+scene_selection_valid :: proc(selection: Scene_Selection, scene: ^shared.Scene) -> bool {
     switch selection.kind {
     case .NONE:        return false
     case .MODEL:       return selection.index >= 0 && selection.index < len(scene.models)
@@ -194,7 +195,7 @@ scene_selection_valid :: proc(selection: Scene_Selection, scene: ^Scene) -> bool
 
 scene_selection_name :: proc(
     selection: Scene_Selection,
-    scene: ^Scene,
+    scene: ^shared.Scene,
 ) -> string {
     if !scene_selection_valid(selection, scene) { return "" }
     switch selection.kind {
@@ -209,7 +210,7 @@ scene_selection_name :: proc(
 
 scene_selection_id :: proc(
     selection: Scene_Selection,
-    scene: ^Scene,
+    scene: ^shared.Scene,
 ) -> string {
     if !scene_selection_valid(selection, scene) { return "" }
     switch selection.kind {
@@ -224,10 +225,10 @@ scene_selection_id :: proc(
 
 scene_set_selection_name :: proc(
     selection: Scene_Selection,
-    scene: ^Scene,
+    scene: ^shared.Scene,
     name: string,
 ) -> bool {
-    if !scene_selection_valid(selection, scene) || !scene_name_valid(name) {
+    if !scene_selection_valid(selection, scene) || !shared.scene_name_valid(name) {
         return false
     }
     target: ^string
@@ -246,7 +247,7 @@ scene_set_selection_name :: proc(
     return true
 }
 
-scene_item_id_exists :: proc(scene: ^Scene, id: string) -> bool {
+scene_item_id_exists :: proc(scene: ^shared.Scene, id: string) -> bool {
     for item in scene.models do if item.id == id { return true }
     for item in scene.primitives do if item.id == id { return true }
     for item in scene.point_lights do if item.id == id { return true }
@@ -254,7 +255,7 @@ scene_item_id_exists :: proc(scene: ^Scene, id: string) -> bool {
     return false
 }
 
-scene_item_count :: proc(scene: ^Scene) -> int {
+scene_item_count :: proc(scene: ^shared.Scene) -> int {
     return len(scene.models) + len(scene.primitives) +
            len(scene.point_lights) + len(scene.spot_lights)
 }
@@ -262,7 +263,7 @@ scene_item_count :: proc(scene: ^Scene) -> int {
 // ID counters are deliberately absent from scene JSON. On first allocation
 // after load, scan every item kind for the largest matching numeric suffix,
 // then advance monotonically while still checking the global namespace.
-scene_next_item_id :: proc(scene: ^Scene, prefix: string) -> string {
+scene_next_item_id :: proc(scene: ^shared.Scene, prefix: string) -> string {
     counter: ^int
     switch prefix {
     case "model":     counter = &scene.next_model_id
@@ -306,17 +307,17 @@ scene_next_item_id :: proc(scene: ^Scene, prefix: string) -> string {
 }
 
 scene_add_primitive :: proc(
-    scene: ^Scene,
-    shape: Scene_Primitive_Shape,
+    scene: ^shared.Scene,
+    shape: shared.Scene_Primitive_Shape,
 ) -> int {
-    if scene_item_count(scene) >= SCENE_MAX_ITEMS { return -1 }
+    if scene_item_count(scene) >= shared.SCENE_MAX_ITEMS { return -1 }
     id := scene_next_item_id(scene, "primitive")
-    name := strings.clone(scene_primitive_shape_to_string(shape))
+    name := strings.clone(shared.scene_primitive_shape_to_string(shape))
     if len(name) > 0 {
         mutable := transmute([]u8)name
-        mutable[0] = ascii_search_lower(mutable[0]) - ('a' - 'A')
+        mutable[0] = shared.ascii_search_lower(mutable[0]) - ('a' - 'A')
     }
-    append(&scene.primitives, Scene_Primitive{
+    append(&scene.primitives, shared.Scene_Primitive{
         id = id,
         name = name,
         visible = true,
@@ -331,12 +332,12 @@ scene_add_primitive :: proc(
     return len(scene.primitives) - 1
 }
 
-scene_add_point_light :: proc(scene: ^Scene) -> int {
-    if scene_item_count(scene) >= SCENE_MAX_ITEMS ||
-       len(scene.point_lights) >= SCENE_MAX_POINT_LIGHTS {
+scene_add_point_light :: proc(scene: ^shared.Scene) -> int {
+    if scene_item_count(scene) >= shared.SCENE_MAX_ITEMS ||
+       len(scene.point_lights) >= shared.SCENE_MAX_POINT_LIGHTS {
         return -1
     }
-    append(&scene.point_lights, Scene_Point_Light{
+    append(&scene.point_lights, shared.Scene_Point_Light{
         id = scene_next_item_id(scene, "point"),
         name = strings.clone("Point Light"),
         enabled = true,
@@ -349,18 +350,18 @@ scene_add_point_light :: proc(scene: ^Scene) -> int {
     return len(scene.point_lights) - 1
 }
 
-scene_add_spot_light :: proc(scene: ^Scene) -> int {
-    if scene_item_count(scene) >= SCENE_MAX_ITEMS ||
-       len(scene.spot_lights) >= SCENE_MAX_SPOT_LIGHTS {
+scene_add_spot_light :: proc(scene: ^shared.Scene) -> int {
+    if scene_item_count(scene) >= shared.SCENE_MAX_ITEMS ||
+       len(scene.spot_lights) >= shared.SCENE_MAX_SPOT_LIGHTS {
         return -1
     }
     direction := scene.camera.target - scene.camera.position
-    append(&scene.spot_lights, Scene_Spot_Light{
+    append(&scene.spot_lights, shared.Scene_Spot_Light{
         id = scene_next_item_id(scene, "spot"),
         name = strings.clone("Spot Light"),
         enabled = true,
         position = scene.camera.position,
-        direction = scene_normalize_direction_stable(direction),
+        direction = shared.scene_normalize_direction_stable(direction),
         color = {0.65, 0.78, 1},
         intensity = 1,
         range = 10,
@@ -375,19 +376,19 @@ scene_add_spot_light :: proc(scene: ^Scene) -> int {
 // the invariant that scene.models[i] and resources.models[i] describe the same
 // imported instance; failure leaves both active arrays unchanged.
 scene_editor_add_model :: proc(
-    scene: ^Scene,
-    resources: ^Scene_Resources,
+    scene: ^shared.Scene,
+    resources: ^shared.Scene_Resources,
     source: string,
 ) -> bool {
-    if scene_item_count(scene) >= SCENE_MAX_ITEMS ||
-       len(scene.models) >= SCENE_MAX_MODELS ||
-       !scene_file_path_portable(source, os.ext(source)) ||
-       !scene_model_extension_supported(source) ||
+    if scene_item_count(scene) >= shared.SCENE_MAX_ITEMS ||
+       len(scene.models) >= shared.SCENE_MAX_MODELS ||
+       !shared.scene_file_path_portable(source, os.ext(source)) ||
+       !shared.scene_model_extension_supported(source) ||
        !os.is_file(source) {
         return false
     }
     display_name := filepath.base(source)
-    model := Scene_Model{
+    model := shared.Scene_Model{
         id = scene_next_item_id(scene, "model"),
         name = strings.clone(display_name),
         visible = true,
@@ -398,7 +399,7 @@ scene_editor_add_model :: proc(
         },
         tint = rl.WHITE,
     }
-    resource, resource_error := scene_load_model_resource(&model)
+    resource, resource_error := shared.scene_load_model_resource(&model)
     if resource_error != .NONE {
         delete(model.id)
         delete(model.name)
@@ -416,12 +417,12 @@ scene_editor_add_model :: proc(
 // mutates mesh vertices and cannot be shared safely between instances.
 scene_editor_duplicate_selection :: proc(
     state: ^Scene_Editor_UI_State,
-    scene: ^Scene,
-    resources: ^Scene_Resources,
+    scene: ^shared.Scene,
+    resources: ^shared.Scene_Resources,
 ) -> bool {
     selection := state.selection
     if !scene_selection_valid(selection, scene) ||
-       scene_item_count(scene) >= SCENE_MAX_ITEMS {
+       scene_item_count(scene) >= shared.SCENE_MAX_ITEMS {
         return false
     }
 
@@ -429,13 +430,13 @@ scene_editor_duplicate_selection :: proc(
     case .NONE:
         return false
     case .MODEL:
-        if len(scene.models) >= SCENE_MAX_MODELS { return false }
+        if len(scene.models) >= shared.SCENE_MAX_MODELS { return false }
         source := &scene.models[selection.index]
         duplicate := source^
         duplicate.id = scene_next_item_id(scene, "model")
         duplicate.name = strings.clone(source.name)
         duplicate.source = strings.clone(source.source)
-        resource, resource_error := scene_load_model_resource(&duplicate)
+        resource, resource_error := shared.scene_load_model_resource(&duplicate)
         if resource_error != .NONE {
             delete(duplicate.id)
             delete(duplicate.name)
@@ -453,7 +454,7 @@ scene_editor_duplicate_selection :: proc(
         append(&scene.primitives, duplicate)
         state.selection = {.PRIMITIVE, len(scene.primitives) - 1}
     case .POINT_LIGHT:
-        if len(scene.point_lights) >= SCENE_MAX_POINT_LIGHTS { return false }
+        if len(scene.point_lights) >= shared.SCENE_MAX_POINT_LIGHTS { return false }
         source := &scene.point_lights[selection.index]
         duplicate := source^
         duplicate.id = scene_next_item_id(scene, "point")
@@ -461,7 +462,7 @@ scene_editor_duplicate_selection :: proc(
         append(&scene.point_lights, duplicate)
         state.selection = {.POINT_LIGHT, len(scene.point_lights) - 1}
     case .SPOT_LIGHT:
-        if len(scene.spot_lights) >= SCENE_MAX_SPOT_LIGHTS { return false }
+        if len(scene.spot_lights) >= shared.SCENE_MAX_SPOT_LIGHTS { return false }
         source := &scene.spot_lights[selection.index]
         duplicate := source^
         duplicate.id = scene_next_item_id(scene, "spot")
@@ -478,8 +479,8 @@ scene_editor_duplicate_selection :: proc(
 // resource arrays keep matching indices after the selected resource is freed.
 scene_editor_delete_selection :: proc(
     state: ^Scene_Editor_UI_State,
-    scene: ^Scene,
-    resources: ^Scene_Resources,
+    scene: ^shared.Scene,
+    resources: ^shared.Scene_Resources,
 ) -> bool {
     selection := state.selection
     if !scene_selection_valid(selection, scene) { return false }
@@ -488,7 +489,7 @@ scene_editor_delete_selection :: proc(
     case .MODEL:
         item := &scene.models[selection.index]
         delete(item.id); delete(item.name); delete(item.source)
-        scene_model_resource_destroy(&resources.models[selection.index])
+        shared.scene_model_resource_destroy(&resources.models[selection.index])
         ordered_remove(&scene.models, selection.index)
         ordered_remove(&resources.models, selection.index)
     case .PRIMITIVE:
@@ -516,42 +517,42 @@ scene_editor_delete_selection :: proc(
 // only after every replacement component is valid.
 scene_editor_open_path :: proc(
     path: string,
-    scene: ^Scene,
-    style: ^Cel_Style,
-    renderer: ^Scene_Renderer,
-    resources: ^Scene_Resources,
+    scene: ^shared.Scene,
+    style: ^shared.Cel_Style,
+    renderer: ^shared.Scene_Renderer,
+    resources: ^shared.Scene_Resources,
 ) -> bool {
-    replacement_scene, scene_error := load_scene(path)
+    replacement_scene, scene_error := shared.load_scene(path)
     if scene_error != .NONE { return false }
-    replacement_style, style_error := load_cel_style(replacement_scene.style_path)
+    replacement_style, style_error := shared.load_cel_style(replacement_scene.style_path)
     if style_error != .NONE {
-        destroy_scene(&replacement_scene)
+        shared.destroy_scene(&replacement_scene)
         return false
     }
-    replacement_renderer: Scene_Renderer
-    if !scene_renderer_init(
+    replacement_renderer: shared.Scene_Renderer
+    if !shared.scene_renderer_init(
         &replacement_renderer,
         &replacement_style,
         replacement_scene.render.downscale_level,
     ) {
-        scene_renderer_destroy(&replacement_renderer)
-        destroy_cel_style(&replacement_style)
-        destroy_scene(&replacement_scene)
+        shared.scene_renderer_destroy(&replacement_renderer)
+        shared.destroy_cel_style(&replacement_style)
+        shared.destroy_scene(&replacement_scene)
         return false
     }
-    replacement_resources, resource_error := scene_load_resources(&replacement_scene)
+    replacement_resources, resource_error := shared.scene_load_resources(&replacement_scene)
     if resource_error != .NONE {
-        scene_resources_destroy(&replacement_resources)
-        scene_renderer_destroy(&replacement_renderer)
-        destroy_cel_style(&replacement_style)
-        destroy_scene(&replacement_scene)
+        shared.scene_resources_destroy(&replacement_resources)
+        shared.scene_renderer_destroy(&replacement_renderer)
+        shared.destroy_cel_style(&replacement_style)
+        shared.destroy_scene(&replacement_scene)
         return false
     }
 
-    scene_resources_destroy(resources)
-    scene_renderer_destroy(renderer)
-    destroy_cel_style(style)
-    destroy_scene(scene)
+    shared.scene_resources_destroy(resources)
+    shared.scene_renderer_destroy(renderer)
+    shared.destroy_cel_style(style)
+    shared.destroy_scene(scene)
     scene^ = replacement_scene
     style^ = replacement_style
     renderer^ = replacement_renderer
@@ -562,42 +563,42 @@ scene_editor_open_path :: proc(
 // New follows the same transactional path as Open so shader or asset failures
 // cannot strand the editor without its previous valid scene and renderer.
 scene_editor_new_default :: proc(
-    scene: ^Scene,
-    style: ^Cel_Style,
-    renderer: ^Scene_Renderer,
-    resources: ^Scene_Resources,
+    scene: ^shared.Scene,
+    style: ^shared.Cel_Style,
+    renderer: ^shared.Scene_Renderer,
+    resources: ^shared.Scene_Resources,
 ) -> bool {
-    replacement_scene := make_default_scene()
+    replacement_scene := shared.make_default_scene()
     replacement_scene.dirty = true
-    replacement_style, style_error := load_cel_style(replacement_scene.style_path)
+    replacement_style, style_error := shared.load_cel_style(replacement_scene.style_path)
     if style_error != .NONE {
-        destroy_scene(&replacement_scene)
+        shared.destroy_scene(&replacement_scene)
         return false
     }
-    replacement_renderer: Scene_Renderer
-    if !scene_renderer_init(
+    replacement_renderer: shared.Scene_Renderer
+    if !shared.scene_renderer_init(
         &replacement_renderer,
         &replacement_style,
         replacement_scene.render.downscale_level,
     ) {
-        scene_renderer_destroy(&replacement_renderer)
-        destroy_cel_style(&replacement_style)
-        destroy_scene(&replacement_scene)
+        shared.scene_renderer_destroy(&replacement_renderer)
+        shared.destroy_cel_style(&replacement_style)
+        shared.destroy_scene(&replacement_scene)
         return false
     }
-    replacement_resources, resource_error := scene_load_resources(&replacement_scene)
+    replacement_resources, resource_error := shared.scene_load_resources(&replacement_scene)
     if resource_error != .NONE {
-        scene_resources_destroy(&replacement_resources)
-        scene_renderer_destroy(&replacement_renderer)
-        destroy_cel_style(&replacement_style)
-        destroy_scene(&replacement_scene)
+        shared.scene_resources_destroy(&replacement_resources)
+        shared.scene_renderer_destroy(&replacement_renderer)
+        shared.destroy_cel_style(&replacement_style)
+        shared.destroy_scene(&replacement_scene)
         return false
     }
 
-    scene_resources_destroy(resources)
-    scene_renderer_destroy(renderer)
-    destroy_cel_style(style)
-    destroy_scene(scene)
+    shared.scene_resources_destroy(resources)
+    shared.scene_renderer_destroy(renderer)
+    shared.destroy_cel_style(style)
+    shared.destroy_scene(scene)
     scene^ = replacement_scene
     style^ = replacement_style
     renderer^ = replacement_renderer
@@ -609,27 +610,27 @@ scene_editor_new_default :: proc(
 // 1280x720 render space used to construct the ray. Test every visible mesh and
 // light proxy, retaining the nearest world-space collision across item kinds.
 scene_editor_pick :: proc(
-    scene: ^Scene,
-    resources: ^Scene_Resources,
+    scene: ^shared.Scene,
+    resources: ^shared.Scene_Resources,
     viewport: rl.Rectangle,
     mouse_position: rl.Vector2,
 ) -> Scene_Selection {
     internal_position := rl.Vector2{
-        (mouse_position.x - viewport.x) / viewport.width * SCENE_SCREEN_WIDTH,
-        (mouse_position.y - viewport.y) / viewport.height * SCENE_SCREEN_HEIGHT,
+        (mouse_position.x - viewport.x) / viewport.width * shared.SCENE_SCREEN_WIDTH,
+        (mouse_position.y - viewport.y) / viewport.height * shared.SCENE_SCREEN_HEIGHT,
     }
     ray := rl.GetScreenToWorldRayEx(
         internal_position,
-        scene_camera_to_raylib(scene.camera),
-        SCENE_SCREEN_WIDTH,
-        SCENE_SCREEN_HEIGHT,
+        shared.scene_camera_to_raylib(scene.camera),
+        shared.SCENE_SCREEN_WIDTH,
+        shared.SCENE_SCREEN_HEIGHT,
     )
     closest_distance := f32(math.F32_MAX)
     result := Scene_Selection{.NONE, -1}
     for model_data, model_index in scene.models {
         if !model_data.visible || model_index >= len(resources.models) { continue }
         model := &resources.models[model_index].model
-        transform := scene_transform_matrix(model_data.transform) * model.transform
+        transform := shared.scene_transform_matrix(model_data.transform) * model.transform
         for mesh_index := 0; mesh_index < int(model.meshCount); mesh_index += 1 {
             collision := rl.GetRayCollisionMesh(ray, model.meshes[mesh_index], transform)
             if collision.hit && collision.distance < closest_distance {
@@ -641,8 +642,8 @@ scene_editor_pick :: proc(
     for primitive, primitive_index in scene.primitives {
         if !primitive.visible { continue }
         model := &resources.primitives[int(primitive.shape)]
-        transform := scene_transform_matrix(primitive.transform) *
-                     scene_primitive_local_transform(primitive.shape) *
+        transform := shared.scene_transform_matrix(primitive.transform) *
+                     shared.scene_primitive_local_transform(primitive.shape) *
                      model.transform
         for mesh_index := 0; mesh_index < int(model.meshCount); mesh_index += 1 {
             collision := rl.GetRayCollisionMesh(ray, model.meshes[mesh_index], transform)
@@ -683,7 +684,7 @@ SCENE_GIZMO_COLORS := [3]rl.Color{
 
 scene_editor_selection_position :: proc(
     selection: Scene_Selection,
-    scene: ^Scene,
+    scene: ^shared.Scene,
 ) -> (rl.Vector3, bool) {
     if !scene_selection_valid(selection, scene) { return {}, false }
     switch selection.kind {
@@ -716,7 +717,7 @@ scene_editor_gizmo_mode_supported :: proc(
 // Scale handles in world units to retain roughly constant on-screen size in
 // either projection, while clamping extremes near and far from the camera.
 scene_editor_gizmo_world_length :: proc(
-    scene: ^Scene,
+    scene: ^shared.Scene,
     origin: rl.Vector3,
 ) -> f32 {
     if scene.camera.projection == .ORTHOGRAPHIC {
@@ -747,7 +748,7 @@ scene_editor_distance_to_segment :: proc(
 
 scene_editor_try_begin_gizmo :: proc(
     state: ^Scene_Editor_UI_State,
-    scene: ^Scene,
+    scene: ^shared.Scene,
     viewport: rl.Rectangle,
     mouse: rl.Vector2,
 ) -> bool {
@@ -755,7 +756,7 @@ scene_editor_try_begin_gizmo :: proc(
     if !valid || !scene_editor_gizmo_mode_supported(state.selection, state.gizmo_mode) {
         return false
     }
-    camera := scene_camera_to_raylib(scene.camera)
+    camera := shared.scene_camera_to_raylib(scene.camera)
     screen_origin := scene_editor_world_to_viewport(origin, camera, viewport)
     world_length := scene_editor_gizmo_world_length(scene, origin)
     closest_axis := -1
@@ -786,7 +787,7 @@ scene_editor_try_begin_gizmo :: proc(
 // and provides one scalar delta shared by translate, rotate, and scale modes.
 scene_editor_apply_gizmo_drag :: proc(
     state: ^Scene_Editor_UI_State,
-    scene: ^Scene,
+    scene: ^shared.Scene,
     viewport: rl.Rectangle,
 ) {
     if state.gizmo_axis < 0 || state.gizmo_axis >= len(SCENE_GIZMO_AXES) ||
@@ -796,7 +797,7 @@ scene_editor_apply_gizmo_drag :: proc(
     origin, valid := scene_editor_selection_position(state.selection, scene)
     if !valid { return }
     axis := SCENE_GIZMO_AXES[state.gizmo_axis]
-    camera := scene_camera_to_raylib(scene.camera)
+    camera := shared.scene_camera_to_raylib(scene.camera)
     world_length := scene_editor_gizmo_world_length(scene, origin)
     screen_origin := scene_editor_world_to_viewport(origin, camera, viewport)
     screen_end := scene_editor_world_to_viewport(
@@ -836,7 +837,7 @@ scene_editor_apply_gizmo_drag :: proc(
             rotation[state.gizmo_axis] += angle_degrees
         case .SPOT_LIGHT:
             light := &scene.spot_lights[selection.index]
-            light.direction = scene_normalize_direction_stable(
+            light.direction = shared.scene_normalize_direction_stable(
                 rl.Vector3RotateByAxisAngle(
                     light.direction,
                     axis,
@@ -852,15 +853,15 @@ scene_editor_apply_gizmo_drag :: proc(
             scale := &scene.models[selection.index].transform.scale
             scale[state.gizmo_axis] = clamp(
                 scale[state.gizmo_axis] * factor,
-                SCENE_MIN_SCALE,
-                SCENE_MAX_SCALE,
+                shared.SCENE_MIN_SCALE,
+                shared.SCENE_MAX_SCALE,
             )
         case .PRIMITIVE:
             scale := &scene.primitives[selection.index].transform.scale
             scale[state.gizmo_axis] = clamp(
                 scale[state.gizmo_axis] * factor,
-                SCENE_MIN_SCALE,
-                SCENE_MAX_SCALE,
+                shared.SCENE_MIN_SCALE,
+                shared.SCENE_MAX_SCALE,
             )
         }
     }
@@ -869,12 +870,12 @@ scene_editor_apply_gizmo_drag :: proc(
 
 scene_editor_frame_selection :: proc(
     state: ^Scene_Editor_UI_State,
-    scene: ^Scene,
+    scene: ^shared.Scene,
 ) {
     origin, valid := scene_editor_selection_position(state.selection, scene)
     if !valid { return }
     view_offset := scene.camera.position - scene.camera.target
-    if !scene_direction_valid(view_offset) { view_offset = {1, 0.6, 1} }
+    if !shared.scene_direction_valid(view_offset) { view_offset = {1, 0.6, 1} }
     distance: f32 = 4
     switch state.selection.kind {
     case .NONE, .POINT_LIGHT, .SPOT_LIGHT:
@@ -896,8 +897,8 @@ scene_editor_frame_selection :: proc(
 // before any scene camera or selection mutation.
 scene_editor_update_viewport_input :: proc(
     state: ^Scene_Editor_UI_State,
-    scene: ^Scene,
-    resources: ^Scene_Resources,
+    scene: ^shared.Scene,
+    resources: ^shared.Scene_Resources,
 ) {
     viewport := scene_editor_viewport_bounds()
     mouse := rl.GetMousePosition()
@@ -955,8 +956,8 @@ scene_editor_update_viewport_input :: proc(
         if camera.projection == .ORTHOGRAPHIC {
             camera.ortho_height = clamp(
                 camera.ortho_height * math.pow(f32(0.9), wheel),
-                SCENE_MIN_SCALE,
-                SCENE_MAX_POSITION,
+                shared.SCENE_MIN_SCALE,
+                shared.SCENE_MAX_POSITION,
             )
         } else {
             forward := rl.Vector3Normalize(camera.target - camera.position)
@@ -1037,7 +1038,7 @@ scene_gui_transform :: proc(
     x: f32,
     y: ^f32,
     width: f32,
-    transform: ^Scene_Transform,
+    transform: ^shared.Scene_Transform,
 ) -> bool {
     changed := false
     rl.GuiLabel({x, y^, width, 18}, "Position")
@@ -1050,22 +1051,22 @@ scene_gui_transform :: proc(
     y^ += 27
     rl.GuiLabel({x, y^, width, 18}, "Scale")
     y^ += 19
-    changed = scene_gui_vector3(x, y^, width, &transform.scale, SCENE_MIN_SCALE, 100, 100) || changed
+    changed = scene_gui_vector3(x, y^, width, &transform.scale, shared.SCENE_MIN_SCALE, 100, 100) || changed
     y^ += 29
     return changed
 }
 
 scene_editor_draw_hierarchy :: proc(
     state: ^Scene_Editor_UI_State,
-    scene: ^Scene,
-    resources: ^Scene_Resources,
+    scene: ^shared.Scene,
+    resources: ^shared.Scene_Resources,
 ) {
     x: f32 = 8
     width := SCENE_EDITOR_LEFT_WIDTH - 16
-    rl.GuiPanel({0, SCENE_EDITOR_TOP_HEIGHT, SCENE_EDITOR_LEFT_WIDTH, SCENE_SCREEN_HEIGHT - SCENE_EDITOR_TOP_HEIGHT}, "HIERARCHY")
+    rl.GuiPanel({0, SCENE_EDITOR_TOP_HEIGHT, SCENE_EDITOR_LEFT_WIDTH, shared.SCENE_SCREEN_HEIGHT - SCENE_EDITOR_TOP_HEIGHT}, "HIERARCHY")
 
-    labels := make([dynamic]cstring, 0, SCENE_MAX_ITEMS, context.temp_allocator)
-    references := make([dynamic]Scene_Selection, 0, SCENE_MAX_ITEMS, context.temp_allocator)
+    labels := make([dynamic]cstring, 0, shared.SCENE_MAX_ITEMS, context.temp_allocator)
+    references := make([dynamic]Scene_Selection, 0, shared.SCENE_MAX_ITEMS, context.temp_allocator)
     active: c.int = -1
     append_item :: proc(
         label_prefix: string,
@@ -1109,7 +1110,7 @@ scene_editor_draw_hierarchy :: proc(
             state.selection = references[state.hierarchy_active]
         }
     } else {
-        rl.GuiLabel({x + 8, list_y + 8, width - 16, 22}, "Scene is empty")
+        rl.GuiLabel({x + 8, list_y + 8, width - 16, 22}, "shared.Scene is empty")
     }
 
     add_y := list_y + list_height + 10
@@ -1119,7 +1120,7 @@ scene_editor_draw_hierarchy :: proc(
         &state.primitive_shape,
     ) != 0 {}
     if rl.GuiButton({x + width - 68, add_y, 68, 24}, "Add") {
-        index := scene_add_primitive(scene, Scene_Primitive_Shape(state.primitive_shape))
+        index := scene_add_primitive(scene, shared.Scene_Primitive_Shape(state.primitive_shape))
         if index >= 0 {
             state.selection = {.PRIMITIVE, index}
             state.status = .ITEM_ADDED
@@ -1127,7 +1128,7 @@ scene_editor_draw_hierarchy :: proc(
     }
     add_y += 30
     if rl.GuiButton({x, add_y, (width - 6) * 0.5, 24}, "+ Point") &&
-       len(scene.point_lights) < SCENE_MAX_POINT_LIGHTS {
+       len(scene.point_lights) < shared.SCENE_MAX_POINT_LIGHTS {
         index := scene_add_point_light(scene)
         if index >= 0 {
             state.selection = {.POINT_LIGHT, index}
@@ -1135,7 +1136,7 @@ scene_editor_draw_hierarchy :: proc(
         }
     }
     if rl.GuiButton({x + (width + 6) * 0.5, add_y, (width - 6) * 0.5, 24}, "+ Spot") &&
-       len(scene.spot_lights) < SCENE_MAX_SPOT_LIGHTS {
+       len(scene.spot_lights) < shared.SCENE_MAX_SPOT_LIGHTS {
         index := scene_add_spot_light(scene)
         if index >= 0 {
             state.selection = {.SPOT_LIGHT, index}
@@ -1178,14 +1179,14 @@ scene_editor_draw_hierarchy :: proc(
     }
 }
 
-scene_editor_draw_camera :: proc(scene: ^Scene, x: f32, y: ^f32, width: f32) {
+scene_editor_draw_camera :: proc(scene: ^shared.Scene, x: f32, y: ^f32, width: f32) {
     rl.GuiLine({x, y^, width, 18}, "CAMERA")
     y^ += 20
     projection := c.int(scene.camera.projection)
     previous_projection := projection
     _ = rl.GuiComboBox({x, y^, width, 22}, "Perspective;Orthographic", &projection)
     if projection != previous_projection {
-        scene.camera.projection = Scene_Projection(projection)
+        scene.camera.projection = shared.Scene_Projection(projection)
         scene.dirty = true
     }
     y^ += 27
@@ -1193,7 +1194,7 @@ scene_editor_draw_camera :: proc(scene: ^Scene, x: f32, y: ^f32, width: f32) {
     y^ += 18
     previous_camera := scene.camera
     if scene_gui_vector3(x, y^, width, &scene.camera.position, -10000, 10000, 100) {
-        if scene_camera_valid(scene.camera) {
+        if shared.scene_camera_valid(scene.camera) {
             scene.dirty = true
         } else {
             scene.camera = previous_camera
@@ -1204,7 +1205,7 @@ scene_editor_draw_camera :: proc(scene: ^Scene, x: f32, y: ^f32, width: f32) {
     y^ += 18
     previous_camera = scene.camera
     if scene_gui_vector3(x, y^, width, &scene.camera.target, -10000, 10000, 100) {
-        if scene_camera_valid(scene.camera) {
+        if shared.scene_camera_valid(scene.camera) {
             scene.dirty = true
         } else {
             scene.camera = previous_camera
@@ -1215,7 +1216,7 @@ scene_editor_draw_camera :: proc(scene: ^Scene, x: f32, y: ^f32, width: f32) {
     y^ += 18
     previous_camera = scene.camera
     if scene_gui_vector3(x, y^, width, &scene.camera.up, -1, 1, 100) {
-        if scene_camera_valid(scene.camera) {
+        if shared.scene_camera_valid(scene.camera) {
             scene.dirty = true
         } else {
             scene.camera = previous_camera
@@ -1266,7 +1267,7 @@ scene_editor_draw_camera :: proc(scene: ^Scene, x: f32, y: ^f32, width: f32) {
     previous_edge_aa := edge_aa
     _ = rl.GuiComboBox({x, y^, width, 22}, "Hard;Coverage", &edge_aa)
     if edge_aa != previous_edge_aa {
-        scene.render.edge_aa = Edge_AA_Mode(edge_aa)
+        scene.render.edge_aa = shared.Edge_AA_Mode(edge_aa)
         scene.dirty = true
     }
     y^ += 29
@@ -1274,8 +1275,8 @@ scene_editor_draw_camera :: proc(scene: ^Scene, x: f32, y: ^f32, width: f32) {
 
 scene_editor_draw_selection_inspector :: proc(
     state: ^Scene_Editor_UI_State,
-    scene: ^Scene,
-    resources: ^Scene_Resources,
+    scene: ^shared.Scene,
+    resources: ^shared.Scene_Resources,
     x: f32,
     y: ^f32,
     width: f32,
@@ -1348,7 +1349,7 @@ scene_editor_draw_selection_inspector :: proc(
                     animation := resource.playback.animations[clip_index]
                     if frame >= 0 && frame < animation.keyframeCount &&
                        rl.IsModelAnimationValid(resource.model, animation) {
-                        item.animation = Scene_Animation_Pose{clip_index, int(frame)}
+                        item.animation = shared.Scene_Animation_Pose{clip_index, int(frame)}
                         rl.UpdateModelAnimation(resource.model, animation, f32(frame))
                         scene.dirty = true
                     }
@@ -1358,15 +1359,15 @@ scene_editor_draw_selection_inspector :: proc(
         } else if selection.index < len(resources.models) &&
                   rl.GuiButton({x, y^, width, 22}, "Enable Fixed Animation Pose") {
             resource := &resources.models[selection.index]
-            destroy_animation_playback(&resource.playback)
-            resource.playback = load_animation_playback(
+            shared.destroy_animation_playback(&resource.playback)
+            resource.playback = shared.load_animation_playback(
                 resource.model,
                 item.source,
                 .ASSET,
             )
             if len(resource.playback.valid_indices) > 0 {
                 raw_clip_index := int(resource.playback.valid_indices[0])
-                item.animation = Scene_Animation_Pose{
+                item.animation = shared.Scene_Animation_Pose{
                     clip_index = raw_clip_index,
                     frame = 0,
                 }
@@ -1417,8 +1418,8 @@ scene_editor_draw_selection_inspector :: proc(
         y^ += 18
         previous_direction := item.direction
         if scene_gui_vector3(x, y^, width, &item.direction, -1, 1, 100) {
-            if scene_direction_valid(item.direction) {
-                item.direction = scene_normalize_direction_stable(item.direction)
+            if shared.scene_direction_valid(item.direction) {
+                item.direction = shared.scene_normalize_direction_stable(item.direction)
                 scene.dirty = true
             } else {
                 item.direction = previous_direction
@@ -1441,7 +1442,7 @@ scene_editor_draw_selection_inspector :: proc(
     }
 }
 
-scene_editor_draw_directional_light :: proc(scene: ^Scene, bounds: rl.Rectangle) {
+scene_editor_draw_directional_light :: proc(scene: ^shared.Scene, bounds: rl.Rectangle) {
     rl.GuiPanel(bounds, "GLOBAL DIRECTIONAL LIGHT")
     x := bounds.x + 10
     y := bounds.y + 28
@@ -1452,7 +1453,7 @@ scene_editor_draw_directional_light :: proc(scene: ^Scene, bounds: rl.Rectangle)
     if previous_enabled != light.enabled { scene.dirty = true }
     y += 25
 
-    direction := scene_normalize_direction_stable(light.direction)
+    direction := shared.scene_normalize_direction_stable(light.direction)
     radians_to_degrees :: f32(180 / math.PI)
     degrees_to_radians :: f32(math.PI / 180)
     azimuth := math.atan2(direction.z, direction.x) * radians_to_degrees
@@ -1492,8 +1493,8 @@ scene_editor_draw_directional_light :: proc(scene: ^Scene, bounds: rl.Rectangle)
         {x, y, width * 0.48, 22},
         "Strength",
         &light.shadow_strength,
-        SCENE_MIN_SHADOW_STRENGTH,
-        SCENE_MAX_SHADOW_STRENGTH,
+        shared.SCENE_MIN_SHADOW_STRENGTH,
+        shared.SCENE_MAX_SHADOW_STRENGTH,
         100,
     ) {
         scene.dirty = true
@@ -1502,8 +1503,8 @@ scene_editor_draw_directional_light :: proc(scene: ^Scene, bounds: rl.Rectangle)
         {x + width * 0.52, y, width * 0.48, 22},
         "Extent",
         &light.shadow_extent,
-        SCENE_MIN_SHADOW_EXTENT,
-        SCENE_MAX_SHADOW_EXTENT,
+        shared.SCENE_MIN_SHADOW_EXTENT,
+        shared.SCENE_MAX_SHADOW_EXTENT,
         10,
     ) {
         scene.dirty = true
@@ -1513,15 +1514,15 @@ scene_editor_draw_directional_light :: proc(scene: ^Scene, bounds: rl.Rectangle)
         {x, y, width, 22},
         "Bias x100k",
         &light.shadow_bias,
-        SCENE_MIN_SHADOW_BIAS,
-        SCENE_MAX_SHADOW_BIAS,
+        shared.SCENE_MIN_SHADOW_BIAS,
+        shared.SCENE_MAX_SHADOW_BIAS,
         100000,
     ) {
         scene.dirty = true
     }
     y += 29
     if rl.GuiButton({x, y, width, 22}, "Reset Direction") {
-        light.direction = scene_normalize_direction_stable({0.35, 0.8, 0.55})
+        light.direction = shared.scene_normalize_direction_stable({0.35, 0.8, 0.55})
         scene.dirty = true
     }
 }
@@ -1534,24 +1535,24 @@ scene_editor_world_to_viewport :: proc(
     internal := rl.GetWorldToScreenEx(
         position,
         camera,
-        SCENE_SCREEN_WIDTH,
-        SCENE_SCREEN_HEIGHT,
+        shared.SCENE_SCREEN_WIDTH,
+        shared.SCENE_SCREEN_HEIGHT,
     )
     return {
-        viewport.x + internal.x / SCENE_SCREEN_WIDTH * viewport.width,
-        viewport.y + internal.y / SCENE_SCREEN_HEIGHT * viewport.height,
+        viewport.x + internal.x / shared.SCENE_SCREEN_WIDTH * viewport.width,
+        viewport.y + internal.y / shared.SCENE_SCREEN_HEIGHT * viewport.height,
     }
 }
 
 // Overlays are drawn onto the native window after the deterministic composite
 // texture. Selection rings, light markers, and gizmos therefore never enter a
-// Scene capture or alter its regression bytes.
+// shared.Scene capture or alter its regression bytes.
 scene_editor_draw_overlays :: proc(
     state: ^Scene_Editor_UI_State,
-    scene: ^Scene,
+    scene: ^shared.Scene,
     viewport: rl.Rectangle,
 ) {
-    camera := scene_camera_to_raylib(scene.camera)
+    camera := shared.scene_camera_to_raylib(scene.camera)
     for light in scene.point_lights {
         position := scene_editor_world_to_viewport(light.position, camera, viewport)
         rl.DrawCircleV(position, 6, {255, 211, 88, 230})
@@ -1596,10 +1597,10 @@ scene_editor_draw_overlays :: proc(
 // Save As dialog owns input.
 scene_editor_draw_ui :: proc(
     state: ^Scene_Editor_UI_State,
-    scene: ^Scene,
-    style: ^Cel_Style,
-    renderer: ^Scene_Renderer,
-    resources: ^Scene_Resources,
+    scene: ^shared.Scene,
+    style: ^shared.Cel_Style,
+    renderer: ^shared.Scene_Renderer,
+    resources: ^shared.Scene_Resources,
 ) {
     viewport := scene_editor_viewport_bounds()
     modal_active := state.save_as_open || state.pending_action != .NONE
@@ -1607,7 +1608,7 @@ scene_editor_draw_ui :: proc(
     rl.ClearBackground({14, 16, 22, 255})
     rl.DrawTexturePro(
         renderer.composite_target.texture,
-        {0, 0, SCENE_SCREEN_WIDTH, -SCENE_SCREEN_HEIGHT},
+        {0, 0, shared.SCENE_SCREEN_WIDTH, -shared.SCENE_SCREEN_HEIGHT},
         viewport,
         {},
         0,
@@ -1623,7 +1624,7 @@ scene_editor_draw_ui :: proc(
         gizmo_label,
     )
 
-    rl.GuiPanel({0, 0, SCENE_SCREEN_WIDTH, SCENE_EDITOR_TOP_HEIGHT}, nil)
+    rl.GuiPanel({0, 0, shared.SCENE_SCREEN_WIDTH, SCENE_EDITOR_TOP_HEIGHT}, nil)
     dirty_label: cstring = "SCENE EDITOR"
     if scene.dirty { dirty_label = "SCENE EDITOR  *" }
     rl.GuiLabel({10, 8, 106, 24}, dirty_label)
@@ -1650,7 +1651,7 @@ scene_editor_draw_ui :: proc(
         }
     }
     if rl.GuiButton({664, 8, 52, 24}, "Save") {
-        save_error := save_scene(scene_ui_buffer_string(state.scene_path[:]), scene)
+        save_error := shared.save_scene(scene_ui_buffer_string(state.scene_path[:]), scene)
         if save_error == .NONE {
             scene.dirty = false
             state.status = .SAVED
@@ -1665,9 +1666,9 @@ scene_editor_draw_ui :: proc(
 
     scene_editor_draw_hierarchy(state, scene, resources)
 
-    right_x := f32(SCENE_SCREEN_WIDTH) - SCENE_EDITOR_RIGHT_WIDTH
+    right_x := f32(shared.SCENE_SCREEN_WIDTH) - SCENE_EDITOR_RIGHT_WIDTH
     directional_height: f32 = 300
-    inspector_height := f32(SCENE_SCREEN_HEIGHT) - SCENE_EDITOR_TOP_HEIGHT - directional_height
+    inspector_height := f32(shared.SCENE_SCREEN_HEIGHT) - SCENE_EDITOR_TOP_HEIGHT - directional_height
     rl.GuiPanel({right_x, SCENE_EDITOR_TOP_HEIGHT, SCENE_EDITOR_RIGHT_WIDTH, inspector_height}, "INSPECTOR")
     content_x := right_x + 10
     content_width := SCENE_EDITOR_RIGHT_WIDTH - 20
@@ -1680,7 +1681,7 @@ scene_editor_draw_ui :: proc(
     }
     scene_editor_draw_directional_light(
         scene,
-        {right_x, SCENE_SCREEN_HEIGHT - directional_height, SCENE_EDITOR_RIGHT_WIDTH, directional_height},
+        {right_x, shared.SCENE_SCREEN_HEIGHT - directional_height, SCENE_EDITOR_RIGHT_WIDTH, directional_height},
     )
 
     if modal_active { rl.GuiUnlock() }
@@ -1696,7 +1697,7 @@ scene_editor_draw_ui :: proc(
         )
         if result == 1 {
             path := scene_ui_buffer_string(state.save_as_path[:])
-            save_error := save_scene(path, scene)
+            save_error := shared.save_scene(path, scene)
             if save_error == .NONE {
                 scene_ui_buffer_set(state.scene_path[:], path)
                 scene.dirty = false
@@ -1729,7 +1730,7 @@ scene_editor_draw_ui :: proc(
             "Save;Discard;Cancel",
         )
         if result == 1 {
-            save_error := save_scene(
+            save_error := shared.save_scene(
                 scene_ui_buffer_string(state.scene_path[:]),
                 scene,
             )

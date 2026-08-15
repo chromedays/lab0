@@ -5,6 +5,7 @@ package main
 // opening a graphics window. Rendering and live input are owned by game_mode.
 
 import "core:math"
+import shared "./shared"
 import rl "vendor:raylib"
 
 // Player and AI rules are 2.5D: they operate on world XZ, while Vector2.y
@@ -46,21 +47,6 @@ GAME_HIT_FEEDBACK_TIME      :: f32(0.55)
 // render pixel per fixed tick: (8 world units / 144 pixels) * 60 Hz / 4.
 GAME_PIXEL_SNAP_TEST_SPEED :: f32(5.0 / 6.0)
 
-// Values are contiguous and intentionally ordered exactly like GAME_ROOMS.
-// game_room uses the enum value as an array index, so keep both declarations
-// synchronized when adding a room or diagnostic scene.
-Game_Room_ID :: enum {
-    R00_START_FOREST,
-    R01_FOREST_PASSAGE,
-    R02_CENTRAL_RUIN,
-    R03_WIDE_GROVE,
-    R04_RAVINE_CROSSING,
-    R05_OVERLOOK,
-    R06_LOWER_TRAIL,
-    TEST_OCCLUSION,
-    TEST_PIXEL_SNAP,
-}
-
 // Player modes are mutually exclusive fixed-update phases. DASHING and
 // ROOM_TRANSITION return early from game_fixed_update so grounded acceleration
 // and collision resolution cannot run during either scripted movement.
@@ -98,7 +84,7 @@ Game_Rect :: struct {
 }
 
 Game_Room :: struct {
-    id:            Game_Room_ID,
+    id:            shared.Game_Room_ID,
     name:          string,
     bounds:        Game_Rect,
     floor_y:       f32,
@@ -110,8 +96,8 @@ Game_Room :: struct {
 // An exit owns both its source-edge trigger and the exact target spawn. For
 // north/south exits span_center is X; for east/west exits it is Z.
 Game_Room_Exit :: struct {
-    source:          Game_Room_ID,
-    target:          Game_Room_ID,
+    source:          shared.Game_Room_ID,
+    target:          shared.Game_Room_ID,
     side:            Game_Exit_Side,
     span_center:     f32,
     half_width:      f32,
@@ -121,17 +107,17 @@ Game_Room_Exit :: struct {
 }
 
 Game_Obstacle :: struct {
-    room:   Game_Room_ID,
+    room:   shared.Game_Room_ID,
     bounds: Game_Rect,
 }
 
 Game_Hazard :: struct {
-    room:   Game_Room_ID,
+    room:   shared.Game_Room_ID,
     bounds: Game_Rect,
 }
 
 Game_Zombie_Spawn :: struct {
-    room:       Game_Room_ID,
+    room:       shared.Game_Room_ID,
     position:   rl.Vector3,
     patrol_end: rl.Vector3,
 }
@@ -176,8 +162,8 @@ Game_Player :: struct {
     dash_elapsed:          f32,
     dash_cooldown:         f32,
     dash_buffer:           f32,
-    transition_from_room:  Game_Room_ID,
-    transition_to_room:    Game_Room_ID,
+    transition_from_room:  shared.Game_Room_ID,
+    transition_to_room:    shared.Game_Room_ID,
     transition_start:      rl.Vector3,
     transition_end:        rl.Vector3,
     transition_elapsed:    f32,
@@ -207,7 +193,7 @@ Game_Zombie :: struct {
 // monotonic; GPU resources, live input, and camera smoothing live outside this
 // structure so tests can advance it without a graphics context.
 Game_State :: struct {
-    current_room:       Game_Room_ID,
+    current_room:       shared.Game_Room_ID,
     movement_tuning:    Game_Movement_Tuning,
     player:             Game_Player,
     zombies:            [GAME_ZOMBIE_COUNT]Game_Zombie,
@@ -365,37 +351,13 @@ GAME_ZOMBIE_SPAWNS := [GAME_ZOMBIE_COUNT]Game_Zombie_Spawn{
 
 GAME_OVERLOOK_POSITION :: rl.Vector3{18, 2.35, -18}
 
-game_room :: proc(room_id: Game_Room_ID) -> ^Game_Room {
+game_room :: proc(room_id: shared.Game_Room_ID) -> ^Game_Room {
     return &GAME_ROOMS[int(room_id)]
-}
-
-game_room_from_string :: proc(value: string) -> (Game_Room_ID, bool) {
-    switch value {
-    case "R00", "r00", "start", "start-forest":
-        return .R00_START_FOREST, true
-    case "R01", "r01", "forest-passage":
-        return .R01_FOREST_PASSAGE, true
-    case "R02", "r02", "central-ruin":
-        return .R02_CENTRAL_RUIN, true
-    case "R03", "r03", "wide-grove":
-        return .R03_WIDE_GROVE, true
-    case "R04", "r04", "ravine":
-        return .R04_RAVINE_CROSSING, true
-    case "R05", "r05", "overlook":
-        return .R05_OVERLOOK, true
-    case "R06", "r06", "lower-trail":
-        return .R06_LOWER_TRAIL, true
-    case "T00", "t00", "occlusion-test":
-        return .TEST_OCCLUSION, true
-    case "T01", "t01", "pixel-snap-test":
-        return .TEST_PIXEL_SNAP, true
-    }
-    return .R00_START_FOREST, false
 }
 
 // game_state_init constructs a replay-ready checkpoint. All RNG state and AI
 // positions are reset here; callers need not perform a separate warmup tick.
-game_state_init :: proc(start_room: Game_Room_ID = .R00_START_FOREST) -> Game_State {
+game_state_init :: proc(start_room: shared.Game_Room_ID = .R00_START_FOREST) -> Game_State {
     room := game_room(start_room)
     state := Game_State{
         current_room = start_room,
@@ -424,7 +386,7 @@ game_reset_current_room :: proc(state: ^Game_State) {
         facing = facing,
         mode = .GROUNDED,
     }
-    if game_vector_length(state.player.facing) < 0.001 {
+    if shared.game_vector_length(state.player.facing) < 0.001 {
         state.player.facing = {1, 0}
     }
     state.last_safe_position = room.spawn
@@ -432,12 +394,8 @@ game_reset_current_room :: proc(state: ^Game_State) {
     game_reset_zombies_in_room(state, state.current_room)
 }
 
-game_vector_length :: proc(value: rl.Vector2) -> f32 {
-    return math.sqrt(value.x * value.x + value.y * value.y)
-}
-
 game_normalize_input :: proc(value: rl.Vector2) -> rl.Vector2 {
-    length := game_vector_length(value)
+    length := shared.game_vector_length(value)
     if length <= 0.00001 {
         return {}
     }
@@ -449,7 +407,7 @@ game_normalize_input :: proc(value: rl.Vector2) -> rl.Vector2 {
 
 game_move_towards :: proc(current, target: rl.Vector2, max_delta: f32) -> rl.Vector2 {
     difference := target - current
-    distance := game_vector_length(difference)
+    distance := shared.game_vector_length(difference)
     if distance <= max_delta || distance <= 0.00001 {
         return target
     }
@@ -471,7 +429,7 @@ game_rect_overlaps_circle :: proc(
 }
 
 game_position_inside_room_radius :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     position: rl.Vector3,
     radius: f32,
 ) -> bool {
@@ -483,7 +441,7 @@ game_position_inside_room_radius :: proc(
 }
 
 game_position_hits_obstacle_radius :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     position: rl.Vector3,
     radius: f32,
 ) -> bool {
@@ -498,7 +456,7 @@ game_position_hits_obstacle_radius :: proc(
 }
 
 game_position_hits_hazard_radius :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     position: rl.Vector3,
     radius: f32,
 ) -> bool {
@@ -513,21 +471,21 @@ game_position_hits_hazard_radius :: proc(
 }
 
 game_position_hits_obstacle :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     position: rl.Vector3,
 ) -> bool {
     return game_position_hits_obstacle_radius(room_id, position, GAME_PLAYER_RADIUS)
 }
 
 game_position_hits_hazard :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     position: rl.Vector3,
 ) -> bool {
     return game_position_hits_hazard_radius(room_id, position, GAME_PLAYER_RADIUS)
 }
 
 game_position_inside_room :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     position: rl.Vector3,
 ) -> bool {
     return game_position_inside_room_radius(room_id, position, GAME_PLAYER_RADIUS)
@@ -540,7 +498,7 @@ game_reset_zombie :: proc(state: ^Game_State, zombie_index: int) {
         spawn.patrol_end.z - spawn.position.z,
     }
     patrol_direction = game_normalize_input(patrol_direction)
-    if game_vector_length(patrol_direction) <= 0.001 {
+    if shared.game_vector_length(patrol_direction) <= 0.001 {
         patrol_direction = {1, 0}
     }
     state.zombies[zombie_index] = {
@@ -565,7 +523,7 @@ game_reset_all_zombies :: proc(state: ^Game_State) {
 
 game_reset_zombies_in_room :: proc(
     state: ^Game_State,
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
 ) {
     for spawn, zombie_index in GAME_ZOMBIE_SPAWNS {
         if spawn.room == room_id {
@@ -575,7 +533,7 @@ game_reset_zombies_in_room :: proc(
 }
 
 game_zombie_position_blocked :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     position: rl.Vector3,
 ) -> bool {
     return !game_position_inside_room_radius(room_id, position, GAME_ZOMBIE_RADIUS) ||
@@ -655,11 +613,11 @@ game_zombie_begin_return :: proc(zombie: ^Game_Zombie, zombie_index: int) {
 // Sample the open segment at a fixed world-space interval. Only gameplay
 // obstacles participate; decorative render meshes never affect perception.
 game_line_of_sight_clear :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     start, finish: rl.Vector3,
 ) -> bool {
     delta := rl.Vector2{finish.x - start.x, finish.z - start.z}
-    distance := game_vector_length(delta)
+    distance := shared.game_vector_length(delta)
     sample_count := max(int(math.ceil(distance / 0.20)), 1)
     for sample_index in 1 ..< sample_count {
         t := f32(sample_index) / f32(sample_count)
@@ -683,7 +641,7 @@ game_zombie_can_see_player :: proc(
         state.player.position.x - zombie.position.x,
         state.player.position.z - zombie.position.z,
     }
-    distance := game_vector_length(to_player)
+    distance := shared.game_vector_length(to_player)
     if distance > GAME_ZOMBIE_SIGHT_RADIUS {
         return false
     }
@@ -744,7 +702,7 @@ game_zombie_walk_towards :: proc(
         target.x - zombie.position.x,
         target.z - zombie.position.z,
     }
-    distance := game_vector_length(direction)
+    distance := shared.game_vector_length(direction)
     if distance <= 0.0001 {
         return false
     }
@@ -762,14 +720,14 @@ game_zombie_walk_towards :: proc(
             zombie.position.x - other.position.x,
             zombie.position.z - other.position.z,
         }
-        peer_distance := game_vector_length(away)
+        peer_distance := shared.game_vector_length(away)
         if peer_distance > 0.0001 && peer_distance < GAME_ZOMBIE_COMFORT_RADIUS {
             separation += away / peer_distance *
                           ((GAME_ZOMBIE_COMFORT_RADIUS - peer_distance) /
                            GAME_ZOMBIE_COMFORT_RADIUS)
         }
     }
-    if game_vector_length(separation) > 0.0001 {
+    if shared.game_vector_length(separation) > 0.0001 {
         direction = game_normalize_input(direction + separation * 0.85)
     }
     step := min(speed * dt, distance)
@@ -793,7 +751,7 @@ game_zombie_walk_towards :: proc(
             target.x - blocker.position.x,
             target.z - blocker.position.z,
         }
-        if game_vector_length(blocker_delta) + 0.02 < distance {
+        if shared.game_vector_length(blocker_delta) + 0.02 < distance {
             zombie.blocked_time += dt
             return false
         }
@@ -885,7 +843,7 @@ game_update_zombie :: proc(
             patrol_target.x - zombie.position.x,
             patrol_target.z - zombie.position.z,
         }
-        if game_vector_length(patrol_delta) <= 0.0001 {
+        if shared.game_vector_length(patrol_delta) <= 0.0001 {
             zombie.patrol_to_end = !zombie.patrol_to_end
         } else {
             game_zombie_walk_towards(
@@ -902,7 +860,7 @@ game_update_zombie :: proc(
         state.player.position.x - zombie.position.x,
         state.player.position.z - zombie.position.z,
     }
-    player_distance := game_vector_length(to_player)
+    player_distance := shared.game_vector_length(to_player)
     sees_player := game_zombie_can_see_player(state, zombie)
     hears_player := dash_noise && player_distance <= GAME_ZOMBIE_HEARING_RADIUS
     if sees_player || hears_player {
@@ -916,7 +874,7 @@ game_update_zombie :: proc(
         zombie.position.x - patrol_anchor.x,
         zombie.position.z - patrol_anchor.z,
     }
-    beyond_leash := game_vector_length(leash_delta) > GAME_ZOMBIE_LEASH_RADIUS
+    beyond_leash := shared.game_vector_length(leash_delta) > GAME_ZOMBIE_LEASH_RADIUS
     player_patrol_anchor := game_zombie_patrol_anchor(
         zombie_index,
         state.player.position,
@@ -925,7 +883,7 @@ game_update_zombie :: proc(
         state.player.position.x - player_patrol_anchor.x,
         state.player.position.z - player_patrol_anchor.z,
     }
-    player_patrol_distance := game_vector_length(player_patrol_delta)
+    player_patrol_distance := shared.game_vector_length(player_patrol_delta)
 
     switch zombie.mode {
     case .SHAMBLING:
@@ -941,7 +899,7 @@ game_update_zombie :: proc(
             patrol_target.x - zombie.position.x,
             patrol_target.z - zombie.position.z,
         }
-        if game_vector_length(patrol_delta) <= 0.10 {
+        if shared.game_vector_length(patrol_delta) <= 0.10 {
             zombie.patrol_to_end = !zombie.patrol_to_end
         } else {
             game_zombie_walk_towards(
@@ -960,7 +918,7 @@ game_update_zombie :: proc(
         }
         if sees_player && player_distance <= GAME_ZOMBIE_ATTACK_RANGE {
             attack_direction := game_normalize_input(to_player)
-            if game_vector_length(attack_direction) <= 0.001 {
+            if shared.game_vector_length(attack_direction) <= 0.001 {
                 attack_direction = zombie.facing
             }
             zombie.attack_direction = attack_direction
@@ -992,7 +950,7 @@ game_update_zombie :: proc(
             zombie.return_target.x - zombie.position.x,
             zombie.return_target.z - zombie.position.z,
         }
-        if game_vector_length(return_delta) <= GAME_ZOMBIE_RETURN_RADIUS {
+        if shared.game_vector_length(return_delta) <= GAME_ZOMBIE_RETURN_RADIUS {
             if game_zombie_position_available(
                 state,
                 zombie_index,
@@ -1135,7 +1093,7 @@ game_try_start_room_transition :: proc(
     return false
 }
 
-game_clamp_to_room :: proc(room_id: Game_Room_ID, position: rl.Vector3) -> rl.Vector3 {
+game_clamp_to_room :: proc(room_id: shared.Game_Room_ID, position: rl.Vector3) -> rl.Vector3 {
     room := game_room(room_id)
     result := position
     result.x = clamp(
@@ -1153,7 +1111,7 @@ game_clamp_to_room :: proc(room_id: Game_Room_ID, position: rl.Vector3) -> rl.Ve
 }
 
 game_position_blocked :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     position: rl.Vector3,
     hazards_block: bool,
 ) -> bool {
@@ -1345,17 +1303,17 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
     }
 
     move_input := game_normalize_input(raw_input.move)
-    if game_vector_length(move_input) > 0.001 {
+    if shared.game_vector_length(move_input) > 0.001 {
         state.player.facing = move_input
     }
 
     if state.player.dash_buffer > 0 && state.player.dash_cooldown <= 0 {
         dash_direction := move_input
-        if game_vector_length(dash_direction) <= 0.001 {
+        if shared.game_vector_length(dash_direction) <= 0.001 {
             dash_direction = state.player.facing
         }
         dash_direction = game_normalize_input(dash_direction)
-        if game_vector_length(dash_direction) > 0.001 {
+        if shared.game_vector_length(dash_direction) > 0.001 {
             dash_from := state.player.position
             state.player.mode = .DASHING
             state.player.dash_direction = dash_direction
@@ -1386,7 +1344,7 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
 
     target_velocity := move_input * GAME_MOVE_SPEED
     acceleration := state.movement_tuning.acceleration
-    if game_vector_length(move_input) <= 0.001 {
+    if shared.game_vector_length(move_input) <= 0.001 {
         acceleration = state.movement_tuning.deceleration
     }
     state.player.velocity = game_move_towards(

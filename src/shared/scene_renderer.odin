@@ -1,4 +1,4 @@
-package main
+package shared
 
 // GPU resources and deterministic render passes for Scene Editor mode. These
 // shaders and targets are separate from Viewer and Game so their established

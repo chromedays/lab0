@@ -1,4 +1,4 @@
-package main
+package shared
 
 // This module expands local #include directives before handing GLSL source to
 // raylib. It also records every transitive dependency so the interactive viewer

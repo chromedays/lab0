@@ -8,6 +8,7 @@ import "core:encoding/json"
 import "core:fmt"
 import "core:math"
 import "core:os"
+import shared "./shared"
 
 GAME_REPLAY_SCHEMA_VERSION :: 1
 GAME_REPLAY_MAX_TICKS       :: 1_000_000
@@ -46,7 +47,7 @@ Game_Replay_Segment :: struct {
 // A validated replay owns segments and caches total_ticks so capture option
 // checks never need to expand the compact sequence.
 Game_Replay :: struct {
-    start_room:  Game_Room_ID,
+    start_room:  shared.Game_Room_ID,
     segments:    [dynamic]Game_Replay_Segment,
     total_ticks: u64,
 }
@@ -79,7 +80,7 @@ Game_Replay_Stats :: struct {
     printed:         bool,
 }
 
-game_room_code :: proc(room_id: Game_Room_ID) -> string {
+game_room_code :: proc(room_id: shared.Game_Room_ID) -> string {
     switch room_id {
     case .R00_START_FOREST:    return "R00"
     case .R01_FOREST_PASSAGE:  return "R01"
@@ -99,7 +100,7 @@ game_room_code :: proc(room_id: Game_Room_ID) -> string {
 // event deltas still belong to the source room.
 game_replay_stats_observe_tick :: proc(
     stats: ^Game_Replay_Stats,
-    room_before_tick: Game_Room_ID,
+    room_before_tick: shared.Game_Room_ID,
     dashes_before_tick, hits_before_tick, resets_before_tick: int,
     state: ^Game_State,
 ) {
@@ -129,7 +130,7 @@ game_replay_stats_observe_tick :: proc(
 // These stable, machine-readable lines are converted into the Markdown table
 // by scripts/test-game.sh and stay legible in the raw recording log.
 game_replay_stats_print :: proc(stats: ^Game_Replay_Stats, replay_ticks: u64) {
-    for room_id in Game_Room_ID {
+    for room_id in shared.Game_Room_ID {
         room_stats := stats.rooms[int(room_id)]
         if room_stats.ticks == 0 && room_stats.dashes == 0 &&
            room_stats.hits == 0 && room_stats.resets == 0 {
@@ -193,7 +194,7 @@ game_replay_from_file :: proc(
     if replay_file.schema_version != GAME_REPLAY_SCHEMA_VERSION {
         return {}, .INVALID_SCHEMA
     }
-    start_room, room_valid := game_room_from_string(replay_file.start_room)
+    start_room, room_valid := shared.game_room_from_string(replay_file.start_room)
     if !room_valid {
         return {}, .INVALID_START_ROOM
     }
@@ -206,8 +207,8 @@ game_replay_from_file :: proc(
         move_x := segment.move[0]
         move_y := segment.move[1]
         if segment.ticks <= 0 ||
-           !cel_f32_is_finite(move_x) ||
-           !cel_f32_is_finite(move_y) ||
+           !shared.cel_f32_is_finite(move_x) ||
+           !shared.cel_f32_is_finite(move_y) ||
            math.abs(move_x) > 1 ||
            math.abs(move_y) > 1 {
             destroy_game_replay(&replay)

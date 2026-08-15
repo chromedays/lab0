@@ -9,6 +9,7 @@ import "core:log"
 import "core:math"
 import "core:strconv"
 import "core:strings"
+import shared "./shared"
 import rl "vendor:raylib"
 import rgl "vendor:raylib/rlgl"
 
@@ -40,21 +41,6 @@ GAME_OCCLUSION_DITHER_VISIBILITY :: f32(0.35)
 GAME_OCCLUSION_DITHER_SCALE :: f32(GAME_SCREEN_WIDTH / GAME_PIXEL_WIDTH)
 GAME_OCCLUSION_ENTER_OVERLAP_PIXELS :: f32(2)
 GAME_OCCLUSION_EXIT_MARGIN_PIXELS :: f32(2)
-
-// Game-specific CLI values borrow process-argument storage. Capture flags are
-// parsed separately into Capture_Options, then cross-validated before any GPU
-// or FFmpeg resource is created.
-Game_Run_Options :: struct {
-    start_room:          Game_Room_ID,
-    start_room_explicit: bool,
-    help_requested:      bool,
-    debug_visible:       bool,
-    replay_path:         string,
-    capture_tick:        u64,
-    capture_tick_set:    bool,
-    record_directory:    string,
-    video_output:        string,
-}
 
 // Camera smoothing is render state rather than simulation state. Transition
 // endpoints are snapshotted once so the camera cannot chase a moving target
@@ -97,11 +83,11 @@ Game_Assets :: struct {
     dead_tree:  Game_Imported_Model,
     trunk:      Game_Imported_Model,
     grass:      Game_Imported_Model,
-    animation:  Animation_Playback,
+    animation:  shared.Animation_Playback,
     walk_clip:  c.int,
     run_clip:   c.int,
     active_clip: c.int,
-    zombie_animation: Animation_Playback,
+    zombie_animation: shared.Animation_Playback,
     zombie_walk_clip: c.int,
     zombie_idle_clip: c.int,
     zombie_attack_clip: c.int,
@@ -109,7 +95,7 @@ Game_Assets :: struct {
     debug_white_texture: rl.Texture2D,
 }
 
-game_configure_player_animation :: proc(playback: ^Animation_Playback) {
+game_configure_player_animation :: proc(playback: ^shared.Animation_Playback) {
     playback.sampled_playback = true
     playback.sample_count = GAME_PLAYER_ANIMATION_SAMPLE_COUNT
 }
@@ -224,7 +210,7 @@ Game_Decor_Visibility_State :: struct {
 }
 
 Game_Floor_Accent :: struct {
-    room:   Game_Room_ID,
+    room:   shared.Game_Room_ID,
     bounds: Game_Rect,
     color:  rl.Color,
 }
@@ -315,17 +301,17 @@ GAME_ROOM_HUD_ACCENT_COLORS := [?]rl.Color{
 // initialization and destruction remain one explicit ownership boundary.
 Game_Renderer :: struct {
     scene_shader:       rl.Shader,
-    scene_source:       Preprocessed_Shader_Program_Source,
-    scene_bindings:     Cel_Shader_Bindings,
+    scene_source:       shared.Preprocessed_Shader_Program_Source,
+    scene_bindings:     shared.Cel_Shader_Bindings,
     cel_band_shader:    rl.Shader,
-    cel_band_source:    Preprocessed_Shader_Program_Source,
-    cel_band_bindings:  Cel_Shader_Bindings,
+    cel_band_source:    shared.Preprocessed_Shader_Program_Source,
+    cel_band_bindings:  shared.Cel_Shader_Bindings,
     downscale_shader:   rl.Shader,
-    downscale_source:   Preprocessed_Shader_Source,
+    downscale_source:   shared.Preprocessed_Shader_Source,
     mask_shader:        rl.Shader,
-    mask_source:        Preprocessed_Shader_Source,
+    mask_source:        shared.Preprocessed_Shader_Source,
     outline_shader:     rl.Shader,
-    outline_source:     Preprocessed_Shader_Source,
+    outline_source:     shared.Preprocessed_Shader_Source,
     cel_ramp_texture:   rl.Texture2D,
     scene_target:       rl.RenderTexture2D,
     cel_band_target:    rl.RenderTexture2D,
@@ -362,7 +348,7 @@ game_mode_requested :: proc(arguments: []string) -> bool {
 // Cross-mode and cross-feature combinations are rejected later when both option
 // records are available.
 parse_game_run_options :: proc(arguments: []string) -> (
-    options: Game_Run_Options,
+    options: shared.Game_Run_Options,
     valid: bool,
     error_argument: string,
 ) {
@@ -435,7 +421,7 @@ parse_game_run_options :: proc(arguments: []string) -> (
         }
         room_value := arguments[index]
         index += 1
-        parsed_room, found := game_room_from_string(room_value)
+        parsed_room, found := shared.game_room_from_string(room_value)
         if !found {
             return options, false, room_value
         }
@@ -476,7 +462,7 @@ print_game_usage :: proc() {
 game_load_imported_model :: proc(path: string) -> Game_Imported_Model {
     path_cstr := strings.clone_to_cstring(path, context.temp_allocator)
     model := rl.LoadModel(path_cstr)
-    if !is_model_loaded(model) {
+    if !shared.is_model_loaded(model) {
         if model.meshCount > 0 || model.materialCount > 0 {
             rl.UnloadModel(model)
         }
@@ -491,14 +477,14 @@ game_load_imported_model :: proc(path: string) -> Game_Imported_Model {
 }
 
 game_unload_imported_model :: proc(asset: ^Game_Imported_Model) {
-    if asset.valid && is_model_loaded(asset.model) {
+    if asset.valid && shared.is_model_loaded(asset.model) {
         rl.UnloadModel(asset.model)
     }
     asset^ = {}
 }
 
 game_find_animation_clip :: proc(
-    playback: ^Animation_Playback,
+    playback: ^shared.Animation_Playback,
     requested_name: string,
 ) -> c.int {
     for valid_index, playback_index in playback.valid_indices {
@@ -512,7 +498,7 @@ game_find_animation_clip :: proc(
 }
 
 game_try_find_animation_clip :: proc(
-    playback: ^Animation_Playback,
+    playback: ^shared.Animation_Playback,
     requested_name: string,
 ) -> (clip: c.int, found: bool) {
     for valid_index, playback_index in playback.valid_indices {
@@ -544,7 +530,7 @@ game_load_assets :: proc() -> Game_Assets {
     rl.UnloadImage(white_image)
 
     if assets.player.valid {
-        assets.animation = load_animation_playback(
+        assets.animation = shared.load_animation_playback(
             assets.player.model,
             GAME_PLAYER_MODEL_PATH,
             .ASSET,
@@ -555,7 +541,7 @@ game_load_assets :: proc() -> Game_Assets {
         assets.active_clip = -1
     }
     if assets.zombie.valid {
-        assets.zombie_animation = load_animation_playback(
+        assets.zombie_animation = shared.load_animation_playback(
             assets.zombie.model,
             GAME_ZOMBIE_MODEL_PATH,
             .ASSET,
@@ -588,17 +574,17 @@ game_load_assets :: proc() -> Game_Assets {
 }
 
 game_unload_assets :: proc(assets: ^Game_Assets) {
-    destroy_animation_playback(&assets.animation)
-    destroy_animation_playback(&assets.zombie_animation)
+    shared.destroy_animation_playback(&assets.animation)
+    shared.destroy_animation_playback(&assets.zombie_animation)
     game_unload_imported_model(&assets.player)
     game_unload_imported_model(&assets.zombie)
     game_unload_imported_model(&assets.tree)
     game_unload_imported_model(&assets.dead_tree)
     game_unload_imported_model(&assets.trunk)
     game_unload_imported_model(&assets.grass)
-    if is_model_loaded(assets.cube) { rl.UnloadModel(assets.cube) }
-    if is_model_loaded(assets.sphere) { rl.UnloadModel(assets.sphere) }
-    if is_model_loaded(assets.cylinder) { rl.UnloadModel(assets.cylinder) }
+    if shared.is_model_loaded(assets.cube) { rl.UnloadModel(assets.cube) }
+    if shared.is_model_loaded(assets.sphere) { rl.UnloadModel(assets.sphere) }
+    if shared.is_model_loaded(assets.cylinder) { rl.UnloadModel(assets.cylinder) }
     if rl.IsTextureValid(assets.debug_white_texture) {
         rl.UnloadTexture(assets.debug_white_texture)
     }
@@ -610,7 +596,7 @@ game_prepare_model_shader :: proc(
     shader: rl.Shader,
     cel_ramp: rl.Texture2D,
 ) {
-    if !is_model_loaded(model^) {
+    if !shared.is_model_loaded(model^) {
         return
     }
     for material_index := 0; material_index < int(model.materialCount); material_index += 1 {
@@ -707,28 +693,28 @@ game_draw_imported_debug_tint :: proc(
 // Initialize in pass dependency order. The caller always invokes destroy on a
 // failed partial renderer, so every successfully created handle is stored in
 // renderer immediately rather than in an untracked local owner.
-game_renderer_init :: proc(renderer: ^Game_Renderer, style: ^Cel_Style) -> bool {
+game_renderer_init :: proc(renderer: ^Game_Renderer, style: ^shared.Cel_Style) -> bool {
     scene_loaded: bool
     renderer.scene_shader, renderer.scene_source, scene_loaded =
-        load_shader_with_includes(VS_PATH, FS_PATH)
+        shared.load_shader_with_includes(VS_PATH, FS_PATH)
     if !scene_loaded {
         log.error("Failed to load the game scene shader")
         return false
     }
-    renderer.scene_bindings = resolve_cel_shader_bindings(renderer.scene_shader)
+    renderer.scene_bindings = shared.resolve_cel_shader_bindings(renderer.scene_shader)
 
     band_loaded: bool
     renderer.cel_band_shader, renderer.cel_band_source, band_loaded =
-        load_shader_with_includes(VS_PATH, CEL_BAND_FS_PATH)
+        shared.load_shader_with_includes(VS_PATH, CEL_BAND_FS_PATH)
     if !band_loaded {
         log.error("Failed to load the game cel-band shader")
         return false
     }
-    renderer.cel_band_bindings = resolve_cel_shader_bindings(renderer.cel_band_shader)
+    renderer.cel_band_bindings = shared.resolve_cel_shader_bindings(renderer.cel_band_shader)
 
     downscale_loaded: bool
     renderer.downscale_shader, renderer.downscale_source, downscale_loaded =
-        load_fragment_shader_with_includes(DOWNSCALE_FS_PATH)
+        shared.load_fragment_shader_with_includes(DOWNSCALE_FS_PATH)
     if !downscale_loaded {
         log.error("Failed to load the game downscale shader")
         return false
@@ -736,7 +722,7 @@ game_renderer_init :: proc(renderer: ^Game_Renderer, style: ^Cel_Style) -> bool 
 
     mask_loaded: bool
     renderer.mask_shader, renderer.mask_source, mask_loaded =
-        load_fragment_shader_with_includes(MASK_DOWNSCALE_FS_PATH)
+        shared.load_fragment_shader_with_includes(MASK_DOWNSCALE_FS_PATH)
     if !mask_loaded {
         log.error("Failed to load the game coverage shader")
         return false
@@ -744,16 +730,16 @@ game_renderer_init :: proc(renderer: ^Game_Renderer, style: ^Cel_Style) -> bool 
 
     outline_loaded: bool
     renderer.outline_shader, renderer.outline_source, outline_loaded =
-        load_fragment_shader_with_includes(OUTLINE_FS_PATH)
+        shared.load_fragment_shader_with_includes(OUTLINE_FS_PATH)
     if !outline_loaded {
         log.error("Failed to load the game outline shader")
         return false
     }
 
-    ramp_pixels := build_cel_ramp_pixels(style)
+    ramp_pixels := shared.build_cel_ramp_pixels(style)
     ramp_image := rl.Image{
         data = raw_data(ramp_pixels[:]),
-        width = CEL_RAMP_WIDTH,
+        width = shared.CEL_RAMP_WIDTH,
         height = 1,
         mipmaps = 1,
         format = .UNCOMPRESSED_R8G8B8A8,
@@ -871,15 +857,15 @@ game_renderer_destroy :: proc(renderer: ^Game_Renderer) {
     if rl.IsShaderValid(renderer.downscale_shader) { rl.UnloadShader(renderer.downscale_shader) }
     if rl.IsShaderValid(renderer.cel_band_shader) { rl.UnloadShader(renderer.cel_band_shader) }
     if rl.IsShaderValid(renderer.scene_shader) { rl.UnloadShader(renderer.scene_shader) }
-    destroy_preprocessed_shader_source(&renderer.outline_source)
-    destroy_preprocessed_shader_source(&renderer.mask_source)
-    destroy_preprocessed_shader_source(&renderer.downscale_source)
-    destroy_preprocessed_shader_program_source(&renderer.cel_band_source)
-    destroy_preprocessed_shader_program_source(&renderer.scene_source)
+    shared.destroy_preprocessed_shader_source(&renderer.outline_source)
+    shared.destroy_preprocessed_shader_source(&renderer.mask_source)
+    shared.destroy_preprocessed_shader_source(&renderer.downscale_source)
+    shared.destroy_preprocessed_shader_program_source(&renderer.cel_band_source)
+    shared.destroy_preprocessed_shader_program_source(&renderer.scene_source)
     renderer^ = {}
 }
 
-game_room_center :: proc(room_id: Game_Room_ID) -> rl.Vector3 {
+game_room_center :: proc(room_id: shared.Game_Room_ID) -> rl.Vector3 {
     room := game_room(room_id)
     return {
         (room.bounds.min_x + room.bounds.max_x) * 0.5,
@@ -891,7 +877,7 @@ game_room_center :: proc(room_id: Game_Room_ID) -> rl.Vector3 {
 // Apply a room-clamped deadzone around the player plus input look-ahead. Fixed
 // diagnostic rooms bypass follow behavior and use their authored center.
 game_camera_room_target :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     player_position: rl.Vector3,
     look_ahead: rl.Vector2,
     reference_target: rl.Vector3,
@@ -1064,7 +1050,7 @@ game_pixel_snap_offset :: proc(
 }
 
 game_room_opening :: proc(
-    room_id: Game_Room_ID,
+    room_id: shared.Game_Room_ID,
     side: Game_Exit_Side,
 ) -> (center, half_width: f32, found: bool) {
     for exit in GAME_EXITS {
@@ -1571,7 +1557,7 @@ game_refresh_decor_visibility_state :: proc(
 }
 
 game_decor_visibility_effect :: proc(
-    room: Game_Room_ID,
+    room: shared.Game_Room_ID,
     occluded: bool,
 ) -> Game_Decor_Visibility_Effect {
     if !occluded {
@@ -1604,7 +1590,7 @@ game_decor_visibility_amount :: proc(
 
 game_set_decor_visibility_shader :: proc(
     shader: rl.Shader,
-    bindings: ^Cel_Shader_Bindings,
+    bindings: ^shared.Cel_Shader_Bindings,
     visibility: f32,
 ) {
     shader_visibility := visibility
@@ -1622,7 +1608,7 @@ game_draw_decor :: proc(
     assets: ^Game_Assets,
     state: ^Game_State,
     shader: rl.Shader,
-    bindings: ^Cel_Shader_Bindings,
+    bindings: ^shared.Cel_Shader_Bindings,
     visibility: ^Game_Decor_Visibility_State,
 ) {
     for decor, decor_index in GAME_DECOR {
@@ -1872,7 +1858,7 @@ game_zombie_mode_label :: proc(mode: Game_Zombie_Mode) -> cstring {
     return "UNKNOWN"
 }
 
-game_zombie_count_in_room :: proc(room_id: Game_Room_ID) -> int {
+game_zombie_count_in_room :: proc(room_id: shared.Game_Room_ID) -> int {
     count := 0
     for spawn in GAME_ZOMBIE_SPAWNS {
         if spawn.room == room_id {
@@ -1892,7 +1878,7 @@ game_apply_zombie_animation :: proc(
 ) {
     if !assets.zombie.valid ||
        !assets.zombie_clips_valid ||
-       !has_playable_animations(&assets.zombie_animation) {
+       !shared.has_playable_animations(&assets.zombie_animation) {
         return
     }
 
@@ -1905,7 +1891,7 @@ game_apply_zombie_animation :: proc(
     case .ATTACK:  desired_clip = assets.zombie_attack_clip
     }
     assets.zombie_animation.active_index = desired_clip
-    animation, found := get_active_animation(&assets.zombie_animation)
+    animation, found := shared.get_active_animation(&assets.zombie_animation)
     if !found {
         return
     }
@@ -1944,7 +1930,7 @@ game_apply_zombie_animation :: proc(
     }
 
     assets.zombie_animation.current_frame = frame
-    pose_frame := get_animation_pose_frame(&assets.zombie_animation, animation)
+    pose_frame := shared.get_animation_pose_frame(&assets.zombie_animation, animation)
     // All zombies share one animated model. Upload each deterministic pose
     // immediately before its draw so every instance can show its own state.
     rl.UpdateModelAnimation(assets.zombie.model, animation, pose_frame)
@@ -1958,7 +1944,7 @@ game_draw_zombie :: proc(
 ) {
     zombie := &state.zombies[zombie_index]
     facing := game_normalize_input(zombie.facing)
-    if game_vector_length(facing) <= 0.001 {
+    if shared.game_vector_length(facing) <= 0.001 {
         facing = {0, 1}
     }
     side := rl.Vector2{-facing.y, facing.x}
@@ -2155,7 +2141,7 @@ game_draw_zombie :: proc(
 
 game_set_pixel_snap_offset :: proc(
     shader: rl.Shader,
-    bindings: ^Cel_Shader_Bindings,
+    bindings: ^shared.Cel_Shader_Bindings,
     offset: Game_Pixel_Snap_Offset,
 ) {
     snap_offset := offset
@@ -2177,7 +2163,7 @@ game_draw_zombies :: proc(
     assets: ^Game_Assets,
     state: ^Game_State,
     shader: rl.Shader,
-    bindings: ^Cel_Shader_Bindings,
+    bindings: ^shared.Cel_Shader_Bindings,
     camera: rl.Camera3D,
 ) {
     for spawn, zombie_index in GAME_ZOMBIE_SPAWNS {
@@ -2195,7 +2181,7 @@ game_draw_zombies :: proc(
 
 game_set_cel_accents_enabled :: proc(
     shader: rl.Shader,
-    bindings: ^Cel_Shader_Bindings,
+    bindings: ^shared.Cel_Shader_Bindings,
     rim_enabled, highlight_enabled: bool,
 ) {
     rim_value := c.int(0)
@@ -2213,9 +2199,9 @@ game_draw_world :: proc(
     assets: ^Game_Assets,
     state: ^Game_State,
     shader: rl.Shader,
-    bindings: ^Cel_Shader_Bindings,
+    bindings: ^shared.Cel_Shader_Bindings,
     cel_ramp: rl.Texture2D,
-    style: ^Cel_Style,
+    style: ^shared.Cel_Style,
     camera: rl.Camera3D,
     decor_visibility: ^Game_Decor_Visibility_State,
 ) {
@@ -2311,13 +2297,13 @@ game_update_player_animation :: proc(
     state: ^Game_State,
     simulated_dt: f32,
 ) {
-    if !assets.player.valid || !has_playable_animations(&assets.animation) {
+    if !assets.player.valid || !shared.has_playable_animations(&assets.animation) {
         return
     }
     desired_clip := assets.walk_clip
     fixed_pose := state.current_room == .TEST_PIXEL_SNAP
-    moving := !fixed_pose && game_vector_length(state.player.velocity) > 0.08
-    speed: f32 = max(game_vector_length(state.player.velocity) / GAME_MOVE_SPEED, 0.65)
+    moving := !fixed_pose && shared.game_vector_length(state.player.velocity) > 0.08
+    speed: f32 = max(shared.game_vector_length(state.player.velocity) / GAME_MOVE_SPEED, 0.65)
     if !fixed_pose && state.player.mode == .DASHING {
         desired_clip = assets.run_clip
         moving = true
@@ -2329,7 +2315,7 @@ game_update_player_animation :: proc(
         assets.animation.current_frame = 0
         assets.animation.applied_frame = -1
     }
-    animation, found := get_active_animation(&assets.animation)
+    animation, found := shared.get_active_animation(&assets.animation)
     if !found {
         return
     }
@@ -2342,7 +2328,7 @@ game_update_player_animation :: proc(
     } else {
         assets.animation.current_frame = 0
     }
-    pose_frame := get_animation_pose_frame(&assets.animation, animation)
+    pose_frame := shared.get_animation_pose_frame(&assets.animation, animation)
     if pose_frame != assets.animation.applied_frame {
         rl.UpdateModelAnimation(
             assets.player.model,
@@ -2666,7 +2652,7 @@ game_renderer_render :: proc(
     renderer: ^Game_Renderer,
     assets: ^Game_Assets,
     state: ^Game_State,
-    style: ^Cel_Style,
+    style: ^shared.Cel_Style,
     camera: rl.Camera3D,
     background_color: rl.Color,
 ) {
@@ -2758,7 +2744,7 @@ game_renderer_render :: proc(
 
     rl.BeginTextureMode(renderer.scene_target)
         rl.ClearBackground(rl.BLANK)
-        apply_cel_style_to_shader(
+        shared.apply_cel_style_to_shader(
             renderer.scene_shader,
             &renderer.scene_bindings,
             style,
@@ -2781,7 +2767,7 @@ game_renderer_render :: proc(
 
     rl.BeginTextureMode(renderer.cel_band_target)
         rl.ClearBackground(rl.BLANK)
-        apply_cel_style_to_shader(
+        shared.apply_cel_style_to_shader(
             renderer.cel_band_shader,
             &renderer.cel_band_bindings,
             style,
@@ -2886,7 +2872,7 @@ game_collect_input :: proc() -> Game_Input {
             rl.GetGamepadAxisMovement(0, .LEFT_X),
             rl.GetGamepadAxisMovement(0, .LEFT_Y),
         }
-        if game_vector_length(stick) >= GAME_GAMEPAD_DEADZONE {
+        if shared.game_vector_length(stick) >= GAME_GAMEPAD_DEADZONE {
             input.move = stick
         } else {
             if rl.IsGamepadButtonDown(0, .LEFT_FACE_RIGHT) { input.move.x += 1 }
@@ -2911,7 +2897,7 @@ game_quit_requested :: proc() -> bool {
 
 game_capture_texture :: proc(
     renderer: ^Game_Renderer,
-    target: Capture_Target,
+    target: shared.Capture_Target,
 ) -> rl.Texture2D {
     switch target {
     case .COMPOSITE:
@@ -2928,8 +2914,8 @@ game_capture_texture :: proc(
     return {}
 }
 
-make_game_cel_style :: proc() -> Cel_Style {
-    style := make_classic_cel_style()
+make_game_cel_style :: proc() -> shared.Cel_Style {
+    style := shared.make_classic_cel_style()
     style.name = "Neon Twilight"
     style.light_space = .WORLD
     style.light_direction = {-0.35, 0.86, -0.42}
@@ -2989,8 +2975,8 @@ run_game_mode :: proc(arguments: []string) -> int {
     defer log.destroy_console_logger(console_logger)
     context.logger = console_logger
 
-    if standard_help_requested(arguments) ||
-       cli_argument_present(arguments, "--game-help") {
+    if shared.standard_help_requested(arguments) ||
+       shared.cli_argument_present(arguments, "--game-help") {
         print_game_usage()
         return 0
     }
@@ -3002,13 +2988,13 @@ run_game_mode :: proc(arguments: []string) -> int {
         return 2
     }
 
-    capture_result := parse_capture_options(arguments)
-    defer destroy_capture_options(&capture_result.options)
+    capture_result := shared.parse_capture_options(arguments)
+    defer shared.destroy_capture_options(&capture_result.options)
     if run_options.help_requested || capture_result.options.help_requested {
         print_game_usage()
         if capture_result.options.help_requested {
             fmt.println("")
-            print_capture_usage()
+            shared.print_capture_usage()
         }
         return 0
     }
@@ -3079,16 +3065,16 @@ run_game_mode :: proc(arguments: []string) -> int {
         }
     }
     video_enabled := len(run_options.video_output) > 0
-    video_options_error := validate_game_video_options(&run_options, capture)
+    video_options_error := shared.validate_game_video_options(&run_options, capture)
     if video_options_error != .NONE {
-        log.error(game_video_options_error_message(video_options_error))
+        log.error(shared.game_video_options_error_message(video_options_error))
         return 2
     }
 
-    video_encoder: Video_Stream_Encoder
-    defer destroy_video_stream_encoder(&video_encoder)
+    video_encoder: shared.Video_Stream_Encoder
+    defer shared.destroy_video_stream_encoder(&video_encoder)
     if video_enabled {
-        video_start_error := start_video_stream_encoder(
+        video_start_error := shared.start_video_stream_encoder(
             &video_encoder,
             run_options.video_output,
             GAME_SCREEN_WIDTH,
@@ -3104,18 +3090,18 @@ run_game_mode :: proc(arguments: []string) -> int {
     }
 
     style := make_game_cel_style()
-    defer destroy_cel_style(&style)
+    defer shared.destroy_cel_style(&style)
     if capture.enabled && len(capture.style_path) > 0 {
-        loaded_style, style_error := load_cel_style(capture.style_path)
+        loaded_style, style_error := shared.load_cel_style(capture.style_path)
         if style_error != .NONE {
             log.errorf(
                 "Failed to load game capture style %s: %s",
                 capture.style_path,
-                cel_style_error_message(style_error),
+                shared.cel_style_error_message(style_error),
             )
             return 2
         }
-        replace_cel_style(&style, loaded_style)
+        shared.replace_cel_style(&style, loaded_style)
     }
     if style.outline.width == 0 {
         style.outline.width = 1
@@ -3312,7 +3298,7 @@ run_game_mode :: proc(arguments: []string) -> int {
                     )
                     capture_complete = true
                     capture_succeeded = false
-                } else if !video_stream_write_render_texture(
+                } else if !shared.video_stream_write_render_texture(
                     &video_encoder,
                     renderer.composite_target.texture,
                 ) {
@@ -3325,7 +3311,7 @@ run_game_mode :: proc(arguments: []string) -> int {
                     capture_succeeded = false
                 } else if replay_player.ticks_played >= replay.total_ticks {
                     capture_complete = true
-                    capture_succeeded = finish_video_stream_encoder(
+                    capture_succeeded = shared.finish_video_stream_encoder(
                         &video_encoder,
                         run_options.video_output,
                         replay.total_ticks,
@@ -3339,7 +3325,7 @@ run_game_mode :: proc(arguments: []string) -> int {
                     run_options.record_directory,
                     int(state.tick),
                 )
-                frame_succeeded := export_render_texture_png(
+                frame_succeeded := shared.export_render_texture_png(
                     capture_texture,
                     frame_path,
                 )
@@ -3373,7 +3359,7 @@ run_game_mode :: proc(arguments: []string) -> int {
                 }
                 if tick_ready && capture_frames >= capture.warmup_frames {
                     capture_texture := game_capture_texture(&renderer, capture.target)
-                    capture_succeeded = export_render_texture_png(
+                    capture_succeeded = shared.export_render_texture_png(
                         capture_texture,
                         capture.output_path,
                     )

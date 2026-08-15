@@ -1,4 +1,4 @@
-package main
+package shared
 
 // This module defines the runtime cel-shading model, its JSON wire format, and
 // the CPU-to-GLSL upload path. Runtime structs use raylib vector/color types,

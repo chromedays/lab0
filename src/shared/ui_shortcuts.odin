@@ -1,4 +1,4 @@
-package main
+package shared
 
 // This module centralizes application commands, shortcut matching, keyboard
 // focus traversal, and raygui wrappers. Mouse and keyboard activation therefore

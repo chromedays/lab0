@@ -1,5 +1,7 @@
 package main
 
+import shared "./shared"
+
 // Viewer video capture streams deterministic animation poses through the same
 // composite RenderTexture used by still captures. The frame range remains the
 // authoritative sequence contract; no intermediate PNG sequence is produced.
@@ -18,7 +20,7 @@ Viewer_Video_Options_Error :: enum {
 }
 
 validate_viewer_video_options :: proc(
-    capture: ^Capture_Options,
+    capture: ^shared.Capture_Options,
 ) -> Viewer_Video_Options_Error {
     if len(capture.video_output) == 0 {
         if capture.video_frame_count > 0 {
@@ -26,7 +28,7 @@ validate_viewer_video_options :: proc(
         }
         return .NONE
     }
-    if !video_stream_output_path_valid(capture.video_output) {
+    if !shared.video_stream_output_path_valid(capture.video_output) {
         return .INVALID_OUTPUT
     }
     if !capture.frame_range_set {
@@ -61,7 +63,7 @@ viewer_video_options_error_message :: proc(
     return "unknown Viewer video option error"
 }
 
-viewer_video_expected_frame_count :: proc(capture: ^Capture_Options) -> u64 {
+viewer_video_expected_frame_count :: proc(capture: ^shared.Capture_Options) -> u64 {
     if capture.video_frame_count > 0 {
         return capture.video_frame_count
     }
@@ -79,7 +81,7 @@ viewer_video_expected_frame_count :: proc(capture: ^Capture_Options) -> u64 {
 // frame count exactly once. Without a duration, preserve the existing discrete
 // start:end:step pose sequence.
 viewer_video_pose_frame :: proc(
-    capture: ^Capture_Options,
+    capture: ^shared.Capture_Options,
     output_frame_index: u64,
 ) -> f32 {
     expected_frames := viewer_video_expected_frame_count(capture)

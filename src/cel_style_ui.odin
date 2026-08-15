@@ -7,6 +7,7 @@ package main
 import "core:c"
 import "core:log"
 import "core:math"
+import shared "./shared"
 import rl "vendor:raylib"
 
 CEL_STYLE_PRESET_OPTIONS :: "Classic;Anime;Noir"
@@ -41,7 +42,7 @@ Cel_Color_Target :: enum {
     OUTLINE,
 }
 
-// Cel_Style_UI_State stores presentation state separately from Cel_Style so UI
+// Cel_Style_UI_State stores presentation state separately from shared.Cel_Style so UI
 // expansion, focus, and transient status never leak into saved presets.
 Cel_Style_UI_State :: struct {
     open:               bool,
@@ -83,7 +84,7 @@ set_cel_style_ui_status :: proc(
 // degrees for the azimuth/elevation controls after loading or resetting a style.
 sync_cel_style_light_angles :: proc(
     state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
+    style: ^shared.Cel_Style,
 ) {
     direction := rl.Vector3Normalize(style.light_direction)
     radians_to_degrees := f32(180.0 / math.PI)
@@ -98,7 +99,7 @@ sync_cel_style_light_angles :: proc(
 // editor's degree values after either angular slider changes.
 update_cel_style_direction_from_angles :: proc(
     state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
+    style: ^shared.Cel_Style,
 ) {
     degrees_to_radians := f32(math.PI / 180.0)
     azimuth := state.light_azimuth * degrees_to_radians
@@ -114,9 +115,9 @@ update_cel_style_direction_from_angles :: proc(
 // cel_vector_color_to_raylib encodes normalized runtime RGB for raygui widgets.
 cel_vector_color_to_raylib :: proc(color: rl.Vector3) -> rl.Color {
     return {
-        cel_color_component_to_byte(color.x),
-        cel_color_component_to_byte(color.y),
-        cel_color_component_to_byte(color.z),
+        shared.cel_color_component_to_byte(color.x),
+        shared.cel_color_component_to_byte(color.y),
+        shared.cel_color_component_to_byte(color.z),
         255,
     }
 }
@@ -134,20 +135,20 @@ cel_raylib_color_to_vector :: proc(color: rl.Color) -> rl.Vector3 {
 // successful load, then resets selection, dirty state, and derived light angles.
 load_selected_cel_style_preset :: proc(
     state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
+    style: ^shared.Cel_Style,
 ) -> bool {
     preset_index := clamp(int(state.preset_index), 0, len(CEL_STYLE_PRESET_PATHS) - 1)
-    replacement, load_error := load_cel_style(CEL_STYLE_PRESET_PATHS[preset_index])
+    replacement, load_error := shared.load_cel_style(CEL_STYLE_PRESET_PATHS[preset_index])
     if load_error != .NONE {
         log.errorf(
             "Failed to load cel style preset %s: %s",
             CEL_STYLE_PRESET_PATHS[preset_index],
-            cel_style_error_message(load_error),
+            shared.cel_style_error_message(load_error),
         )
         set_cel_style_ui_status(state, .LOAD_FAILED)
         return false
     }
-    replace_cel_style(style, replacement)
+    shared.replace_cel_style(style, replacement)
     state.selected_band = 0
     state.dirty = false
     sync_cel_style_light_angles(state, style)
@@ -159,15 +160,15 @@ load_selected_cel_style_preset :: proc(
 // bundled path and updates status without discarding unsaved state on failure.
 save_selected_cel_style_preset :: proc(
     state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
+    style: ^shared.Cel_Style,
 ) -> bool {
     preset_index := clamp(int(state.preset_index), 0, len(CEL_STYLE_PRESET_PATHS) - 1)
-    save_error := save_cel_style(CEL_STYLE_PRESET_PATHS[preset_index], style)
+    save_error := shared.save_cel_style(CEL_STYLE_PRESET_PATHS[preset_index], style)
     if save_error != .NONE {
         log.errorf(
             "Failed to save cel style preset %s: %s",
             CEL_STYLE_PRESET_PATHS[preset_index],
-            cel_style_error_message(save_error),
+            shared.cel_style_error_message(save_error),
         )
         set_cel_style_ui_status(state, .SAVE_FAILED)
         return false
@@ -181,10 +182,10 @@ save_selected_cel_style_preset :: proc(
 // resets modal editor state while marking the result as an unsaved edit.
 reset_cel_style_to_classic :: proc(
     state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
+    style: ^shared.Cel_Style,
 ) {
-    replacement := make_classic_cel_style()
-    replace_cel_style(style, replacement)
+    replacement := shared.make_classic_cel_style()
+    shared.replace_cel_style(style, replacement)
     state.preset_index = 0
     state.selected_band = 0
     state.dirty = true
@@ -195,8 +196,8 @@ reset_cel_style_to_classic :: proc(
 
 // add_cel_band_after splits the selected diffuse interval in half. It shifts
 // following bands and refuses splits that violate the one-byte threshold gap.
-add_cel_band_after :: proc(style: ^Cel_Style, selected_band: int) -> bool {
-    if style.band_count >= MAX_CEL_BANDS {
+add_cel_band_after :: proc(style: ^shared.Cel_Style, selected_band: int) -> bool {
+    if style.band_count >= shared.MAX_CEL_BANDS {
         return false
     }
     selected := clamp(selected_band, 0, style.band_count - 1)
@@ -209,8 +210,8 @@ add_cel_band_after :: proc(style: ^Cel_Style, selected_band: int) -> bool {
         upper_bound = style.bands[selected].upper_bound
     }
     split_bound := (lower_bound + upper_bound) * 0.5
-    if split_bound - lower_bound < CEL_BOUNDARY_MINIMUM_GAP ||
-       upper_bound - split_bound < CEL_BOUNDARY_MINIMUM_GAP {
+    if split_bound - lower_bound < shared.CEL_BOUNDARY_MINIMUM_GAP ||
+       upper_bound - split_bound < shared.CEL_BOUNDARY_MINIMUM_GAP {
         return false
     }
 
@@ -226,7 +227,7 @@ add_cel_band_after :: proc(style: ^Cel_Style, selected_band: int) -> bool {
 
 // remove_cel_band merges the selected interval into a neighbor and compacts the
 // fixed array. At least two bands are retained to preserve style validity.
-remove_cel_band :: proc(style: ^Cel_Style, selected_band: int) -> bool {
+remove_cel_band :: proc(style: ^shared.Cel_Style, selected_band: int) -> bool {
     if style.band_count <= 2 {
         return false
     }
@@ -246,7 +247,7 @@ remove_cel_band :: proc(style: ^Cel_Style, selected_band: int) -> bool {
 // draw_collapsible_header renders a keyboard-focusable section header and
 // toggles the supplied expansion flag on mouse or keyboard activation.
 draw_collapsible_header :: proc(
-    id: UI_Focus_ID,
+    id: shared.UI_Focus_ID,
     bounds: rl.Rectangle,
     title: cstring,
     expanded: ^bool,
@@ -257,7 +258,7 @@ draw_collapsible_header :: proc(
     } else {
         label = rl.TextFormat("+  %s", title)
     }
-    if ui_gui_button(
+    if shared.ui_gui_button(
         id,
         {bounds.x + 3, bounds.y + 3, bounds.width - 6, bounds.height - 6},
         label,
@@ -269,7 +270,7 @@ draw_collapsible_header :: proc(
 // draw_cel_style_slider combines a label, focus-aware slider, and numeric readout.
 // step/coarse_step define deterministic keyboard adjustments.
 draw_cel_style_slider :: proc(
-    id: UI_Focus_ID,
+    id: shared.UI_Focus_ID,
     x, y, width: f32,
     label: cstring,
     value: ^f32,
@@ -282,7 +283,7 @@ draw_cel_style_slider :: proc(
     slider_width := max(width - label_width - value_width - 8, f32(24))
     rl.GuiLabel({x, y, label_width, 20}, label)
     previous := value^
-    changed := ui_gui_slider_bar(
+    changed := shared.ui_gui_slider_bar(
         id,
         {slider_x, y, slider_width, 20},
         nil,
@@ -303,7 +304,7 @@ draw_cel_style_slider :: proc(
 // draw_cel_color_swatch toggles the requested color picker and transfers focus
 // to the correct picker control while always displaying the encoded RGB value.
 draw_cel_color_swatch :: proc(
-    id: UI_Focus_ID,
+    id: shared.UI_Focus_ID,
     x, y, width: f32,
     label: cstring,
     color: rl.Color,
@@ -312,16 +313,16 @@ draw_cel_color_swatch :: proc(
 ) {
     rl.GuiLabel({x, y, 104, 22}, label)
     swatch_bounds := rl.Rectangle{x + 108, y, 52, 22}
-    if ui_gui_button(id, swatch_bounds, nil) {
+    if shared.ui_gui_button(id, swatch_bounds, nil) {
         if state.color_target == target {
             state.color_target = .NONE
         } else {
             state.color_target = target
             switch target {
-            case .BAND_TINT: ui_keyboard_set_focus(.CEL_BAND_TINT_PICKER)
-            case .RIM:       ui_keyboard_set_focus(.CEL_RIM_PICKER)
-            case .HIGHLIGHT: ui_keyboard_set_focus(.CEL_HIGHLIGHT_PICKER)
-            case .OUTLINE:   ui_keyboard_set_focus(.CEL_OUTLINE_PICKER)
+            case .BAND_TINT: shared.ui_keyboard_set_focus(.CEL_BAND_TINT_PICKER)
+            case .RIM:       shared.ui_keyboard_set_focus(.CEL_RIM_PICKER)
+            case .HIGHLIGHT: shared.ui_keyboard_set_focus(.CEL_HIGHLIGHT_PICKER)
+            case .OUTLINE:   shared.ui_keyboard_set_focus(.CEL_OUTLINE_PICKER)
             case .NONE:
             }
         }
@@ -347,7 +348,7 @@ cel_style_light_content_height :: proc() -> f32 {
 // and alpha-cutoff rows for the currently selected band and alpha mode.
 cel_style_bands_content_height :: proc(
     state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
+    style: ^shared.Cel_Style,
 ) -> f32 {
     height: f32 = 32 + 28
     selected := clamp(int(state.selected_band), 0, style.band_count - 1)
@@ -404,7 +405,7 @@ cel_subsection_height :: proc(open: bool, content_height: f32) -> f32 {
 // and style state; draw code must keep its row increments synchronized with it.
 cel_style_editor_height :: proc(
     state: ^Cel_Style_UI_State,
-    style: ^Cel_Style,
+    style: ^shared.Cel_Style,
 ) -> f32 {
     if !state.open {
         return INSPECTOR_SECTION_HEADER_HEIGHT
@@ -437,16 +438,16 @@ draw_cel_accent_content :: proc(
     label: cstring,
     target: Cel_Color_Target,
     state: ^Cel_Style_UI_State,
-    accent: ^Cel_Accent,
+    accent: ^shared.Cel_Accent,
 ) -> bool {
     changed := false
     cursor_y := y
-    enabled_focus := UI_Focus_ID.CEL_RIM_ENABLED
-    threshold_focus := UI_Focus_ID.CEL_RIM_THRESHOLD
-    strength_focus := UI_Focus_ID.CEL_RIM_STRENGTH
-    samples_focus := UI_Focus_ID.CEL_RIM_SAMPLES
-    swatch_focus := UI_Focus_ID.CEL_RIM_SWATCH
-    picker_focus := UI_Focus_ID.CEL_RIM_PICKER
+    enabled_focus := shared.UI_Focus_ID.CEL_RIM_ENABLED
+    threshold_focus := shared.UI_Focus_ID.CEL_RIM_THRESHOLD
+    strength_focus := shared.UI_Focus_ID.CEL_RIM_STRENGTH
+    samples_focus := shared.UI_Focus_ID.CEL_RIM_SAMPLES
+    swatch_focus := shared.UI_Focus_ID.CEL_RIM_SWATCH
+    picker_focus := shared.UI_Focus_ID.CEL_RIM_PICKER
     if target == .HIGHLIGHT {
         enabled_focus = .CEL_HIGHLIGHT_ENABLED
         threshold_focus = .CEL_HIGHLIGHT_THRESHOLD
@@ -456,7 +457,7 @@ draw_cel_accent_content :: proc(
         picker_focus = .CEL_HIGHLIGHT_PICKER
     }
     previous_enabled := accent.enabled
-    _ = ui_gui_check_box(
+    _ = shared.ui_gui_check_box(
         enabled_focus,
         {x, cursor_y + 2, 18, 18},
         nil,
@@ -478,7 +479,7 @@ draw_cel_accent_content :: proc(
     rl.GuiLabel({x, cursor_y, 104, 22}, "Keep samples")
     preserve_samples := c.int(accent.preserve_samples)
     previous_samples := preserve_samples
-    _ = ui_gui_spinner(
+    _ = shared.ui_gui_spinner(
         samples_focus,
         {x + 108, cursor_y, width - 108, 22},
         nil,
@@ -508,7 +509,7 @@ draw_cel_accent_content :: proc(
     cursor_y += 32
     if state.color_target == target {
         previous_color := color
-        _ = ui_gui_color_picker(
+        _ = shared.ui_gui_color_picker(
             picker_focus,
             {x, cursor_y, 126, 126},
             &color,
@@ -525,7 +526,7 @@ draw_cel_accent_content :: proc(
 // draw_cel_subsection renders the panel chrome and delegates expansion behavior
 // to the shared collapsible-header control.
 draw_cel_subsection :: proc(
-    id: UI_Focus_ID,
+    id: shared.UI_Focus_ID,
     x, y, width: f32,
     title: cstring,
     open: ^bool,
