@@ -114,7 +114,7 @@ Game_Zombie_Animation_Kind :: enum {
 
 game_zombie_animation_kind :: proc(mode: Game_Zombie_Mode) -> Game_Zombie_Animation_Kind {
     switch mode {
-    case .SHAMBLING, .CHASING:
+    case .SHAMBLING, .CHASING, .RETURNING:
         return .WALKING
     case .WINDUP, .LUNGING:
         return .ATTACK
@@ -1825,6 +1825,7 @@ game_zombie_mode_label :: proc(mode: Game_Zombie_Mode) -> cstring {
     switch mode {
     case .SHAMBLING:  return "SHAMBLING"
     case .CHASING:    return "CHASING"
+    case .RETURNING:  return "RETURNING"
     case .WINDUP:     return "WINDUP"
     case .LUNGING:    return "LUNGING"
     case .RECOVERING: return "RECOVERING"
@@ -1875,6 +1876,8 @@ game_apply_zombie_animation :: proc(
             playback_speed: f32 = 0.52
             if zombie.mode == .CHASING {
                 playback_speed = 1.05
+            } else if zombie.mode == .RETURNING {
+                playback_speed = 0.82
             }
             frame = math.mod(
                 state.elapsed_time * ANIMATION_SAMPLE_FPS * playback_speed +
@@ -1937,6 +1940,13 @@ game_draw_zombie :: proc(
         marker_color = {103, 112, 58, 255}
         lean = 0.09
         arm_reach = 0.38
+    case .RETURNING:
+        skin_color = {132, 163, 104, 255}
+        shirt_color = {67, 70, 105, 255}
+        marker_color = {75, 177, 177, 255}
+        eye_color = {105, 219, 205, 255}
+        lean = 0.045
+        arm_reach = 0.30
     case .WINDUP:
         skin_color = {225, 188, 83, 255}
         shirt_color = {116, 60, 105, 255}
@@ -1972,13 +1982,36 @@ game_draw_zombie :: proc(
             0.025,
             facing.y * telegraph_length * 0.5,
         }
+        // A dark, wider underlay keeps the committed lane readable over every
+        // room floor; the thin neon core and endpoint communicate direction.
         rl.DrawModelEx(
             assets.cube,
             telegraph_center,
             {0, 1, 0},
             rotation,
-            {0.24, 0.045, telegraph_length},
-            marker_color,
+            {0.46, 0.035, telegraph_length + 0.12},
+            {14, 11, 35, 255},
+        )
+        rl.DrawModelEx(
+            assets.cube,
+            telegraph_center + rl.Vector3{0, 0.018, 0},
+            {0, 1, 0},
+            rotation,
+            {0.18, 0.045, telegraph_length},
+            {255, 82, 151, 255},
+        )
+        telegraph_end := zombie.position + rl.Vector3{
+            facing.x * telegraph_length,
+            0.055,
+            facing.y * telegraph_length,
+        }
+        rl.DrawModelEx(
+            assets.sphere,
+            telegraph_end,
+            {0, 1, 0},
+            rotation,
+            {0.34, 0.07, 0.34},
+            {255, 230, 137, 255},
         )
     }
 
@@ -2542,6 +2575,35 @@ game_draw_hud :: proc(
             392,
             16,
             {218, 209, 239, 255},
+        )
+    }
+    if state.hit_feedback > 0 {
+        feedback := clamp(
+            state.hit_feedback / GAME_HIT_FEEDBACK_TIME,
+            f32(0),
+            f32(1),
+        )
+        flash_alpha := u8(math.round(72 * feedback))
+        border_alpha := u8(math.round(255 * min(feedback * 1.8, f32(1))))
+        rl.DrawRectangle(
+            0,
+            0,
+            GAME_SCREEN_WIDTH,
+            GAME_SCREEN_HEIGHT,
+            {255, 38, 91, flash_alpha},
+        )
+        border := f32(8 + 12 * feedback)
+        rl.DrawRectangleLinesEx(
+            {0, 0, GAME_SCREEN_WIDTH, GAME_SCREEN_HEIGHT},
+            border,
+            {255, 232, 190, border_alpha},
+        )
+        rl.DrawText(
+            "BITTEN!",
+            GAME_SCREEN_WIDTH / 2 - 63,
+            GAME_SCREEN_HEIGHT / 2 - 24,
+            30,
+            {255, 244, 217, border_alpha},
         )
     }
     if state.debug_visible {

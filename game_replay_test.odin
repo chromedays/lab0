@@ -2,6 +2,7 @@ package main
 
 import "core:math"
 import "core:testing"
+import rl "vendor:raylib"
 
 @(test)
 game_replay_segments_expand_to_exact_tick_inputs :: proc(t: ^testing.T) {
@@ -366,6 +367,51 @@ game_zombie_encounter_replay_commits_to_one_dodge :: proc(t: ^testing.T) {
 }
 
 @(test)
+game_r02_single_zombie_replay_disengages_and_returns_home :: proc(
+    t: ^testing.T,
+) {
+    replay, replay_error := load_game_replay("replays/zombie-r02-disengage.json")
+    testing.expect_value(t, replay_error, Game_Replay_Error.NONE)
+    if replay_error != .NONE { return }
+    defer destroy_game_replay(&replay)
+
+    state := game_state_init(replay.start_room)
+    zombie_index := 0
+    player: Game_Replay_Player
+    saw_chase := false
+    saw_windup := false
+    saw_return := false
+    for {
+        input, available := game_replay_next_input(&replay, &player)
+        if !available { break }
+        game_fixed_update(&state, input, GAME_FIXED_DT)
+        #partial switch state.zombies[zombie_index].mode {
+        case .CHASING:   saw_chase = true
+        case .WINDUP:    saw_windup = true
+        case .RETURNING: saw_return = true
+        }
+    }
+
+    testing.expect_value(t, replay.total_ticks, u64(825))
+    testing.expect_value(t, state.current_room, Game_Room_ID.R02_CENTRAL_RUIN)
+    testing.expect_value(t, state.zombie_hits, 0)
+    testing.expect(t, saw_chase, "the R02 fixture should wake the single zombie")
+    testing.expect(t, saw_windup, "the R02 fixture should expose the attack telegraph")
+    testing.expect(t, saw_return, "the R02 fixture should show chase disengagement")
+    anchor := game_zombie_patrol_anchor(zombie_index, state.zombies[zombie_index].position)
+    anchor_delta := rl.Vector2{
+        state.zombies[zombie_index].position.x - anchor.x,
+        state.zombies[zombie_index].position.z - anchor.z,
+    }
+    testing.expectf(
+        t,
+        game_vector_length(anchor_delta) <= GAME_ZOMBIE_RETURN_RADIUS + 0.001,
+        "the R02 fixture should finish with the zombie back on patrol, delta %.3f",
+        game_vector_length(anchor_delta),
+    )
+}
+
+@(test)
 game_zombie_gauntlet_replay_runs_thirty_seconds_of_active_evasion :: proc(
     t: ^testing.T,
 ) {
@@ -380,6 +426,7 @@ game_zombie_gauntlet_replay_runs_thirty_seconds_of_active_evasion :: proc(
     windup_ticks := 0
     lunge_ticks := 0
     maximum_chasers := 0
+    minimum_spacing: f32 = 1000
     first_hit_tick: u64
     first_exit_tick: u64
     for {
@@ -418,17 +465,28 @@ game_zombie_gauntlet_replay_runs_thirty_seconds_of_active_evasion :: proc(
             }
         }
         maximum_chasers = max(maximum_chasers, chasers)
+        for zombie_index in 1 ..= 6 {
+            for other_index in zombie_index + 1 ..= 6 {
+                spacing := game_vector_length(rl.Vector2{
+                    state.zombies[zombie_index].position.x -
+                        state.zombies[other_index].position.x,
+                    state.zombies[zombie_index].position.z -
+                        state.zombies[other_index].position.z,
+                })
+                minimum_spacing = min(minimum_spacing, spacing)
+            }
+        }
     }
 
     testing.expect_value(t, replay.total_ticks, u64(1_800))
     testing.expect_value(t, state.tick, u64(1_800))
     testing.expect_value(t, state.dash_count, 39)
-    testing.expect_value(t, state.zombie_hits, 3)
-    testing.expect_value(t, state.reset_count, 3)
+    testing.expect_value(t, state.zombie_hits, 1)
+    testing.expect_value(t, state.reset_count, 1)
     testing.expect_value(t, stats.observed_ticks, replay.total_ticks)
     testing.expect_value(t, stats.dashes, 39)
-    testing.expect_value(t, stats.hits, 3)
-    testing.expect_value(t, stats.resets, 3)
+    testing.expect_value(t, stats.hits, 1)
+    testing.expect_value(t, stats.resets, 1)
     testing.expectf(
         t,
         state.current_room == .R03_WIDE_GROVE,
@@ -438,6 +496,13 @@ game_zombie_gauntlet_replay_runs_thirty_seconds_of_active_evasion :: proc(
     )
     testing.expectf(t, state.dash_count >= 30, "gauntlet should contain repeated dashes")
     testing.expectf(t, maximum_chasers >= 3, "at least three zombies should join one chase")
+    testing.expectf(
+        t,
+        minimum_spacing + 0.0001 >= GAME_ZOMBIE_SEPARATION,
+        "R03 crowd spacing fell below %.3f: %.3f",
+        GAME_ZOMBIE_SEPARATION,
+        minimum_spacing,
+    )
     testing.expectf(t, windup_ticks > 0, "gauntlet should show attack windups")
     testing.expectf(t, lunge_ticks > 0, "gauntlet should show committed lunges")
 }

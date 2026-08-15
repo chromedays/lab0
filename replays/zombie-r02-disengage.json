@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "start_room": "R02",
+  "segments": [
+    {"ticks": 150, "move": [1.0, 0.0], "dash_on_first": false},
+    {"ticks": 90, "move": [0.0, 1.0], "dash_on_first": false},
+    {"ticks": 45, "move": [1.0, 0.0], "dash_on_first": false},
+    {"ticks": 1, "move": [-0.70, 0.70], "dash_on_first": true},
+    {"ticks": 179, "move": [-0.70, 0.70], "dash_on_first": false},
+    {"ticks": 360, "move": [0.0, 0.0], "dash_on_first": false}
+  ]
+}

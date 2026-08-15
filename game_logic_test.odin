@@ -261,6 +261,116 @@ game_zombies_spawn_in_valid_patrol_space :: proc(t: ^testing.T) {
 }
 
 @(test)
+game_zombie_crowd_queues_through_a_tight_lane_without_overlap :: proc(
+    t: ^testing.T,
+) {
+    state := game_state_init(.R03_WIDE_GROVE)
+    target := rl.Vector3{62.0, 0, -2.20}
+    lane_start_x: f32 = 50.4
+    lane_spacing: f32 = 0.72
+    first_zombie := 1
+    last_zombie := 6
+    for zombie_index in first_zombie ..= last_zombie {
+        lane_index := zombie_index - first_zombie
+        state.zombies[zombie_index].position = {
+            lane_start_x + f32(lane_index) * lane_spacing,
+            0,
+            -2.20,
+        }
+        state.zombies[zombie_index].facing = {1, 0}
+    }
+    rear_start_x := state.zombies[first_zombie].position.x
+    front_start_x := state.zombies[last_zombie].position.x
+
+    for _ in 0 ..< 120 {
+        for zombie_index in first_zombie ..= last_zombie {
+            game_zombie_walk_towards(
+                &state,
+                zombie_index,
+                target,
+                GAME_ZOMBIE_CHASE_SPEED,
+                GAME_FIXED_DT,
+            )
+        }
+        for zombie_index in first_zombie ..= last_zombie {
+            for other_index in zombie_index + 1 ..= last_zombie {
+                delta := rl.Vector2{
+                    state.zombies[zombie_index].position.x -
+                        state.zombies[other_index].position.x,
+                    state.zombies[zombie_index].position.z -
+                        state.zombies[other_index].position.z,
+                }
+                testing.expectf(
+                    t,
+                    game_vector_length(delta) + 0.0001 >= GAME_ZOMBIE_SEPARATION,
+                    "zombies %d and %d overlapped in the tight lane",
+                    zombie_index,
+                    other_index,
+                )
+            }
+        }
+    }
+
+    testing.expectf(
+        t,
+        state.zombies[first_zombie].position.x > rear_start_x + 2.0,
+        "the back of the queue should keep advancing, got %.3f",
+        state.zombies[first_zombie].position.x,
+    )
+    testing.expectf(
+        t,
+        state.zombies[last_zombie].position.x > front_start_x + 2.0,
+        "the queue leader should clear the bottleneck, got %.3f",
+        state.zombies[last_zombie].position.x,
+    )
+}
+
+@(test)
+game_zombie_disengages_and_returns_to_its_patrol_lane :: proc(t: ^testing.T) {
+    state := game_state_init(.R02_CENTRAL_RUIN)
+    zombie_index := 0
+    zombie := &state.zombies[zombie_index]
+    zombie.position = {37.0, 0, 6.1}
+    zombie.facing = {-1, 0}
+    zombie.mode = .CHASING
+    zombie.alert_memory = 0
+
+    game_fixed_update(&state, {}, GAME_FIXED_DT)
+    testing.expect_value(t, zombie.mode, Game_Zombie_Mode.RETURNING)
+    testing.expectf(
+        t,
+        math.abs(zombie.return_target.x - 41.8) < 0.0001 &&
+            math.abs(zombie.return_target.z - 6.1) < 0.0001,
+        "R02 zombie should return to the nearest point on its patrol lane",
+    )
+    testing.expectf(
+        t,
+        zombie.reengage_delay > 0,
+        "returning should have a short re-engagement delay",
+    )
+
+    returned := false
+    for _ in 0 ..< 240 {
+        game_fixed_update(&state, {}, GAME_FIXED_DT)
+        if zombie.mode == .SHAMBLING {
+            returned = true
+            break
+        }
+    }
+    testing.expect(t, returned, "R02 zombie should regain its patrol lane")
+    anchor := game_zombie_patrol_anchor(zombie_index, zombie.position)
+    anchor_delta := rl.Vector2{
+        zombie.position.x - anchor.x,
+        zombie.position.z - anchor.z,
+    }
+    testing.expectf(
+        t,
+        game_vector_length(anchor_delta) <= GAME_ZOMBIE_RETURN_RADIUS + 0.001,
+        "returned zombie should be on its patrol segment",
+    )
+}
+
+@(test)
 game_zombie_sight_starts_a_chase_but_obstacles_block_it :: proc(t: ^testing.T) {
     state := game_state_init(.R03_WIDE_GROVE)
     zombie_index := 1
@@ -324,6 +434,11 @@ game_zombie_lunge_resets_the_room_after_a_hit :: proc(t: ^testing.T) {
     testing.expect_value(t, state.reset_count, 1)
     testing.expect_value(t, state.player.position, game_room(.R03_WIDE_GROVE).spawn)
     testing.expect_value(t, state.zombies[zombie_index].position, GAME_ZOMBIE_SPAWNS[zombie_index].position)
+    testing.expectf(
+        t,
+        state.hit_feedback > 0,
+        "a zombie hit should leave visible feedback after the room reset",
+    )
 }
 
 @(test)
