@@ -10,12 +10,12 @@ import rl "vendor:raylib"
 GAME_FIXED_DT              :: f32(1.0 / 60.0)
 GAME_MAX_FIXED_TICKS       :: 8
 GAME_MOVE_SPEED            :: f32(3.6)
-GAME_ACCELERATION          :: f32(28.0)
-GAME_DECELERATION          :: f32(36.0)
+GAME_ACCELERATION          :: f32(32.0)
+GAME_DECELERATION          :: f32(44.0)
 GAME_PLAYER_RADIUS         :: f32(0.32)
 GAME_DASH_DURATION         :: f32(0.16)
-GAME_DASH_SPEED            :: f32(10.0)
-GAME_DASH_COOLDOWN         :: f32(0.24)
+GAME_DASH_DISTANCE         :: f32(1.65)
+GAME_DASH_COOLDOWN         :: f32(0.28)
 GAME_DASH_BUFFER           :: f32(0.10)
 GAME_GAMEPAD_DEADZONE      :: f32(0.20)
 GAME_EXIT_REENTRY_LOCK     :: f32(0.15)
@@ -118,6 +118,26 @@ Game_Input :: struct {
     dash_pressed: bool,
 }
 
+// Movement tuning lives in the deterministic state so the automated playtest
+// can run candidate profiles through the exact production update path. Normal
+// play always starts with the constants above; tests may replace only this
+// value without forking collision, dash, or landing behavior.
+Game_Movement_Tuning :: struct {
+    acceleration:  f32,
+    deceleration:  f32,
+    dash_distance: f32,
+    dash_cooldown: f32,
+}
+
+game_default_movement_tuning :: proc() -> Game_Movement_Tuning {
+    return {
+        acceleration = GAME_ACCELERATION,
+        deceleration = GAME_DECELERATION,
+        dash_distance = GAME_DASH_DISTANCE,
+        dash_cooldown = GAME_DASH_COOLDOWN,
+    }
+}
+
 Game_Player :: struct {
     position:              rl.Vector3,
     velocity:              rl.Vector2,
@@ -150,6 +170,7 @@ Game_Zombie :: struct {
 
 Game_State :: struct {
     current_room:       Game_Room_ID,
+    movement_tuning:    Game_Movement_Tuning,
     player:             Game_Player,
     zombies:            [GAME_ZOMBIE_COUNT]Game_Zombie,
     last_safe_position: rl.Vector3,
@@ -333,6 +354,7 @@ game_state_init :: proc(start_room: Game_Room_ID = .R00_START_FOREST) -> Game_St
     room := game_room(start_room)
     state := Game_State{
         current_room = start_room,
+        movement_tuning = game_default_movement_tuning(),
         player = {
             position = room.spawn,
             facing = {1, 0},
@@ -917,7 +939,8 @@ game_finish_dash :: proc(state: ^Game_State) {
 
 game_update_dash :: proc(state: ^Game_State, dt: f32) {
     remaining_time := min(dt, GAME_DASH_DURATION - state.player.dash_elapsed)
-    distance := GAME_DASH_SPEED * remaining_time
+    dash_speed := state.movement_tuning.dash_distance / GAME_DASH_DURATION
+    distance := dash_speed * remaining_time
     step_count := max(int(math.ceil(distance / 0.10)), 1)
     step_distance := distance / f32(step_count)
 
@@ -1053,7 +1076,7 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
             state.player.dash_direction = dash_direction
             state.player.dash_start = state.player.position
             state.player.dash_elapsed = 0
-            state.player.dash_cooldown = GAME_DASH_COOLDOWN
+            state.player.dash_cooldown = state.movement_tuning.dash_cooldown
             state.player.dash_buffer = 0
             state.dash_count += 1
             game_particles_emit_dash_start(
@@ -1077,9 +1100,9 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
     }
 
     target_velocity := move_input * GAME_MOVE_SPEED
-    acceleration := GAME_ACCELERATION
+    acceleration := state.movement_tuning.acceleration
     if game_vector_length(move_input) <= 0.001 {
-        acceleration = GAME_DECELERATION
+        acceleration = state.movement_tuning.deceleration
     }
     state.player.velocity = game_move_towards(
         state.player.velocity,

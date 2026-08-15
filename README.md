@@ -277,7 +277,11 @@ odin build . -out:/tmp/lab0-pixel-snap-test
 Gameplay rules run at a fixed 60 Hz in `game_fixed_update`, independently of a
 window, GPU, or physical input device. The Odin suite includes a bot-driven
 walk through the full seven-room route, exact input-record/replay comparison,
-the ravine and one-way-drop checks, and a 10,000-tick fixed-seed invariant run:
+the ravine and one-way-drop checks, a three-profile movement-tuning playtest,
+and a 10,000-tick fixed-seed invariant run. The tuning playtest compares wall
+corner escape, stopping, reverse input, repeated dashes, ravine clearance, and
+failed-landing recovery; its candidate matrix and final values are documented
+in [`docs/traversal-tuning-playtest.md`](docs/traversal-tuning-playtest.md):
 
 ```sh
 odin test .

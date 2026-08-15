@@ -1,5 +1,6 @@
 package main
 
+import "core:math"
 import "core:testing"
 
 @(test)
@@ -50,6 +51,81 @@ game_replay_fixture_loads_and_drives_the_real_simulation :: proc(t: ^testing.T) 
     testing.expect_value(t, state.tick, replay.total_ticks)
     testing.expect_value(t, state.dash_count, 1)
     testing.expectf(t, state.player.position.x > 1.5, "fixture should move the player, got x %.3f", state.player.position.x)
+}
+
+@(test)
+game_movement_tuning_replay_shows_stop_reverse_chain_and_failed_landing :: proc(
+    t: ^testing.T,
+) {
+    replay, replay_error := load_game_replay("replays/movement-tuning-playtest.json")
+    testing.expect_value(t, replay_error, Game_Replay_Error.NONE)
+    if replay_error != .NONE { return }
+    defer destroy_game_replay(&replay)
+
+    state := game_state_init(replay.start_room)
+    player: Game_Replay_Player
+    dash_start_ticks: [dynamic]u64
+    defer delete(dash_start_ticks)
+    failed_start_x, failed_start_z: f32
+    failed_landing_recovered := false
+
+    for {
+        input, available := game_replay_next_input(&replay, &player)
+        if !available { break }
+        previous_dash_count := state.dash_count
+        game_fixed_update(&state, input, GAME_FIXED_DT)
+        if state.dash_count != previous_dash_count {
+            append(&dash_start_ticks, state.tick)
+        }
+        if state.tick == 24 {
+            testing.expectf(
+                t,
+                math.abs(state.player.velocity.x - GAME_MOVE_SPEED) < 0.0001,
+                "acceleration segment should reach maximum speed",
+            )
+        } else if state.tick == 32 {
+            testing.expectf(
+                t,
+                game_vector_length(state.player.velocity) < 0.0001,
+                "deceleration segment should stop within eight ticks",
+            )
+        } else if state.tick == 45 {
+            testing.expectf(
+                t,
+                state.player.velocity.x <= -GAME_MOVE_SPEED * 0.90,
+                "reverse segment should reach 90%% reverse speed in thirteen ticks",
+            )
+        } else if state.tick == 220 {
+            failed_start_x = state.player.position.x
+            failed_start_z = state.player.position.z
+        } else if state.tick == 230 {
+            failed_landing_recovered =
+                math.abs(state.player.position.x - failed_start_x) < 0.0001 &&
+                math.abs(state.player.position.z - failed_start_z) < 0.0001
+        }
+    }
+
+    testing.expect_value(t, replay.total_ticks, u64(282))
+    testing.expect_value(t, state.tick, replay.total_ticks)
+    testing.expect_value(t, len(dash_start_ticks), 5)
+    if len(dash_start_ticks) == 5 {
+        testing.expect_value(t, dash_start_ticks[0], u64(75))
+        testing.expect_value(t, dash_start_ticks[1] - dash_start_ticks[0], u64(17))
+        testing.expect_value(t, dash_start_ticks[2] - dash_start_ticks[1], u64(17))
+        testing.expect_value(t, dash_start_ticks[3], u64(221))
+        testing.expect_value(t, dash_start_ticks[4], u64(242))
+    }
+    testing.expect(
+        t,
+        failed_landing_recovered,
+        "the diagonal ravine dash should return to its exact start",
+    )
+    testing.expectf(
+        t,
+        state.player.position.z < -18.17,
+        "the final straight dash should clear the ravine, got z %.4f",
+        state.player.position.z,
+    )
 }
 
 @(test)
