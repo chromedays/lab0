@@ -1,4 +1,4 @@
-package main
+package tests
 
 // These tests specify camera/UI input ownership without opening a window. They
 // model press, hold, crossing, and release frames explicitly because regressions

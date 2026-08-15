@@ -1,4 +1,4 @@
-package main
+package tests
 
 // Video transport tests cover option conflicts, raw-frame sizing, FFmpeg argv,
 // short pipe writes, failure cleanup, and success-only publication without

@@ -337,8 +337,8 @@ R05 전망대에서 R06 아래쪽 길로 내려가는 연결은 프로토타입�
 
 ## 15. Viewer 및 기존 기능 보존
 
-- `odin run .`은 기존 Viewer로 실행되어야 한다.
-- Game 모드는 `odin run . -- --mode game`으로 진입한다.
+- `odin run src`은 기존 Viewer로 실행되어야 한다.
+- Game 모드는 `odin run src -- --mode game`으로 진입한다.
 - 기존 `--capture-*` 인자와 기본값의 의미를 변경하지 않는다.
 - Viewer의 모델 선택, 애니메이션, 카메라, Lens, Cel Style, 단축키와 PNG 캡처 출력은 Game 모드 추가 전과 동일해야 한다.
 - Game 모드에서 Inspector와 Viewer 단축키는 Game 입력으로 전달되지 않는다.
@@ -392,7 +392,7 @@ F3으로 다음 정보를 한 번에 토글한다.
 
 ### 회귀와 검증
 
-- `odin test .`가 통과한다.
+- `odin test tests`가 통과한다.
 - Game 모드 추가 전후의 대표 Viewer 캡처가 byte-identical하다.
 - 새 바이너리로 Game 모드의 R00, R02, R04 숨은 창 캡처를 생성할 수 있다.
 - Game 캡처의 PNG 크기, 포맷, 해상도와 비어 있지 않은 픽셀 출력을 확인한다.

@@ -1,4 +1,4 @@
-package main
+package tests
 
 // Replay tests cover compact segment expansion, schema validation, bundled
 // authored routes, exact checkpoints, and completion metrics. Replays are run

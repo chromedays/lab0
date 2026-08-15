@@ -1,4 +1,4 @@
-package main
+package tests
 
 // This is an automated handling playtest, not a second movement model. Every
 // candidate is fed through game_fixed_update so acceleration, collisions,

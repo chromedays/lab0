@@ -1,4 +1,4 @@
-package main
+package tests
 
 // Scene-mode tests keep CLI and capture ownership rules executable: serialized
 // scene state must reject Viewer/Game overrides before graphics initialization.

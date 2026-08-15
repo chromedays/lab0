@@ -12,7 +12,7 @@ video_duration_seconds="5"
 determinism_frame="24"
 expected_video_frames="300"
 
-if [ ! -f main.odin ] || [ ! -f "$model_path" ] || [ ! -f "$style_path" ]; then
+if [ ! -f src/main.odin ] || [ ! -f "$model_path" ] || [ ! -f "$style_path" ]; then
     echo "error: run scripts/test-viewer.sh from the Lab0 repository root" >&2
     exit 2
 fi
@@ -58,7 +58,7 @@ fi
 mkdir -p "$output_dir"
 
 echo "[1/4] Viewer unit and render-contract tests"
-if odin test . >"$unit_log" 2>&1; then
+if odin test tests >"$unit_log" 2>&1; then
     sed -n '1,200p' "$unit_log"
 else
     sed -n '1,240p' "$unit_log" >&2
@@ -66,7 +66,7 @@ else
 fi
 
 echo "[2/4] Fresh Viewer binary"
-odin build . -out:"$binary"
+odin build src -out:"$binary"
 
 echo "[3/4] Repeated animation capture at frame $determinism_frame"
 "$binary" \

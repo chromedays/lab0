@@ -1,4 +1,4 @@
-package main
+package tests
 
 // Scene video tests specify exact duration-to-frame conversion, option
 // compatibility, and the non-duplicating camera orbit sampled from one authored

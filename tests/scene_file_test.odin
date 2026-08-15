@@ -1,4 +1,4 @@
-package main
+package tests
 
 // CPU-only coverage for the Scene Editor schema, validation, canonical
 // persistence, transform order, and lighting reference calculations.

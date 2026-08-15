@@ -1,4 +1,4 @@
-package main
+package tests
 
 // These tests specify fuzzy asset search independently of raygui. They cover
 // delimiter tolerance, ranking quality, and preservation of canonical source IDs.

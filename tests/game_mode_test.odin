@@ -1,4 +1,4 @@
-package main
+package tests
 
 // Headless Game-mode tests specify CLI compatibility, camera framing and pixel
 // snapping, decor occlusion hysteresis, and animation pose selection without

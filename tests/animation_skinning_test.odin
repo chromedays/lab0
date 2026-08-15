@@ -1,4 +1,4 @@
-package main
+package tests
 
 // These tests protect the conservative glTF skin-scale correction. False
 // positives deform skeletons, so accepted transforms and the bundled fixture are

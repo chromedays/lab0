@@ -2,13 +2,17 @@
 
 Lab0 is an Odin + raylib model viewer for inspecting cel-shaded, pixel-downsampled 3D assets.
 
+Application code lives in `src/`; the separate `tests/` package contains the
+unit and behavior tests. Run all commands from the repository root so runtime
+asset paths continue to resolve correctly.
+
 ## Run interactively
 
 ```sh
-odin run .
+odin run src
 ```
 
-Run commands from the repository root because model and shader paths are relative to the working directory.
+Model and shader paths are relative to the working directory.
 
 ### Command-line help
 
@@ -16,9 +20,9 @@ Use the conventional `--help` or `-h` flag to print help without opening a
 window. Help follows the selected mode:
 
 ```sh
-odin run . -- --help
-odin run . -- --mode scene-editor --help
-odin run . -- --mode game --help
+odin run src -- --help
+odin run src -- --mode scene-editor --help
+odin run src -- --mode game --help
 ```
 
 The existing focused flags remain available as `--capture-help` and
@@ -81,7 +85,7 @@ share data with Game mode. Open the bundled all-primitives, fixed-pose, and
 multi-light fixture with:
 
 ```sh
-odin run . -- \
+odin run src -- \
   --mode scene-editor \
   --scene scenes/primitive-light-grid.json
 ```
@@ -112,7 +116,7 @@ Scene Editor also uses the deterministic capture path while excluding editor
 panels and overlays:
 
 ```sh
-odin run . -- \
+odin run src -- \
   --mode scene-editor \
   --scene scenes/primitive-light-grid.json \
   --capture-case primitive-light-grid \
@@ -144,7 +148,7 @@ PNG captures to be byte-identical, and creates `scene-editor-test.mp4`,
 The underlying streaming command is also available directly:
 
 ```sh
-odin run . -- \
+odin run src -- \
   --mode scene-editor \
   --scene scenes/primitive-light-grid.json \
   --scene-video-output artifacts/scene-editor/orbit.mp4 \
@@ -167,7 +171,7 @@ The existing model viewer remains the default application. Start the separate
 room-based traversal prototype with:
 
 ```sh
-odin run . -- --mode game
+odin run src -- --mode game
 ```
 
 The prototype is a handcrafted seven-room forest loop rendered through the same
@@ -200,7 +204,7 @@ Start directly in a room for inspection with `--game-room R00` through
 `--game-room R06`. Game captures are deterministic at the selected room spawn:
 
 ```sh
-odin run . -- \
+odin run src -- \
   --mode game \
   --game-room R04 \
   --capture-case traversal-ravine \
@@ -220,7 +224,7 @@ Use the isolated `T00` scene to inspect the player/tree visibility detector
 without the authored route, transitions, hazards, or nearby props:
 
 ```sh
-odin run . -- --mode game --game-room T00
+odin run src -- --mode game --game-room T00
 ```
 
 Walk forward and backward through the single tree with `W` and `S`. The tree
@@ -267,7 +271,7 @@ For lossless frame-by-frame analysis, build a fresh binary and record the
 downsample target:
 
 ```sh
-odin build . -out:/tmp/lab0-pixel-snap-test
+odin build src -out:/tmp/lab0-pixel-snap-test
 /tmp/lab0-pixel-snap-test \
   --mode game \
   --game-replay replays/pixel-snap-fixed-pose.json \
@@ -288,7 +292,7 @@ failed-landing recovery; its candidate matrix and final values are documented
 in [`docs/traversal-tuning-playtest.md`](docs/traversal-tuning-playtest.md):
 
 ```sh
-odin test .
+odin test tests
 ```
 
 From a logged-in graphical macOS session, the all-in-one runner also builds a
@@ -357,7 +361,7 @@ dash replay to render the exact same dynamic state on every run; capture ticks
 are one-based:
 
 ```sh
-odin run . -- \
+odin run src -- \
   --mode game \
   --game-replay replays/traversal-dash-smoke.json \
   --game-capture-tick 5 \
@@ -370,7 +374,7 @@ The zombie encounter fixture approaches the first R03 zombie, baits its lunge,
 and dodges across the committed lane:
 
 ```sh
-odin run . -- \
+odin run src -- \
   --mode game \
   --game-replay replays/zombie-encounter-smoke.json \
   --game-capture-tick 50 \
@@ -412,7 +416,7 @@ an FFmpeg child process without creating intermediate PNG files.
 Capture mode initializes a hidden graphics window, fixes the requested render state, renders a small number of warmup frames, exports an internal render texture to PNG, and exits. It does not use desktop screenshots or live mouse and keyboard input.
 
 ```sh
-odin run . -- \
+odin run src -- \
   --capture-case cube-isometric \
   --capture-model builtin:cube \
   --capture-view isometric \
@@ -423,7 +427,7 @@ odin run . -- \
 The default output is `captures/<case-name>.png`. Give every concurrent worker a unique path:
 
 ```sh
-odin run . -- \
+odin run src -- \
   --capture-case runner-frame-24 \
   --capture-model assets/CesiumMan.glb \
   --capture-style styles/anime.json \
@@ -439,7 +443,7 @@ process. The output template must contain exactly one `%d` or zero-padded
 `%0Nd` token. The token is replaced by the animation frame number.
 
 ```sh
-odin run . -- \
+odin run src -- \
   --capture-case cesium-walk \
   --capture-model assets/CesiumMan.glb \
   --capture-frame-range 0:24:2 \
@@ -461,7 +465,7 @@ becomes one frame in a 1280×720, 60 fps H.264 MP4; no intermediate PNG sequence
 is created.
 
 ```sh
-odin run . -- \
+odin run src -- \
   --capture-case cesium-viewer-video \
   --capture-model assets/CesiumMan.glb \
   --capture-style styles/anime.json \

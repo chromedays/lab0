@@ -10,7 +10,7 @@ video_duration_seconds="5"
 video_report=false
 report_dir=""
 
-if [ ! -f main.odin ]; then
+if [ ! -f src/main.odin ]; then
     echo "error: run scripts/test-scene-editor.sh from the Lab0 repository root" >&2
     exit 2
 fi
@@ -92,7 +92,7 @@ fi
 mkdir -p "$output_dir"
 
 echo "[1/4] Scene schema, editor, lighting, and render-contract tests"
-if odin test . >"$unit_log" 2>&1; then
+if odin test tests >"$unit_log" 2>&1; then
     sed -n '1,200p' "$unit_log"
 else
     sed -n '1,240p' "$unit_log" >&2
@@ -100,7 +100,7 @@ else
 fi
 
 echo "[2/4] Fresh Scene Editor binary"
-odin build . -out:"$binary"
+odin build src -out:"$binary"
 
 echo "[3/4] Repeated serialized-scene composite capture"
 "$binary" \

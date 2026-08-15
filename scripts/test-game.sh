@@ -5,7 +5,7 @@
 # --video-report [output-directory] to also create an MP4 and Markdown report.
 set -eu
 
-if [ ! -f main.odin ] || [ ! -f replays/traversal-dash-smoke.json ]; then
+if [ ! -f src/main.odin ] || [ ! -f replays/traversal-dash-smoke.json ]; then
     echo "error: run scripts/test-game.sh from the Lab0 repository root" >&2
     exit 2
 fi
@@ -67,7 +67,7 @@ fi
 mkdir -p "$output_dir"
 
 echo "[1/4] Headless rules, scenario, replay, and invariant tests"
-if odin test . >"$unit_log" 2>&1; then
+if odin test tests >"$unit_log" 2>&1; then
     sed -n '1,200p' "$unit_log"
 else
     sed -n '1,240p' "$unit_log" >&2
@@ -75,7 +75,7 @@ else
 fi
 
 echo "[2/4] Fresh game binary"
-odin build . -out:"$binary"
+odin build src -out:"$binary"
 
 run_determinism_check() {
     determinism_tick=$1

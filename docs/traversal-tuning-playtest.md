@@ -62,7 +62,7 @@
 후보 비교와 합격 판정:
 
 ```sh
-odin test . -- -tests:game_movement_candidates_run_the_same_automated_playtest,game_default_tuning_matches_the_playtest_winner
+odin test tests -- -tests:game_movement_candidates_run_the_same_automated_playtest,game_default_tuning_matches_the_playtest_winner
 ```
 
 정지, 역전, 17틱 연속 대시, 실패 착지, 성공 착지를 한 번에 재생하는 실제

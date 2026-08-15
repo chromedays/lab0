@@ -1,4 +1,4 @@
-package main
+package tests
 
 // These tests cover cel-style defaults, validation, byte-level ramp encoding,
 // JSON persistence, bundled presets, editor mutations, and inspector layout.

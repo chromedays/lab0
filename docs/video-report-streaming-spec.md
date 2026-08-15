@@ -217,7 +217,7 @@ scripts/test-game.sh --video-report artifacts/<new-report-directory>
 
 내부 동작은 다음처럼 바뀐다.
 
-1. `odin test .`을 실행한다.
+1. `odin test tests`을 실행한다.
 2. 새 고유 경로에 바이너리를 빌드한다.
 3. 같은 고정 틱 PNG를 두 번 캡처하고 byte-identical을 요구한다.
 4. 바이너리를 `--game-video-output "$video_path"`로 한 번 실행한다.
@@ -256,7 +256,7 @@ scripts/test-game.sh --video-report artifacts/<new-report-directory>
 
 ### 통합 테스트
 
-1. `odin test .`이 성공해야 한다.
+1. `odin test tests`이 성공해야 한다.
 2. 새 바이너리를 빌드해야 한다.
 3. 기본 180틱 리플레이로 실제 hidden-window 비디오 리포트를 실행한다.
 4. MP4가 H.264, 1280×720, 60 fps, 정확히 180프레임이어야 한다.
@@ -341,7 +341,7 @@ coverage edge AA와 distinct runtime frame range `0:119`를 사용한다. frame
 Runner는 다음을
 검증한다.
 
-1. `odin test .`과 새 고유 바이너리 빌드가 성공한다.
+1. `odin test tests`과 새 고유 바이너리 빌드가 성공한다.
 2. animation frame 24 composite PNG를 두 번 캡처해 byte-identical을
    요구한다.
 3. 0:119 전체를 처음부터 끝까지 한 번 진행시키며 300개 composite를 중간

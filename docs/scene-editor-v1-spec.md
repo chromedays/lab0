@@ -46,7 +46,7 @@ The first version does not provide:
 Interactive editing uses a separate top-level mode:
 
 ```sh
-odin run . -- --mode scene-editor --scene scenes/lighting-test.json
+odin run src -- --mode scene-editor --scene scenes/lighting-test.json
 ```
 
 When `--scene` is omitted, the editor opens a new unsaved scene using the
@@ -619,7 +619,7 @@ Unit tests cover:
 
 GPU verification for the implementation includes:
 
-1. Run `odin test .`.
+1. Run `odin test tests`.
 2. Build a fresh uniquely named `/tmp` binary.
 3. Capture a scene containing every primitive, an imported textured model, a
    fixed animated pose, all three light types, and overlapping colored lights.
@@ -650,13 +650,13 @@ assets, and deterministic test logic are the regression sources of truth.
 The implementation should keep the new mode isolated behind small modules:
 
 ```text
-scene_types.odin          validated runtime data and constants
-scene_file.odin           strict JSON schema, validation, load, and save
-scene_lighting.odin       CPU reference calculations and uniform packing
-scene_renderer.odin       GPU resources and render passes
-scene_video.odin          camera-orbit progression and video option contract
-scene_editor_ui.odin      hierarchy, inspector, modal, and gizmo state
-scene_editor_mode.odin    CLI parsing, lifecycle, capture, and main loop
+src/scene_types.odin          validated runtime data and constants
+src/scene_file.odin           strict JSON schema, validation, load, and save
+src/scene_lighting.odin       CPU reference calculations and uniform packing
+src/scene_renderer.odin       GPU resources and render passes
+src/scene_video.odin          camera-orbit progression and video option contract
+src/scene_editor_ui.odin      hierarchy, inspector, modal, and gizmo state
+src/scene_editor_mode.odin    CLI parsing, lifecycle, capture, and main loop
 ```
 
 `main` dispatches Scene Editor before initializing Viewer resources, in the

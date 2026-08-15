@@ -24,8 +24,8 @@ with other applications.
 Before a real render check, run the unit suite and build a fresh binary:
 
 ```sh
-odin test .
-odin build . -out:/tmp/lab0-capture-worker-a
+odin test tests
+odin build src -out:/tmp/lab0-capture-worker-a
 ```
 
 Use a unique `/tmp` binary name for each concurrent worker.
@@ -161,7 +161,7 @@ status 1.
 
 For every implementation change affecting capture behavior:
 
-1. Run `odin test .`.
+1. Run `odin test tests`.
 2. Build a fresh binary rather than relying on an older `/tmp` executable.
 3. Run at least one real hidden-window capture.
 4. Confirm the expected file count, PNG format, dimensions, and nonzero size.
@@ -243,7 +243,7 @@ captures after changes to game rendering or room composition. Re-run the same
 room capture and require byte-identical output when validating determinism.
 
 Game behavior tests call `game_fixed_update` directly with `Game_Input`; do not
-use desktop keyboard automation. `game_scenario_test.odin` walks the authored
+use desktop keyboard automation. `tests/game_scenario_test.odin` walks the authored
 route through real collision and transition rules, records every input, and
 replays it against an exact final-state checkpoint. The fixed-seed random test
 adds 10,000 ticks of bounds, collision, timer, and finite-value invariants.

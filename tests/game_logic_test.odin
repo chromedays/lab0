@@ -1,4 +1,4 @@
-package main
+package tests
 
 // CPU-only specification for movement, collision, room transitions, zombie
 // state machines, and deterministic particles. Tests call game_fixed_update

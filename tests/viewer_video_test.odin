@@ -1,4 +1,4 @@
-package main
+package tests
 
 // Viewer video tests cover frame-range authority, duration retiming, CLI
 // conflicts, and exact source-pose sampling independently of FFmpeg execution.

@@ -1,4 +1,4 @@
-package main
+package tests
 
 // These tests define the capture CLI contract and filesystem-facing edge cases.
 // Parsing tests avoid GPU initialization; asset-format and directory tests guard the

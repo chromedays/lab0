@@ -1,4 +1,4 @@
-package main
+package tests
 
 // These tests specify the semantic keyboard layer without polling real input.
 // They protect exact modifiers, focus suppression, fallback focus, registry

@@ -1,4 +1,4 @@
-package main
+package tests
 
 // These tests define integer downsample sizing at normal and pathological
 // inputs, ensuring RenderTexture dimensions can never become zero.

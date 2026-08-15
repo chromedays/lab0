@@ -1,4 +1,4 @@
-package main
+package tests
 
 // These helpers are a tiny headless game driver: they express player intent,
 // feed the real fixed update, and retain every input for deterministic replay.
