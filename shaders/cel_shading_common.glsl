@@ -24,6 +24,8 @@ uniform int u_highlight_enabled;
 uniform vec3 u_highlight_color;
 uniform float u_highlight_threshold;
 uniform float u_highlight_strength;
+uniform float u_visibility;
+uniform float u_visibility_dither_scale;
 
 // Cel_Ramp_Sample decodes one texel: alpha carries a one-based band ID while RGB
 // carries the authorable tint color for that interval.
@@ -67,6 +69,28 @@ Cel_Ramp_Sample cel_ramp_sample(vec3 normal) {
 bool cel_alpha_discarded(float material_alpha) {
     return u_alpha_mode == CEL_ALPHA_MODE_MASK &&
            material_alpha < u_alpha_cutoff;
+}
+
+// cel_visibility_discarded applies a stable 4x5 ordered pattern after material
+// alpha testing. At 35% visibility exactly seven of every twenty dither cells
+// survive. Game mode sets the cell scale to one low-resolution pixel (5x5
+// source fragments), keeping the dissolve fixed in screen space as the camera
+// or occluder moves.
+bool cel_visibility_discarded() {
+    float visibility = clamp(u_visibility, 0.0, 1.0);
+    if (visibility >= 0.9999) {
+        return false;
+    }
+    if (visibility <= 0.0001) {
+        return true;
+    }
+
+    float dither_scale = max(u_visibility_dither_scale, 1.0);
+    vec2 cell = floor(gl_FragCoord.xy / dither_scale);
+    float linear_index = mod(cell.y, 5.0) * 4.0 + mod(cell.x, 4.0);
+    float ordered_rank = mod(linear_index * 13.0, 20.0);
+    float visible_cells = floor(visibility * 20.0 + 0.5);
+    return ordered_rank >= visible_cells;
 }
 
 // cel_accent_flags classifies rim and Blinn-style highlight presence as bits.

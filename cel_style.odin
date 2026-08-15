@@ -170,6 +170,8 @@ Cel_Shader_Bindings :: struct {
     highlight_strength:    c.int,
     pixel_snap_ndc_offset:  c.int,
     pixel_snap_world_offset: c.int,
+    visibility:             c.int,
+    visibility_dither_scale: c.int,
 }
 
 // make_classic_cel_style constructs the built-in fallback without allocating
@@ -409,6 +411,8 @@ resolve_cel_shader_bindings :: proc(shader: rl.Shader) -> Cel_Shader_Bindings {
         highlight_strength = rl.GetShaderLocation(shader, "u_highlight_strength"),
         pixel_snap_ndc_offset = rl.GetShaderLocation(shader, "u_pixel_snap_ndc_offset"),
         pixel_snap_world_offset = rl.GetShaderLocation(shader, "u_pixel_snap_world_offset"),
+        visibility = rl.GetShaderLocation(shader, "u_visibility"),
+        visibility_dither_scale = rl.GetShaderLocation(shader, "u_visibility_dither_scale"),
     }
     // DrawMesh owns material sampler binding. Reserve the copied material's
     // emission map slot for the cel ramp so it is active with this shader.
@@ -466,6 +470,8 @@ apply_cel_style_to_shader :: proc(
     if style.highlight.enabled {
         highlight_enabled = 1
     }
+    full_visibility := f32(1)
+    unit_dither_scale := f32(1)
 
     rl.SetShaderValue(shader, bindings.light_direction, &light_direction, .VEC3)
     rl.SetShaderValue(shader, bindings.wrap_lighting, &style.wrap_lighting, .FLOAT)
@@ -507,6 +513,13 @@ apply_cel_style_to_shader :: proc(
         shader,
         bindings.highlight_strength,
         &style.highlight.strength,
+        .FLOAT,
+    )
+    rl.SetShaderValue(shader, bindings.visibility, &full_visibility, .FLOAT)
+    rl.SetShaderValue(
+        shader,
+        bindings.visibility_dither_scale,
+        &unit_dither_scale,
         .FLOAT,
     )
 }

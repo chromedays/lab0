@@ -37,6 +37,10 @@ GAME_ZOMBIE_WALK_ANIMATION   :: "Mummy_Stagger_inplace"
 GAME_PLAYER_ANIMATION_SAMPLE_COUNT :: c.int(8)
 GAME_ZOMBIE_ANIMATION_SAMPLE_COUNT :: c.int(8)
 GAME_OCCLUSION_DEBUG_TINT :: rl.Color{255, 96, 200, 255}
+GAME_OCCLUSION_DITHER_VISIBILITY :: f32(0.35)
+GAME_OCCLUSION_DITHER_SCALE :: f32(GAME_SCREEN_WIDTH / GAME_PIXEL_WIDTH)
+GAME_OCCLUSION_ENTER_OVERLAP_PIXELS :: f32(2)
+GAME_OCCLUSION_EXIT_MARGIN_PIXELS :: f32(2)
 
 Game_Run_Options :: struct {
     start_room:          Game_Room_ID,
@@ -155,6 +159,12 @@ Game_Decor_Occlusion_Query :: struct {
     occluded:      bool,
 }
 
+Game_Decor_Visibility_Effect :: enum {
+    VISIBLE,
+    DEBUG_TINT,
+    DITHERED,
+}
+
 // Isolated from the authored route so visibility changes can be exercised with
 // one known occluder and a fixed camera in TEST_OCCLUSION.
 GAME_OCCLUSION_TEST_TREE :: Game_Decor{
@@ -193,6 +203,10 @@ GAME_DECOR := [?]Game_Decor{
     {.TREE, {7.0, 0, -8.0}, 4.0, -14, {89, 204, 201, 255}},
     {.GRASS, {1.5, 0, -15.0}, 0.8, 0, {127, 224, 187, 255}},
     GAME_OCCLUSION_TEST_TREE,
+}
+
+Game_Decor_Visibility_State :: struct {
+    occluded: [len(GAME_DECOR)]bool,
 }
 
 Game_Floor_Accent :: struct {
@@ -314,6 +328,7 @@ Game_Renderer :: struct {
     outline_width:               c.int,
     outline_color:               c.int,
     outline_coverage_threshold:  c.int,
+    decor_visibility:            Game_Decor_Visibility_State,
 }
 
 game_mode_requested :: proc(arguments: []string) -> bool {
@@ -1301,6 +1316,19 @@ game_screen_bounds_intersection :: proc(
     return result
 }
 
+game_screen_bounds_within_margin :: proc(
+    first, second: Game_Screen_Bounds,
+    margin: f32,
+) -> bool {
+    if !first.valid || !second.valid {
+        return false
+    }
+    return first.min.x <= second.max.x + margin &&
+           first.max.x + margin >= second.min.x &&
+           first.min.y <= second.max.y + margin &&
+           first.max.y + margin >= second.min.y
+}
+
 game_player_screen_bounds :: proc(
     assets: ^Game_Assets,
     state: ^Game_State,
@@ -1443,34 +1471,139 @@ game_decor_occludes_player :: proc(
     return game_decor_occlusion_query(assets, decor, state, camera).occluded
 }
 
-game_decor_visibility_tint :: proc(
+game_decor_occlusion_stable :: proc(
+    query: Game_Decor_Occlusion_Query,
+    previously_occluded: bool,
+) -> bool {
+    if !query.depth_valid {
+        return false
+    }
+    if previously_occluded {
+        // Once active, retain the fade through tiny projected separations. This
+        // is a spatial Schmitt trigger: entry requires real overlap, while exit
+        // requires a gap wider than the margin.
+        return game_screen_bounds_within_margin(
+            query.player_bounds,
+            query.decor_bounds,
+            GAME_OCCLUSION_EXIT_MARGIN_PIXELS,
+        )
+    }
+    if !query.occluded || !query.overlap.valid {
+        return false
+    }
+    overlap_width := query.overlap.max.x - query.overlap.min.x
+    overlap_height := query.overlap.max.y - query.overlap.min.y
+    return overlap_width >= GAME_OCCLUSION_ENTER_OVERLAP_PIXELS &&
+           overlap_height >= GAME_OCCLUSION_ENTER_OVERLAP_PIXELS
+}
+
+game_update_decor_visibility_flags :: proc(
+    flags: []bool,
+    queries: []Game_Decor_Occlusion_Query,
+    diagnostic_scene: bool,
+) {
+    count := min(len(flags), len(queries))
+    for index in 0 ..< count {
+        if diagnostic_scene {
+            // T00 intentionally exposes the raw detector without hysteresis.
+            flags[index] = queries[index].occluded
+        } else {
+            flags[index] = game_decor_occlusion_stable(
+                queries[index],
+                flags[index],
+            )
+        }
+    }
+}
+
+game_refresh_decor_visibility_state :: proc(
+    visibility: ^Game_Decor_Visibility_State,
     assets: ^Game_Assets,
-    decor: Game_Decor,
     state: ^Game_State,
     camera: rl.Camera3D,
+) {
+    queries: [len(GAME_DECOR)]Game_Decor_Occlusion_Query
+    for decor, index in GAME_DECOR {
+        queries[index] = game_decor_occlusion_query(assets, decor, state, camera)
+    }
+    game_update_decor_visibility_flags(
+        visibility.occluded[:],
+        queries[:],
+        state.current_room == .TEST_OCCLUSION,
+    )
+}
+
+game_decor_visibility_effect :: proc(
+    room: Game_Room_ID,
+    occluded: bool,
+) -> Game_Decor_Visibility_Effect {
+    if !occluded {
+        return .VISIBLE
+    }
+    if room == .TEST_OCCLUSION {
+        return .DEBUG_TINT
+    }
+    return .DITHERED
+}
+
+game_decor_visibility_tint :: proc(
+    decor: Game_Decor,
+    effect: Game_Decor_Visibility_Effect,
 ) -> rl.Color {
-    if game_decor_occludes_player(assets, decor, state, camera) {
+    if effect == .DEBUG_TINT {
         return GAME_OCCLUSION_DEBUG_TINT
     }
     return decor.tint
 }
 
+game_decor_visibility_amount :: proc(
+    effect: Game_Decor_Visibility_Effect,
+) -> f32 {
+    if effect == .DITHERED {
+        return GAME_OCCLUSION_DITHER_VISIBILITY
+    }
+    return 1
+}
+
+game_set_decor_visibility_shader :: proc(
+    shader: rl.Shader,
+    bindings: ^Cel_Shader_Bindings,
+    visibility: f32,
+) {
+    shader_visibility := visibility
+    dither_scale := GAME_OCCLUSION_DITHER_SCALE
+    rl.SetShaderValue(shader, bindings.visibility, &shader_visibility, .FLOAT)
+    rl.SetShaderValue(
+        shader,
+        bindings.visibility_dither_scale,
+        &dither_scale,
+        .FLOAT,
+    )
+}
+
 game_draw_decor :: proc(
     assets: ^Game_Assets,
     state: ^Game_State,
-    camera: rl.Camera3D,
+    shader: rl.Shader,
+    bindings: ^Cel_Shader_Bindings,
+    visibility: ^Game_Decor_Visibility_State,
 ) {
-    for decor in GAME_DECOR {
-        // Make the visibility detector observable without changing geometry or
-        // collision: any decor currently classified as a player occluder is
-        // rendered hot pink for this frame.
-        occluded := game_decor_occludes_player(assets, decor, state, camera)
-        tint := decor.tint
-        if occluded { tint = GAME_OCCLUSION_DEBUG_TINT }
+    for decor, decor_index in GAME_DECOR {
+        effect := game_decor_visibility_effect(
+            state.current_room,
+            visibility.occluded[decor_index],
+        )
+        debug_tint := effect == .DEBUG_TINT
+        tint := game_decor_visibility_tint(decor, effect)
+        game_set_decor_visibility_shader(
+            shader,
+            bindings,
+            game_decor_visibility_amount(effect),
+        )
         switch decor.kind {
         case .TREE:
             if assets.tree.valid {
-                if occluded {
+                if debug_tint {
                     game_draw_imported_debug_tint(
                         &assets.tree,
                         decor.position,
@@ -1487,7 +1620,7 @@ game_draw_decor :: proc(
             }
         case .DEAD_TREE:
             if assets.dead_tree.valid {
-                if occluded {
+                if debug_tint {
                     game_draw_imported_debug_tint(
                         &assets.dead_tree,
                         decor.position,
@@ -1555,6 +1688,7 @@ game_draw_decor :: proc(
             )
         }
     }
+    game_set_decor_visibility_shader(shader, bindings, 1)
 
     beacon_pulse := f32(1) + f32(math.sin(f64(state.elapsed_time * 3.2))) * 0.08
     rl.DrawModelEx(
@@ -2005,6 +2139,7 @@ game_draw_world :: proc(
     cel_ramp: rl.Texture2D,
     style: ^Cel_Style,
     camera: rl.Camera3D,
+    decor_visibility: ^Game_Decor_Visibility_State,
 ) {
     game_prepare_assets_shader(assets, shader, cel_ramp)
     game_set_pixel_snap_offset(shader, bindings, {})
@@ -2072,7 +2207,13 @@ game_draw_world :: proc(
         game_draw_room_walls(assets, &room)
     }
     game_draw_obstacle_markers(assets)
-    game_draw_decor(assets, state, camera)
+    game_draw_decor(
+        assets,
+        state,
+        shader,
+        bindings,
+        decor_visibility,
+    )
     game_draw_zombies(assets, state, shader, bindings, camera)
     game_draw_particles(assets, state)
     game_set_pixel_snap_offset(
@@ -2416,6 +2557,12 @@ game_renderer_render :: proc(
     camera: rl.Camera3D,
     background_color: rl.Color,
 ) {
+    game_refresh_decor_visibility_state(
+        &renderer.decor_visibility,
+        assets,
+        state,
+        camera,
+    )
     scene_resolution := [2]f32{GAME_SCREEN_WIDTH, GAME_SCREEN_HEIGHT}
     target_resolution := [2]f32{GAME_PIXEL_WIDTH, GAME_PIXEL_HEIGHT}
     cluster_threshold := f32(DEFAULT_COLOR_CLUSTER_THRESHOLD)
@@ -2514,6 +2661,7 @@ game_renderer_render :: proc(
                 renderer.cel_ramp_texture,
                 style,
                 camera,
+                &renderer.decor_visibility,
             )
         rl.EndMode3D()
     rl.EndTextureMode()
@@ -2536,6 +2684,7 @@ game_renderer_render :: proc(
                 renderer.cel_ramp_texture,
                 style,
                 camera,
+                &renderer.decor_visibility,
             )
         rl.EndMode3D()
     rl.EndTextureMode()

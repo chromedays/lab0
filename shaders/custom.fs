@@ -22,6 +22,9 @@ void main() {
     if (cel_alpha_discarded(albedo.a)) {
         discard;
     }
+    if (cel_visibility_discarded()) {
+        discard;
+    }
     // Classification is performed once so band shading and accents agree with
     // the parallel cel_band.fs metadata texture used during downsampling.
     Cel_Ramp_Sample ramp_sample = cel_ramp_sample(fragNormal);

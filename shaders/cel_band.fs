@@ -23,6 +23,9 @@ void main() {
     if (cel_alpha_discarded(albedo.a)) {
         discard;
     }
+    if (cel_visibility_discarded()) {
+        discard;
+    }
     Cel_Ramp_Sample ramp_sample = cel_ramp_sample(fragNormal);
     int accent_flags = cel_accent_flags(fragNormal, fragWorldPosition);
 
