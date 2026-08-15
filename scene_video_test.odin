@@ -1,5 +1,9 @@
 package main
 
+// Scene video tests specify exact duration-to-frame conversion, option
+// compatibility, and the non-duplicating camera orbit sampled from one authored
+// camera pose.
+
 import "core:math"
 import "core:testing"
 import rl "vendor:raylib"

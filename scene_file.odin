@@ -89,6 +89,9 @@ Scene_File_Spot_Light :: struct {
     outer_angle_deg: f32,
 }
 
+// Scene_File is the versioned wire owner. Strings and dynamic arrays produced
+// by JSON unmarshal or scene_to_file must be released by destroy_scene_file;
+// none of them are transferred into the runtime Scene by reference.
 Scene_File :: struct {
     schema_version:    int,
     name:              string,
@@ -200,6 +203,9 @@ scene_light_common_valid :: proc(color: rl.Vector3, intensity: f32) -> bool {
            intensity >= 0 && intensity <= SCENE_MAX_LIGHT_INTENSITY
 }
 
+// Validate all CPU-side invariants before GPU resources are created or a save
+// is attempted. IDs share one namespace across every hierarchy kind because UI
+// selection and future references identify an item independently of its array.
 validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
     if !scene_name_valid(scene.name) {
         return .INVALID_NAME
@@ -326,6 +332,8 @@ validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
     return .NONE
 }
 
+// Both json.unmarshal and scene_to_file create the same ownership shape, so a
+// single destructor handles load temporaries, save temporaries, and failures.
 destroy_scene_file :: proc(file: ^Scene_File) {
     if len(file.name) > 0 { delete(file.name) }
     if len(file.style) > 0 { delete(file.style) }
@@ -356,6 +364,9 @@ destroy_scene_file :: proc(file: ^Scene_File) {
     file^ = {}
 }
 
+// Build a fully owned runtime value without mutating an active scene. Any
+// conversion or validation failure destroys the partial result before return;
+// callers may commit the returned Scene only on .NONE.
 scene_from_file :: proc(
     file: ^Scene_File,
     require_files := true,
@@ -500,6 +511,9 @@ scene_from_file :: proc(
     return scene, .NONE
 }
 
+// Produce an independent wire owner in declaration/array order. Euler angles
+// and directions are canonicalized here so repeated save/load/save operations
+// remain byte-stable instead of accumulating representational drift.
 scene_to_file :: proc(scene: ^Scene) -> Scene_File {
     file := Scene_File{
         schema_version = SCENE_SCHEMA_VERSION,
@@ -604,6 +618,8 @@ scene_to_file :: proc(scene: ^Scene) -> Scene_File {
     return file
 }
 
+// Parsing is two-stage: the strict token pass rejects syntax accepted by Odin's
+// JSON decoder, then unmarshal and conversion establish ownership and semantics.
 load_scene :: proc(path: string, require_files := true) -> (Scene, Scene_Error) {
     file_data, read_error := os.read_entire_file(path, context.allocator)
     if read_error != nil {
@@ -624,6 +640,9 @@ load_scene :: proc(path: string, require_files := true) -> (Scene, Scene_Error) 
     return scene_from_file(&file, require_files)
 }
 
+// Save is transactional at the destination path. The canonical JSON is written
+// to a sibling temporary file and renamed only after the entire write succeeds,
+// leaving the previous scene intact on encoding or I/O failure.
 save_scene :: proc(path: string, scene: ^Scene) -> Scene_Error {
     if validation_error := validate_scene(scene); validation_error != .NONE {
         return validation_error

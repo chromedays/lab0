@@ -27,6 +27,9 @@ Scene_Selection_Kind :: enum {
     SPOT_LIGHT,
 }
 
+// Selection indexes one of Scene's four dynamic arrays. Model selection also
+// indexes Scene_Resources.models; mutation helpers must keep those arrays in
+// identical order and clear selection after an index-removing operation.
 Scene_Selection :: struct {
     kind:  Scene_Selection_Kind,
     index: int,
@@ -38,6 +41,9 @@ Scene_Gizmo_Mode :: enum {
     SCALE,
 }
 
+// Pending actions are destructive operations deferred behind the unsaved-work
+// modal. DELETE uses its own confirmation path; the others resume through
+// scene_editor_complete_pending_action after Save or Discard.
 Scene_Pending_Action :: enum {
     NONE,
     NEW,
@@ -60,6 +66,9 @@ Scene_UI_Status :: enum {
     NEW_SCENE,
 }
 
+// Editor UI state is transient and never serialized. Fixed byte buffers are
+// zero-terminated storage passed directly to raygui; *_editing owns keyboard
+// focus, while pending_action/save_as_open own modal input.
 Scene_Editor_UI_State :: struct {
     selection:          Scene_Selection,
     hierarchy_scroll:   c.int,
@@ -250,6 +259,9 @@ scene_item_count :: proc(scene: ^Scene) -> int {
            len(scene.point_lights) + len(scene.spot_lights)
 }
 
+// ID counters are deliberately absent from scene JSON. On first allocation
+// after load, scan every item kind for the largest matching numeric suffix,
+// then advance monotonically while still checking the global namespace.
 scene_next_item_id :: proc(scene: ^Scene, prefix: string) -> string {
     counter: ^int
     switch prefix {
@@ -359,6 +371,9 @@ scene_add_spot_light :: proc(scene: ^Scene) -> int {
     return len(scene.spot_lights) - 1
 }
 
+// Stage the raylib resource before appending either array. Success preserves
+// the invariant that scene.models[i] and resources.models[i] describe the same
+// imported instance; failure leaves both active arrays unchanged.
 scene_editor_add_model :: proc(
     scene: ^Scene,
     resources: ^Scene_Resources,
@@ -396,6 +411,9 @@ scene_editor_add_model :: proc(
     return true
 }
 
+// Duplicates receive independent owned strings. Models additionally load an
+// independent mutable raylib model because applying a fixed animation pose
+// mutates mesh vertices and cannot be shared safely between instances.
 scene_editor_duplicate_selection :: proc(
     state: ^Scene_Editor_UI_State,
     scene: ^Scene,
@@ -456,6 +474,8 @@ scene_editor_duplicate_selection :: proc(
     return true
 }
 
+// Ordered removal is required for models so the CPU description and GPU
+// resource arrays keep matching indices after the selected resource is freed.
 scene_editor_delete_selection :: proc(
     state: ^Scene_Editor_UI_State,
     scene: ^Scene,
@@ -491,6 +511,9 @@ scene_editor_delete_selection :: proc(
     return true
 }
 
+// Opening is an all-or-nothing replacement. Load and initialize the complete
+// CPU scene, cel style, renderer, and asset set first; destroy the active graph
+// only after every replacement component is valid.
 scene_editor_open_path :: proc(
     path: string,
     scene: ^Scene,
@@ -536,6 +559,8 @@ scene_editor_open_path :: proc(
     return true
 }
 
+// New follows the same transactional path as Open so shader or asset failures
+// cannot strand the editor without its previous valid scene and renderer.
 scene_editor_new_default :: proc(
     scene: ^Scene,
     style: ^Cel_Style,
@@ -580,6 +605,9 @@ scene_editor_new_default :: proc(
     return true
 }
 
+// Convert coordinates from the letterboxed native viewport back to the fixed
+// 1280x720 render space used to construct the ray. Test every visible mesh and
+// light proxy, retaining the nearest world-space collision across item kinds.
 scene_editor_pick :: proc(
     scene: ^Scene,
     resources: ^Scene_Resources,
@@ -685,6 +713,8 @@ scene_editor_gizmo_mode_supported :: proc(
     return false
 }
 
+// Scale handles in world units to retain roughly constant on-screen size in
+// either projection, while clamping extremes near and far from the camera.
 scene_editor_gizmo_world_length :: proc(
     scene: ^Scene,
     origin: rl.Vector3,
@@ -751,6 +781,9 @@ scene_editor_try_begin_gizmo :: proc(
     return true
 }
 
+// Project the selected world axis to screen space, then measure mouse movement
+// along that projected axis. This avoids camera-angle-dependent sign changes
+// and provides one scalar delta shared by translate, rotate, and scale modes.
 scene_editor_apply_gizmo_drag :: proc(
     state: ^Scene_Editor_UI_State,
     scene: ^Scene,
@@ -858,6 +891,9 @@ scene_editor_frame_selection :: proc(
     scene.dirty = true
 }
 
+// Viewport input has an explicit ownership order: active gizmo drag, camera
+// navigation, then selection. Controls outside the letterboxed viewport return
+// before any scene camera or selection mutation.
 scene_editor_update_viewport_input :: proc(
     state: ^Scene_Editor_UI_State,
     scene: ^Scene,
@@ -1507,6 +1543,9 @@ scene_editor_world_to_viewport :: proc(
     }
 }
 
+// Overlays are drawn onto the native window after the deterministic composite
+// texture. Selection rings, light markers, and gizmos therefore never enter a
+// Scene capture or alter its regression bytes.
 scene_editor_draw_overlays :: proc(
     state: ^Scene_Editor_UI_State,
     scene: ^Scene,
@@ -1552,6 +1591,9 @@ scene_editor_draw_overlays :: proc(
     }
 }
 
+// Compose the captured texture, editor chrome, and at most one modal. GuiLock
+// prevents background widgets from mutating the scene while a confirmation or
+// Save As dialog owns input.
 scene_editor_draw_ui :: proc(
     state: ^Scene_Editor_UI_State,
     scene: ^Scene,

@@ -23,6 +23,8 @@ Game_Replay_Error :: enum {
     TOO_LONG,
 }
 
+// File structs are JSON-owned and use plain arrays/strings. Runtime structs
+// below replace textual room IDs and compact movement arrays with game types.
 Game_Replay_File_Segment :: struct {
     ticks:         int,
     move:          [2]f32,
@@ -41,12 +43,16 @@ Game_Replay_Segment :: struct {
     dash_on_first: bool,
 }
 
+// A validated replay owns segments and caches total_ticks so capture option
+// checks never need to expand the compact sequence.
 Game_Replay :: struct {
     start_room:  Game_Room_ID,
     segments:    [dynamic]Game_Replay_Segment,
     total_ticks: u64,
 }
 
+// The player is a cursor, not replay-owned state. A fresh zero value starts at
+// tick one, and multiple players may traverse the same immutable replay.
 Game_Replay_Player :: struct {
     segment_index: int,
     segment_tick:  int,
@@ -88,6 +94,9 @@ game_room_code :: proc(room_id: Game_Room_ID) -> string {
     return "UNKNOWN"
 }
 
+// Attribute events to the room that owned the tick before simulation. A room
+// transition can change state.current_room during that tick, but its input and
+// event deltas still belong to the source room.
 game_replay_stats_observe_tick :: proc(
     stats: ^Game_Replay_Stats,
     room_before_tick: Game_Room_ID,
@@ -176,6 +185,8 @@ destroy_game_replay :: proc(replay: ^Game_Replay) {
     replay^ = {}
 }
 
+// Convert and validate incrementally. Any invalid segment destroys the partial
+// runtime allocation before returning, so callers only own a replay on success.
 game_replay_from_file :: proc(
     replay_file: ^Game_Replay_File,
 ) -> (Game_Replay, Game_Replay_Error) {
@@ -233,6 +244,9 @@ load_game_replay :: proc(path: string) -> (Game_Replay, Game_Replay_Error) {
     return game_replay_from_file(&replay_file)
 }
 
+// Expand one logical tick without materializing the full input stream.
+// dash_on_first is asserted only for segment tick zero; exhaustion is the sole
+// false result and leaves the cursor at the end.
 game_replay_next_input :: proc(
     replay: ^Game_Replay,
     player: ^Game_Replay_Player,

@@ -53,6 +53,9 @@ Scene_Shadow_Depth_Bindings :: struct {
     alpha_cutoff: c.int,
 }
 
+// Recomputed from serialized light/camera state for each render. The exact
+// light_view_projection matrix is filled inside the active depth pass because
+// raylib owns the final backend projection setup.
 Scene_Shadow_Frame :: struct {
     enabled:               bool,
     camera:                rl.Camera3D,
@@ -62,6 +65,9 @@ Scene_Shadow_Frame :: struct {
     world_units_per_texel: f32,
 }
 
+// Scene_Renderer owns every shader and RenderTexture in the Scene pass graph.
+// Full-resolution color/metadata targets stay fixed; low-resolution targets are
+// recreated only when the serialized downscale level changes.
 Scene_Renderer :: struct {
     scene_shader:      rl.Shader,
     scene_source:      Preprocessed_Shader_Program_Source,
@@ -281,6 +287,8 @@ scene_apply_shadow_depth_style :: proc(
     rl.SetShaderValue(shader, bindings.alpha_cutoff, &style.alpha_cutoff, .FLOAT)
 }
 
+// Model resources are index-aligned with Scene.models. Each imported instance
+// owns an independent raylib model because fixed-pose animation mutates meshes.
 Scene_Model_Resource :: struct {
     model:    rl.Model,
     playback: Animation_Playback,
@@ -313,6 +321,9 @@ scene_resolve_light_bindings :: proc(shader: rl.Shader) -> Scene_Light_Shader_Bi
     }
 }
 
+// Pack enabled lights densely into fixed-size arrays matching GLSL uniforms.
+// Disabled serialized entries keep their hierarchy position but do not consume
+// an active shader slot.
 scene_apply_lights :: proc(
     shader: rl.Shader,
     bindings: ^Scene_Light_Shader_Bindings,
@@ -396,6 +407,8 @@ scene_renderer_unload_low_targets :: proc(renderer: ^Scene_Renderer) {
     renderer.low_height = 0
 }
 
+// Reuse targets when dimensions already match. On resize, discard the complete
+// low-resolution set so no render pass can observe mixed old/new dimensions.
 scene_renderer_ensure_low_targets :: proc(
     renderer: ^Scene_Renderer,
     downscale_level: int,
@@ -581,6 +594,9 @@ scene_make_primitive_model :: proc(shape: Scene_Primitive_Shape) -> rl.Model {
     return rl.LoadModelFromMesh(mesh)
 }
 
+// Primitive models are shared immutable shape resources; imported models are
+// appended in Scene.models order. The caller destroys a partial result on any
+// error, preserving one cleanup path for staged editor loads.
 scene_load_resources :: proc(scene: ^Scene) -> (Scene_Resources, Scene_Error) {
     resources: Scene_Resources
     for shape_index := 0; shape_index < len(resources.primitives); shape_index += 1 {
@@ -717,6 +733,9 @@ scene_primitive_local_transform :: proc(shape: Scene_Primitive_Shape) -> rl.Matr
     return rl.Matrix(1)
 }
 
+// Geometry order is a serialized render contract: imported models first in file
+// order, then primitives in file order. Color, metadata, and shadow passes all
+// call this procedure to keep transforms and alpha-tested draw order identical.
 scene_draw_geometry :: proc(
     scene: ^Scene,
     resources: ^Scene_Resources,
@@ -754,6 +773,9 @@ scene_draw_geometry :: proc(
     }
 }
 
+// Render shadow depth when enabled, then color, cel metadata, downsample,
+// coverage, outline, and composite in strict order. Editor overlays are absent;
+// scene_editor_draw_ui adds them only after this capture-ready texture exists.
 scene_renderer_render :: proc(
     renderer: ^Scene_Renderer,
     resources: ^Scene_Resources,
@@ -912,6 +934,8 @@ scene_renderer_render :: proc(
     return true
 }
 
+// Map public capture targets to the authoritative pass outputs. LENS belongs to
+// Viewer mode and deliberately returns an invalid texture here.
 scene_capture_texture :: proc(
     renderer: ^Scene_Renderer,
     target: Capture_Target,

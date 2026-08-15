@@ -1,5 +1,8 @@
 package main
 
+// Scene-mode tests keep CLI and capture ownership rules executable: serialized
+// scene state must reject Viewer/Game overrides before graphics initialization.
+
 import "core:testing"
 
 @test

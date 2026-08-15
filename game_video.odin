@@ -34,6 +34,9 @@ Video_Stream_Start_Error :: enum {
     PROCESS_FAILED,
 }
 
+// Video_Stream_Encoder owns the child process, pipe write end, and allocated
+// temporary path. started/stdin make abort and deferred destruction idempotent
+// across partial initialization failures.
 Video_Stream_Encoder :: struct {
     process:        os.Process,
     stdin:          ^os.File,
@@ -152,6 +155,8 @@ video_stream_remove_temporary_output :: proc(encoder: ^Video_Stream_Encoder) {
     }
 }
 
+// Ignore SIGPIPE on POSIX so an early FFmpeg exit becomes an ordinary write
+// error that can run cleanup instead of terminating Lab0 asynchronously.
 video_stream_prepare_pipe_writes :: proc() -> bool {
     when ODIN_OS == .Windows {
         return true
@@ -164,6 +169,9 @@ video_stream_prepare_pipe_writes :: proc() -> bool {
     }
 }
 
+// Start FFmpeg without a shell and retain only the parent's write end. Frames
+// are published to a sibling temporary MP4 until finish validates the process,
+// frame count, and non-empty output.
 start_video_stream_encoder :: proc(
     encoder: ^Video_Stream_Encoder,
     output_path: string,
@@ -224,6 +232,8 @@ start_video_stream_encoder :: proc(
     return .NONE
 }
 
+// Pipe writes may be short even without an error. Keep writing the remaining
+// suffix; accepting zero bytes would otherwise spin forever on a broken sink.
 video_stream_write_all :: proc(file: ^os.File, data: []byte) -> bool {
     bytes_written := 0
     for bytes_written < len(data) {
@@ -251,6 +261,8 @@ video_stream_write_all :: proc(file: ^os.File, data: []byte) -> bool {
     return true
 }
 
+// Read one texture and release its CPU image before returning. No frame queue
+// is retained, so memory use is constant with respect to replay duration.
 video_stream_write_render_texture :: proc(
     encoder: ^Video_Stream_Encoder,
     texture: rl.Texture2D,
@@ -295,6 +307,8 @@ video_stream_write_render_texture :: proc(
     return true
 }
 
+// Abort is safe after any start phase: close stdin, reap or kill the child, and
+// remove the incomplete artifact without ever creating the final output name.
 video_stream_encoder_abort :: proc(encoder: ^Video_Stream_Encoder) {
     if encoder.stdin != nil {
         _ = os.close(encoder.stdin)
@@ -311,6 +325,8 @@ video_stream_encoder_abort :: proc(encoder: ^Video_Stream_Encoder) {
     video_stream_remove_temporary_output(encoder)
 }
 
+// Closing stdin is the end-of-stream signal that lets FFmpeg flush its muxer.
+// Rename is deliberately last, making the final path a success-only commit.
 finish_video_stream_encoder :: proc(
     encoder: ^Video_Stream_Encoder,
     output_path: string,

@@ -42,6 +42,9 @@ GAME_OCCLUSION_DITHER_SCALE :: f32(GAME_SCREEN_WIDTH / GAME_PIXEL_WIDTH)
 GAME_OCCLUSION_ENTER_OVERLAP_PIXELS :: f32(2)
 GAME_OCCLUSION_EXIT_MARGIN_PIXELS :: f32(2)
 
+// Game-specific CLI values borrow process-argument storage. Capture flags are
+// parsed separately into Capture_Options, then cross-validated before any GPU
+// or FFmpeg resource is created.
 Game_Run_Options :: struct {
     start_room:          Game_Room_ID,
     start_room_explicit: bool,
@@ -54,6 +57,9 @@ Game_Run_Options :: struct {
     video_output:        string,
 }
 
+// Camera smoothing is render state rather than simulation state. Transition
+// endpoints are snapshotted once so the camera cannot chase a moving target
+// while the authoritative player is interpolating between rooms.
 Game_Camera_State :: struct {
     target:                  rl.Vector3,
     look_ahead:              rl.Vector2,
@@ -63,17 +69,25 @@ Game_Camera_State :: struct {
     transition_active:       bool,
 }
 
+// Entity snapping needs matching clip-space and world-space translations: the
+// vertex position moves in NDC while lighting/view calculations receive the
+// corresponding world offset, preserving one rigid cel-shaded silhouette.
 Game_Pixel_Snap_Offset :: struct {
     ndc:   rl.Vector2,
     world: rl.Vector3,
 }
 
+// Imported assets retain their source bounds so every draw can normalize to an
+// authored world height without altering the raylib model's owned transform.
 Game_Imported_Model :: struct {
     model:  rl.Model,
     bounds: rl.BoundingBox,
     valid:  bool,
 }
 
+// Game_Assets owns all raylib models, textures, and animation allocations for
+// one run. Player and zombie instances share one mutable animated model each;
+// their pose must therefore be applied immediately before drawing.
 Game_Assets :: struct {
     cube:       rl.Model,
     sphere:     rl.Model,
@@ -99,11 +113,6 @@ Game_Assets :: struct {
 game_configure_player_animation :: proc(playback: ^Animation_Playback) {
     playback.sampled_playback = true
     playback.sample_count = GAME_PLAYER_ANIMATION_SAMPLE_COUNT
-}
-
-game_configure_zombie_animation :: proc(playback: ^Animation_Playback) {
-    playback.sampled_playback = true
-    playback.sample_count = GAME_ZOMBIE_ANIMATION_SAMPLE_COUNT
 }
 
 Game_Zombie_Animation_Kind :: enum {
@@ -147,6 +156,9 @@ Game_Screen_Bounds :: struct {
     valid: bool,
 }
 
+// An occlusion query retains both coarse ground-plane depth ordering and exact
+// projected screen bounds. Keeping the intermediate values makes the raw T00
+// diagnostic and the production hysteresis test the same detector.
 Game_Decor_Occlusion_Query :: struct {
     player_ground: rl.Vector2,
     camera_ground: rl.Vector2,
@@ -205,6 +217,9 @@ GAME_DECOR := [?]Game_Decor{
     GAME_OCCLUSION_TEST_TREE,
 }
 
+// Slots are permanently parallel to GAME_DECOR. Hysteresis needs the previous
+// per-item result, so reordering authored decor is also a visibility-state
+// ordering change.
 Game_Decor_Visibility_State :: struct {
     occluded: [len(GAME_DECOR)]bool,
 }
@@ -295,6 +310,10 @@ GAME_ROOM_HUD_ACCENT_COLORS := [?]rl.Color{
     {103, 226, 218, 255},
 }
 
+// Game_Renderer owns a fixed pass graph: full-resolution color and cel metadata,
+// low-resolution color/coverage/outline, then the 1280x720 composite with HUD.
+// Uniform locations and preprocessed sources live beside their GPU programs so
+// initialization and destruction remain one explicit ownership boundary.
 Game_Renderer :: struct {
     scene_shader:       rl.Shader,
     scene_source:       Preprocessed_Shader_Program_Source,
@@ -340,6 +359,9 @@ game_mode_requested :: proc(arguments: []string) -> bool {
     return false
 }
 
+// Parse only --game-* controls and leave shared --capture-* arguments untouched.
+// Cross-mode and cross-feature combinations are rejected later when both option
+// records are available.
 parse_game_run_options :: proc(arguments: []string) -> (
     options: Game_Run_Options,
     valid: bool,
@@ -504,6 +526,9 @@ game_try_find_animation_clip :: proc(
     return 0, false
 }
 
+// Load the complete visual asset set once. Imported models may fall back to
+// generated geometry, but any valid animation playback remains owned by this
+// aggregate and is released by game_unload_assets.
 game_load_assets :: proc() -> Game_Assets {
     assets: Game_Assets
     assets.cube = rl.LoadModelFromMesh(rl.GenMeshCube(1, 1, 1))
@@ -536,7 +561,9 @@ game_load_assets :: proc() -> Game_Assets {
             GAME_ZOMBIE_MODEL_PATH,
             .ASSET,
         )
-        game_configure_zombie_animation(&assets.zombie_animation)
+        zombie_playback := &assets.zombie_animation
+        zombie_playback.sampled_playback = true
+        zombie_playback.sample_count = GAME_ZOMBIE_ANIMATION_SAMPLE_COUNT
         attack_found, idle_found, walk_found: bool
         assets.zombie_attack_clip, attack_found = game_try_find_animation_clip(
             &assets.zombie_animation,
@@ -678,6 +705,9 @@ game_draw_imported_debug_tint :: proc(
     }
 }
 
+// Initialize in pass dependency order. The caller always invokes destroy on a
+// failed partial renderer, so every successfully created handle is stored in
+// renderer immediately rather than in an untracked local owner.
 game_renderer_init :: proc(renderer: ^Game_Renderer, style: ^Cel_Style) -> bool {
     scene_loaded: bool
     renderer.scene_shader, renderer.scene_source, scene_loaded =
@@ -859,6 +889,8 @@ game_room_center :: proc(room_id: Game_Room_ID) -> rl.Vector3 {
     }
 }
 
+// Apply a room-clamped deadzone around the player plus input look-ahead. Fixed
+// diagnostic rooms bypass follow behavior and use their authored center.
 game_camera_room_target :: proc(
     room_id: Game_Room_ID,
     player_position: rl.Vector3,
@@ -900,17 +932,15 @@ game_camera_room_target :: proc(
     return desired
 }
 
-game_camera_smootherstep :: proc(value: f32) -> f32 {
-    t := clamp(value, f32(0), f32(1))
-    return t * t * t * (t * (t * 6 - 15) + 10)
-}
-
 game_camera_round_pixel_coordinate :: proc(value: f32) -> f32 {
     // One rule for camera and entity anchors avoids opposite one-pixel choices
     // at negative half-pixel coordinates.
     return math.floor(value + 0.5)
 }
 
+// Update the unsnapped smooth target first, then quantize only the returned
+// render camera. Simulation and future smoothing therefore retain sub-pixel
+// precision even though the low-resolution image is pixel-stable.
 game_update_camera :: proc(
     camera_state: ^Game_Camera_State,
     state: ^Game_State,
@@ -949,7 +979,9 @@ game_update_camera :: proc(
         }
         progress := state.player.transition_elapsed /
                     state.player.transition_duration
-        smooth := game_camera_smootherstep(progress)
+        transition_t := clamp(progress, f32(0), f32(1))
+        smooth := transition_t * transition_t * transition_t *
+                  (transition_t * (transition_t * 6 - 15) + 10)
         camera_state.target = camera_state.transition_start_target +
                               (camera_state.transition_end_target -
                                camera_state.transition_start_target) * smooth
@@ -1232,6 +1264,9 @@ game_draw_fallback_tree :: proc(
     )
 }
 
+// Project all eight transformed AABB corners into full-resolution screen space.
+// These conservative bounds are used only for decor visibility, never gameplay
+// collision, so animated mesh deformation cannot alter traversal rules.
 game_project_local_bounds :: proc(
     bounds: rl.BoundingBox,
     position, scale: rl.Vector3,
@@ -1422,6 +1457,9 @@ game_decor_screen_bounds :: proc(
     return {}
 }
 
+// A decor item can occlude only when its ground point lies strictly between the
+// player and camera and its projected bounds overlap the player's. Grass,
+// rocks, and trunks are excluded before the temporal hysteresis stage.
 game_decor_occlusion_query :: proc(
     assets: ^Game_Assets,
     decor: Game_Decor,
@@ -1799,6 +1837,8 @@ game_draw_player :: proc(assets: ^Game_Assets, state: ^Game_State) {
     )
 }
 
+// Particle lifetime affects only draw size near expiry; position and activity
+// remain authoritative fixed-update values from Game_Particle_System.
 game_draw_particles :: proc(assets: ^Game_Assets, state: ^Game_State) {
     for particle in state.particle_system.particles {
         if !particle.active || particle.lifetime <= 0 {
@@ -1843,6 +1883,9 @@ game_zombie_count_in_room :: proc(room_id: Game_Room_ID) -> int {
     return count
 }
 
+// Derive animation pose entirely from simulation time and AI mode. Per-zombie
+// phase offsets prevent synchronized crowds without adding mutable render-time
+// clocks that would diverge between replay and interactive capture.
 game_apply_zombie_animation :: proc(
     assets: ^Game_Assets,
     state: ^Game_State,
@@ -2164,6 +2207,9 @@ game_set_cel_accents_enabled :: proc(
     rl.SetShaderValue(shader, bindings.highlight_enabled, &highlight_value, .INT)
 }
 
+// Draw identical geometry for the color and cel-metadata passes. Pass-specific
+// shader state may differ, but authored order and per-entity snap offsets must
+// stay identical or downsample classification will no longer match scene color.
 game_draw_world :: proc(
     assets: ^Game_Assets,
     state: ^Game_State,
@@ -2258,6 +2304,9 @@ game_draw_world :: proc(
     game_set_pixel_snap_offset(shader, bindings, {})
 }
 
+// Advance animation by simulated time, not wall-clock render time. A frame that
+// runs several fixed ticks advances by their combined duration; warmup renders
+// and repeated fixed-pose captures advance by zero.
 game_update_player_animation :: proc(
     assets: ^Game_Assets,
     state: ^Game_State,
@@ -2611,6 +2660,9 @@ game_draw_hud :: proc(
     }
 }
 
+// Execute the deterministic pass graph once. Color and cel metadata render the
+// same world independently, coverage is resolved from metadata, outline is
+// composed at pixel resolution, and only the final composite receives the HUD.
 game_renderer_render :: proc(
     renderer: ^Game_Renderer,
     assets: ^Game_Assets,
@@ -2930,6 +2982,9 @@ make_game_cel_style :: proc() -> Cel_Style {
     return style
 }
 
+// Validate every CPU-side option and replay before starting external resources.
+// After window creation, defers own the renderer, assets, style, replay, and
+// optional encoder across all interactive and non-interactive exit paths.
 run_game_mode :: proc(arguments: []string) -> int {
     console_logger := log.create_console_logger()
     defer log.destroy_console_logger(console_logger)
@@ -3126,6 +3181,9 @@ run_game_mode :: proc(arguments: []string) -> int {
         }
     }
 
+    // Interactive frames feed an accumulator; capture and replay force exactly
+    // one fixed interval per render. Once a requested capture tick is reached,
+    // simulation freezes while deterministic warmup renders repeat that pose.
     for !rl.WindowShouldClose() && !capture_complete && !replay_complete {
         frame_dt := min(rl.GetFrameTime(), f32(0.25))
         frame_input: Game_Input
@@ -3198,6 +3256,8 @@ run_game_mode :: proc(arguments: []string) -> int {
             ticks_run += 1
         }
         if ticks_run == GAME_MAX_FIXED_TICKS && accumulator >= GAME_FIXED_DT {
+            // Discard an excessive interactive backlog instead of simulating an
+            // unbounded catch-up burst. Replay/capture never reach this branch.
             accumulator = 0
         }
         game_update_player_animation(

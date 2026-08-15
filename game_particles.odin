@@ -23,6 +23,8 @@ GAME_DUST_COLORS := [?]rl.Color{
     {119, 116, 109, 255},
 }
 
+// Particles own no GPU resources; the renderer reads these fixed-update values
+// as immutable draw inputs. floor_y is the resting plane captured at emission.
 Game_Particle :: struct {
     active:     bool,
     position:   rl.Vector3,
@@ -34,6 +36,9 @@ Game_Particle :: struct {
     color:      rl.Color,
 }
 
+// The fixed array avoids allocator and lifetime variability during replays.
+// RNG state, ring cursor, and distance accumulators are part of Game_State, so
+// restoring a checkpoint also restores the exact future emission sequence.
 Game_Particle_System :: struct {
     particles:             [GAME_PARTICLE_CAPACITY]Game_Particle,
     random_state:          u32,
@@ -52,6 +57,8 @@ game_particles_init :: proc() -> Game_Particle_System {
     }
 }
 
+// A local xorshift generator deliberately avoids Odin's ambient random context.
+// Zero is repaired because it is the absorbing state of this recurrence.
 game_particles_random_u32 :: proc(system: ^Game_Particle_System) -> u32 {
     value := system.random_state
     if value == 0 {
@@ -76,11 +83,9 @@ game_particles_random_range :: proc(
     return minimum + (maximum - minimum) * game_particles_random_unit(system)
 }
 
-game_particles_random_color :: proc(system: ^Game_Particle_System) -> rl.Color {
-    color_index := int(game_particles_random_u32(system) % u32(len(GAME_DUST_COLORS)))
-    return GAME_DUST_COLORS[color_index]
-}
-
+// Allocate from the deterministic ring, preferring inactive entries. Capacity
+// exhaustion overwrites in cursor order instead of allocating or dropping an
+// input-dependent particle nondeterministically.
 game_particles_spawn :: proc(
     system: ^Game_Particle_System,
     position, velocity: rl.Vector3,
@@ -100,6 +105,7 @@ game_particles_spawn :: proc(
         slot = system.spawn_cursor
     }
     system.spawn_cursor = (slot + 1) % GAME_PARTICLE_CAPACITY
+    color_index := int(game_particles_random_u32(system) % u32(len(GAME_DUST_COLORS)))
     system.particles[slot] = {
         active = true,
         position = position,
@@ -107,10 +113,12 @@ game_particles_spawn :: proc(
         floor_y = floor_y,
         lifetime = lifetime,
         start_size = size,
-        color = game_particles_random_color(system),
+        color = GAME_DUST_COLORS[color_index],
     }
 }
 
+// Simulation advances before the current tick emits new particles. Resting
+// particles retain horizontal drag but cannot fall below their captured floor.
 game_particles_fixed_update :: proc(system: ^Game_Particle_System, dt: f32) {
     horizontal_drag := max(f32(0), 1 - GAME_PARTICLE_HORIZONTAL_DRAG * dt)
     for &particle in system.particles {
@@ -170,6 +178,8 @@ game_particles_emit_step :: proc(
     )
 }
 
+// Emission is distance-based rather than tick-based, making density independent
+// of acceleration and of how a path is split across fixed updates.
 game_particles_track_steps :: proc(
     system: ^Game_Particle_System,
     from, to: rl.Vector3,
@@ -257,6 +267,8 @@ game_particles_emit_dash_trail :: proc(
     )
 }
 
+// Dash trails have a separate accumulator because the burst at dash start
+// resets trail spacing without disturbing the walking cadence.
 game_particles_track_dash :: proc(
     system: ^Game_Particle_System,
     from, to: rl.Vector3,

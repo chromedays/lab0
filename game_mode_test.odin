@@ -1,5 +1,9 @@
 package main
 
+// Headless Game-mode tests specify CLI compatibility, camera framing and pixel
+// snapping, decor occlusion hysteresis, and animation pose selection without
+// requiring a raylib window.
+
 import "core:math"
 import "core:testing"
 import rl "vendor:raylib"

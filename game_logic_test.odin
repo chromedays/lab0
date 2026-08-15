@@ -1,5 +1,9 @@
 package main
 
+// CPU-only specification for movement, collision, room transitions, zombie
+// state machines, and deterministic particles. Tests call game_fixed_update
+// directly so failures cannot be hidden by render timing or live input.
+
 import "core:math"
 import "core:testing"
 import rl "vendor:raylib"

@@ -11,6 +11,8 @@ import "core:strings"
 import rl "vendor:raylib"
 import rgl "vendor:raylib/rlgl"
 
+// Scene-specific CLI state is parsed separately from shared Capture_Options.
+// Paths borrow argument storage; no field in this value requires destruction.
 Scene_Run_Options :: struct {
     scene_path:         string,
     scene_path_set:     bool,
@@ -29,6 +31,8 @@ scene_editor_mode_requested :: proc(arguments: []string) -> bool {
     return false
 }
 
+// Consume only Scene mode flags and reject other mode namespaces eagerly. The
+// shared capture parser independently validates --capture-* syntax.
 parse_scene_run_options :: proc(arguments: []string) -> (
     options: Scene_Run_Options,
     valid: bool,
@@ -121,6 +125,8 @@ print_scene_editor_usage :: proc() {
     fmt.println("  --capture-help               Print the complete Viewer capture reference")
 }
 
+// A serialized scene owns camera, model, style, and low-resolution settings.
+// Reject Viewer/Game overrides so a capture has one authoritative render state.
 validate_scene_capture_options :: proc(
     arguments: []string,
     run_options: ^Scene_Run_Options,
@@ -145,6 +151,9 @@ validate_scene_capture_options :: proc(
     return true
 }
 
+// Establish all CPU-owned scene/style state before opening the native window;
+// then create GPU resources in dependency order. Defers unwind the reverse
+// ownership order on every validation, capture, and interactive exit path.
 run_scene_editor_mode :: proc(arguments: []string) -> int {
     console_logger := log.create_console_logger()
     defer log.destroy_console_logger(console_logger)
@@ -268,6 +277,9 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
             if video_start_error == .FFMPEG_NOT_FOUND { return 2 }
             if video_start_error != .NONE { return 1 }
 
+            // Warmup renders the authored pose but is not part of the stream.
+            // Every output camera is then derived from this immutable snapshot,
+            // avoiding incremental orbit drift across hundreds of frames.
             authored_camera := scene.camera
             for _ in 0 ..< capture.warmup_frames {
                 if !scene_renderer_render(&renderer, &resources, &scene, &style) {
@@ -341,6 +353,8 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
         return 0
     }
 
+    // Resolve deferred New/Open requests before input and rendering so a frame
+    // never mixes UI state from one scene with resources from another.
     for !rl.WindowShouldClose() && !editor_ui.exit_requested {
         if editor_ui.new_requested {
             editor_ui.new_requested = false

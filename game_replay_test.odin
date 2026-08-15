@@ -1,5 +1,9 @@
 package main
 
+// Replay tests cover compact segment expansion, schema validation, bundled
+// authored routes, exact checkpoints, and completion metrics. Replays are run
+// through the production fixed update rather than a separate test simulator.
+
 import "core:math"
 import "core:testing"
 import rl "vendor:raylib"

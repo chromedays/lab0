@@ -103,6 +103,9 @@ Scene_Primitive_Shape :: enum {
     TORUS,
 }
 
+// Transforms use world units, XYZ Euler degrees, and strictly positive scale.
+// scene_transform_matrix defines the serialized v1 order; editing that order
+// changes both picking and rendered output for every scene.
 Scene_Transform :: struct {
     position:           rl.Vector3,
     rotation_euler_deg: rl.Vector3,
@@ -114,6 +117,8 @@ Scene_Animation_Pose :: struct {
     frame:      int,
 }
 
+// Runtime items own their id/name/source strings. A Scene_Model's optional pose
+// is a fixed keyframe selection, never a wall-clock animation request.
 Scene_Model :: struct {
     id:        string,
     name:      string,
@@ -133,6 +138,9 @@ Scene_Primitive :: struct {
     albedo:    rl.Color,
 }
 
+// Directional direction points from a surface toward the source. Spot direction
+// instead points outward from the light into its cone; both are normalized on
+// load before reaching renderer uniform upload.
 Scene_Directional_Light :: struct {
     enabled:         bool,
     direction:       rl.Vector3,
@@ -182,6 +190,10 @@ Scene_Camera :: struct {
     ortho_height:     f32,
 }
 
+// Scene owns every string and dynamic array below. UI selection and GPU model
+// resources live in parallel editor structures and are intentionally excluded
+// from serialization. next_* counters are transient ID allocators rebuilt from
+// existing IDs on first use after load.
 Scene :: struct {
     name:              string,
     style_path:        string,
@@ -313,6 +325,8 @@ scene_normalize_euler_degrees :: proc(value: rl.Vector3) -> rl.Vector3 {
     }
 }
 
+// Preserve the v1 transform contract: vertices see Scale, then local X/Y/Z
+// rotations, then Translation (M = T * Rz * Ry * Rx * S).
 scene_transform_matrix :: proc(transform: Scene_Transform) -> rl.Matrix {
     degrees_to_radians :: f32(math.PI / 180)
     rotation := transform.rotation_euler_deg * degrees_to_radians
@@ -459,6 +473,8 @@ scene_edge_aa_to_string :: proc(value: Edge_AA_Mode) -> string {
     return ""
 }
 
+// The default scene follows the same ownership contract as a loaded scene: its
+// static defaults are cloned so destroy_scene is always the matching cleanup.
 make_default_scene :: proc() -> Scene {
     return {
         name = strings.clone("Untitled Scene"),
@@ -489,6 +505,8 @@ make_default_scene :: proc() -> Scene {
     }
 }
 
+// Release child strings before their containing arrays, then clear the owner so
+// deferred cleanup remains safe after transactional scene replacement.
 destroy_scene :: proc(scene: ^Scene) {
     if len(scene.name) > 0 { delete(scene.name) }
     if len(scene.style_path) > 0 { delete(scene.style_path) }

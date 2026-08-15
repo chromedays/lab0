@@ -1,5 +1,9 @@
 package main
 
+// Video transport tests cover option conflicts, raw-frame sizing, FFmpeg argv,
+// short pipe writes, failure cleanup, and success-only publication without
+// invoking the real GPU or encoder.
+
 import "core:testing"
 
 @(test)

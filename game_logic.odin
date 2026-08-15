@@ -7,6 +7,9 @@ package main
 import "core:math"
 import rl "vendor:raylib"
 
+// Player and AI rules are 2.5D: they operate on world XZ, while Vector2.y
+// represents world Z. Their world Y is supplied by the current room floor or a
+// scripted room transition. Durations and rates are seconds and world units.
 GAME_FIXED_DT              :: f32(1.0 / 60.0)
 GAME_MAX_FIXED_TICKS       :: 8
 GAME_MOVE_SPEED            :: f32(3.6)
@@ -43,6 +46,9 @@ GAME_HIT_FEEDBACK_TIME      :: f32(0.55)
 // render pixel per fixed tick: (8 world units / 144 pixels) * 60 Hz / 4.
 GAME_PIXEL_SNAP_TEST_SPEED :: f32(5.0 / 6.0)
 
+// Values are contiguous and intentionally ordered exactly like GAME_ROOMS.
+// game_room uses the enum value as an array index, so keep both declarations
+// synchronized when adding a room or diagnostic scene.
 Game_Room_ID :: enum {
     R00_START_FOREST,
     R01_FOREST_PASSAGE,
@@ -55,12 +61,17 @@ Game_Room_ID :: enum {
     TEST_PIXEL_SNAP,
 }
 
+// Player modes are mutually exclusive fixed-update phases. DASHING and
+// ROOM_TRANSITION return early from game_fixed_update so grounded acceleration
+// and collision resolution cannot run during either scripted movement.
 Game_Player_Mode :: enum {
     GROUNDED,
     DASHING,
     ROOM_TRANSITION,
 }
 
+// Zombie modes form the complete AI state machine. game_set_zombie_mode resets
+// mode_elapsed on every transition; timed modes rely on that invariant.
 Game_Zombie_Mode :: enum {
     SHAMBLING,
     CHASING,
@@ -77,6 +88,8 @@ Game_Exit_Side :: enum {
     WEST,
 }
 
+// Axis-aligned gameplay bounds in the XZ plane. min_z/max_z are stored beside
+// X rather than as a Vector2 to keep authored room data legible.
 Game_Rect :: struct {
     min_x: f32,
     min_z: f32,
@@ -94,6 +107,8 @@ Game_Room :: struct {
     color:         rl.Color,
 }
 
+// An exit owns both its source-edge trigger and the exact target spawn. For
+// north/south exits span_center is X; for east/west exits it is Z.
 Game_Room_Exit :: struct {
     source:          Game_Room_ID,
     target:          Game_Room_ID,
@@ -121,6 +136,9 @@ Game_Zombie_Spawn :: struct {
     patrol_end: rl.Vector3,
 }
 
+// Input is the only external value consumed by the deterministic simulation.
+// move is normalized before gameplay use and dash_pressed is an edge event,
+// not a held state.
 Game_Input :: struct {
     move:         rl.Vector2,
     dash_pressed: bool,
@@ -146,6 +164,8 @@ game_default_movement_tuning :: proc() -> Game_Movement_Tuning {
     }
 }
 
+// Game_Player stores all temporal state needed to resume a fixed update with
+// no render-frame history. Horizontal vectors use the X/Z-as-x/y convention.
 Game_Player :: struct {
     position:              rl.Vector3,
     velocity:              rl.Vector2,
@@ -165,6 +185,9 @@ Game_Player :: struct {
     exit_reentry_lock:     f32,
 }
 
+// Every zombie has independent perception and movement state even though Game
+// rendering reuses one animated model. return_target lies on the authored
+// patrol segment and avoidance_sign makes blocked peers choose opposite turns.
 Game_Zombie :: struct {
     position:         rl.Vector3,
     facing:           rl.Vector2,
@@ -180,6 +203,9 @@ Game_Zombie :: struct {
     patrol_to_end:    bool,
 }
 
+// Game_State is the fixed-update replay checkpoint. Counters and tick are
+// monotonic; GPU resources, live input, and camera smoothing live outside this
+// structure so tests can advance it without a graphics context.
 Game_State :: struct {
     current_room:       Game_Room_ID,
     movement_tuning:    Game_Movement_Tuning,
@@ -199,6 +225,9 @@ Game_State :: struct {
     particle_system:    Game_Particle_System,
 }
 
+// Authored arrays are immutable world data. Runtime state stores indices and
+// room IDs rather than pointers so resets and replay checkpoints remain plain
+// deterministic values.
 GAME_ROOMS := [?]Game_Room{
     {
         id = .R00_START_FOREST,
@@ -364,6 +393,8 @@ game_room_from_string :: proc(value: string) -> (Game_Room_ID, bool) {
     return .R00_START_FOREST, false
 }
 
+// game_state_init constructs a replay-ready checkpoint. All RNG state and AI
+// positions are reset here; callers need not perform a separate warmup tick.
 game_state_init :: proc(start_room: Game_Room_ID = .R00_START_FOREST) -> Game_State {
     room := game_room(start_room)
     state := Game_State{
@@ -381,6 +412,9 @@ game_state_init :: proc(start_room: Game_Room_ID = .R00_START_FOREST) -> Game_St
     return state
 }
 
+// A room reset preserves facing and global progress/counters, but recreates the
+// local player, particles, and zombies. This is the common recovery path for a
+// zombie hit and the interactive reset command.
 game_reset_current_room :: proc(state: ^Game_State) {
     room := game_room(state.current_room)
     state.reset_count += 1
@@ -427,6 +461,8 @@ game_rect_overlaps_circle :: proc(
     center: rl.Vector2,
     radius: f32,
 ) -> bool {
+    // Strict comparison treats an exact tangent as non-penetrating. This lets
+    // a circle slide along an authored rectangle without sticking at contact.
     nearest_x := clamp(center.x, bounds.min_x, bounds.max_x)
     nearest_z := clamp(center.y, bounds.min_z, bounds.max_z)
     delta_x := center.x - nearest_x
@@ -581,6 +617,9 @@ game_zombie_position_available :: proc(
     return !hits_peer
 }
 
+// Project a position onto the finite patrol segment. Returning zombies use the
+// nearest point instead of always walking back to an endpoint, which bounds
+// their recovery path after a chase.
 game_zombie_patrol_anchor :: proc(
     zombie_index: int,
     position: rl.Vector3,
@@ -613,6 +652,8 @@ game_zombie_begin_return :: proc(zombie: ^Game_Zombie, zombie_index: int) {
     game_set_zombie_mode(zombie, .RETURNING)
 }
 
+// Sample the open segment at a fixed world-space interval. Only gameplay
+// obstacles participate; decorative render meshes never affect perception.
 game_line_of_sight_clear :: proc(
     room_id: Game_Room_ID,
     start, finish: rl.Vector3,
@@ -661,6 +702,9 @@ game_zombie_can_see_player :: proc(
     )
 }
 
+// Try the requested step and then small deterministic turns on alternating
+// sides. The procedure mutates the zombie only after a collision-free candidate
+// is found, so failed avoidance leaves its previous position intact.
 game_move_zombie :: proc(
     state: ^Game_State,
     zombie_index: int,
@@ -816,6 +860,8 @@ game_set_zombie_mode :: proc(
     zombie.mode_elapsed = 0
 }
 
+// Advance one zombie state machine and report only a player hit. The caller
+// owns the resulting room reset and stops processing later zombies that tick.
 game_update_zombie :: proc(
     state: ^Game_State,
     zombie_index: int,
@@ -972,6 +1018,8 @@ game_update_zombie :: proc(
         }
 
     case .LUNGING:
+        // Subdivide the high-speed lunge so thin obstacles and the player
+        // cannot be skipped by a single fixed-tick displacement.
         remaining_time := min(dt, GAME_ZOMBIE_LUNGE_TIME - zombie.mode_elapsed)
         distance := GAME_ZOMBIE_LUNGE_SPEED * remaining_time
         step_count := max(int(math.ceil(distance / 0.08)), 1)
@@ -1116,6 +1164,9 @@ game_position_blocked :: proc(
     return hazards_block && game_position_hits_hazard(room_id, position)
 }
 
+// Resolve X then Z independently. Axis separation intentionally permits wall
+// sliding while each accepted coordinate still observes room, obstacle, and
+// hazard constraints.
 game_move_grounded :: proc(
     state: ^Game_State,
     displacement: rl.Vector2,
@@ -1146,6 +1197,8 @@ game_move_grounded :: proc(
     }
 }
 
+// Hazards are traversable during a dash, but the final center must be on safe
+// room ground. An invalid landing rolls back to the recorded dash start.
 game_finish_dash :: proc(state: ^Game_State) {
     if game_position_hits_hazard(state.current_room, state.player.position) ||
        !game_position_inside_room(state.current_room, state.player.position) {
@@ -1160,6 +1213,8 @@ game_finish_dash :: proc(state: ^Game_State) {
     state.player.dash_elapsed = 0
 }
 
+// Dash distance is subdivided independently of tick size to prevent tunneling
+// through thin obstacles and to detect exit crossings along the path.
 game_update_dash :: proc(state: ^Game_State, dt: f32) {
     remaining_time := min(dt, GAME_DASH_DURATION - state.player.dash_elapsed)
     dash_speed := state.movement_tuning.dash_distance / GAME_DASH_DURATION
@@ -1189,6 +1244,9 @@ game_update_dash :: proc(state: ^Game_State, dt: f32) {
     }
 }
 
+// Room transitions interpolate authoritative player position with smoothstep.
+// The room ID changes only at the endpoint, keeping collision and rendering on
+// one room's data for the entire tick.
 game_update_room_transition :: proc(state: ^Game_State, dt: f32) {
     state.player.transition_elapsed += dt
     normalized_time := clamp(
@@ -1226,6 +1284,9 @@ game_update_progress :: proc(state: ^Game_State) {
     }
 }
 
+// game_fixed_update is the sole simulation clock used by interactive play,
+// tests, replays, and video capture. Order is observable: old particles age,
+// timers decay, exactly one player-mode branch runs, then AI/progress update.
 game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
     state.tick += 1
     state.elapsed_time += dt
