@@ -202,7 +202,7 @@ game_test_occlusion_assets :: proc() -> Game_Assets {
 }
 
 @(test)
-game_foreground_tree_uses_pink_visibility_debug_tint :: proc(
+game_foreground_tree_uses_pink_visibility_debug_tint_only_in_t00 :: proc(
     t: ^testing.T,
 ) {
     state := game_state_init(.TEST_OCCLUSION)
@@ -212,9 +212,13 @@ game_foreground_tree_uses_pink_visibility_debug_tint :: proc(
     assets := game_test_occlusion_assets()
 
     testing.expect_value(t, tree.kind, Game_Decor_Kind.TREE)
+    clear_effect := game_decor_visibility_effect(
+        state.current_room,
+        game_decor_occludes_player(&assets, tree, &state, camera),
+    )
     testing.expect_value(
         t,
-        game_decor_visibility_tint(&assets, tree, &state, camera),
+        game_decor_visibility_tint(tree, clear_effect),
         tree.tint,
     )
 
@@ -222,11 +226,116 @@ game_foreground_tree_uses_pink_visibility_debug_tint :: proc(
     // the fixed test camera. The debug tint exposes that classification.
     state.player.position = {80, 0, -2}
     camera = game_update_camera(&camera_state, &state, {}, GAME_FIXED_DT)
+    debug_effect := game_decor_visibility_effect(
+        state.current_room,
+        game_decor_occludes_player(&assets, tree, &state, camera),
+    )
+    testing.expect_value(t, debug_effect, Game_Decor_Visibility_Effect.DEBUG_TINT)
     testing.expect_value(
         t,
-        game_decor_visibility_tint(&assets, tree, &state, camera),
+        game_decor_visibility_tint(tree, debug_effect),
         GAME_OCCLUSION_DEBUG_TINT,
     )
+}
+
+@(test)
+game_regular_room_occluder_keeps_its_tint_and_uses_35_percent_dither :: proc(
+    t: ^testing.T,
+) {
+    tree := GAME_OCCLUSION_TEST_TREE
+    effect := game_decor_visibility_effect(.R00_START_FOREST, true)
+
+    testing.expect_value(t, effect, Game_Decor_Visibility_Effect.DITHERED)
+    testing.expect_value(t, game_decor_visibility_tint(tree, effect), tree.tint)
+    testing.expect_value(
+        t,
+        game_decor_visibility_amount(effect),
+        f32(0.35),
+    )
+}
+
+@(test)
+game_occlusion_dither_pattern_keeps_exactly_seven_of_twenty_cells :: proc(
+    t: ^testing.T,
+) {
+    visible_cells := 0
+    visible_cell_limit := int(math.floor(
+        f64(GAME_OCCLUSION_DITHER_VISIBILITY * 20 + 0.5),
+    ))
+    for y in 0 ..< 5 {
+        for x in 0 ..< 4 {
+            linear_index := y * 4 + x
+            ordered_rank := (linear_index * 13) % 20
+            if ordered_rank < visible_cell_limit {
+                visible_cells += 1
+            }
+        }
+    }
+    testing.expect_value(t, visible_cells, 7)
+}
+
+game_test_edge_occlusion_query :: proc(decor_min_x: f32) -> Game_Decor_Occlusion_Query {
+    player_bounds := Game_Screen_Bounds{{0, 0}, {10, 10}, true}
+    decor_bounds := Game_Screen_Bounds{{decor_min_x, 0}, {decor_min_x + 10, 10}, true}
+    overlap := game_screen_bounds_intersection(player_bounds, decor_bounds)
+    return {
+        player_bounds = player_bounds,
+        decor_bounds = decor_bounds,
+        overlap = overlap,
+        depth_valid = true,
+        occluded = overlap.valid,
+    }
+}
+
+@(test)
+game_regular_room_occlusion_edge_hysteresis_rejects_jitter :: proc(t: ^testing.T) {
+    flags := [1]bool{false}
+    queries := [1]Game_Decor_Occlusion_Query{
+        game_test_edge_occlusion_query(9.0),
+    }
+
+    // A one-pixel graze is not enough to enter the faded state.
+    game_update_decor_visibility_flags(flags[:], queries[:], false)
+    testing.expect(t, !flags[0])
+
+    // Three pixels enters. Subsequent samples alternate between a sub-pixel
+    // overlap and a sub-pixel gap, but must not flicker back to visible.
+    queries[0] = game_test_edge_occlusion_query(7.0)
+    game_update_decor_visibility_flags(flags[:], queries[:], false)
+    testing.expect(t, flags[0])
+    edge_jitter := [?]f32{9.6, 10.4, 9.8, 10.8, 9.4}
+    for decor_min_x in edge_jitter {
+        queries[0] = game_test_edge_occlusion_query(decor_min_x)
+        game_update_decor_visibility_flags(flags[:], queries[:], false)
+        testing.expect(t, flags[0], "edge jitter must retain the dither state")
+    }
+
+    queries[0] = game_test_edge_occlusion_query(12.1)
+    game_update_decor_visibility_flags(flags[:], queries[:], false)
+    testing.expect(t, !flags[0], "a gap beyond the exit margin must clear the fade")
+}
+
+@(test)
+game_multiple_occluders_update_independently :: proc(t: ^testing.T) {
+    flags := [3]bool{}
+    queries := [3]Game_Decor_Occlusion_Query{
+        game_test_edge_occlusion_query(7.0),
+        game_test_edge_occlusion_query(13.0),
+        game_test_edge_occlusion_query(6.0),
+    }
+
+    game_update_decor_visibility_flags(flags[:], queries[:], false)
+    testing.expect_value(t, flags, [3]bool{true, false, true})
+
+    // The first exits, the second enters, and the third remains held inside
+    // the hysteresis margin. No object's update may overwrite another slot.
+    queries = {
+        game_test_edge_occlusion_query(13.0),
+        game_test_edge_occlusion_query(8.0),
+        game_test_edge_occlusion_query(10.5),
+    }
+    game_update_decor_visibility_flags(flags[:], queries[:], false)
+    testing.expect_value(t, flags, [3]bool{false, true, true})
 }
 
 @(test)
