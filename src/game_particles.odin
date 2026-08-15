@@ -325,13 +325,3 @@ game_particles_emit_landing :: proc(
         )
     }
 }
-
-game_particles_active_count :: proc(system: ^Game_Particle_System) -> int {
-    count := 0
-    for particle in system.particles {
-        if particle.active {
-            count += 1
-        }
-    }
-    return count
-}

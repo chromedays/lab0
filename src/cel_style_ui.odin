@@ -7,7 +7,6 @@ package main
 import "core:c"
 import "core:log"
 import "core:math"
-import "core:strings"
 import rl "vendor:raylib"
 
 CEL_STYLE_PRESET_OPTIONS :: "Classic;Anime;Noir"

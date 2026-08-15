@@ -7,7 +7,6 @@ import "core:fmt"
 import "core:c"
 import "core:log"
 import "core:math"
-import "core:os"
 import "core:strconv"
 import "core:strings"
 import rl "vendor:raylib"
@@ -15,8 +14,8 @@ import rgl "vendor:raylib/rlgl"
 
 GAME_SCREEN_WIDTH       :: 1280
 GAME_SCREEN_HEIGHT      :: 720
-GAME_PIXEL_WIDTH        :: 256
-GAME_PIXEL_HEIGHT       :: 144
+GAME_PIXEL_WIDTH        :: 320
+GAME_PIXEL_HEIGHT       :: 180
 GAME_CAMERA_FOVY        :: f32(8.0)
 GAME_CAMERA_SMOOTH_TIME :: f32(0.16)
 GAME_CAMERA_LOOK_AHEAD  :: f32(0.5)
@@ -35,7 +34,7 @@ GAME_ZOMBIE_ATTACK_ANIMATION :: "Limping_Walk_3_inplace"
 GAME_ZOMBIE_IDLE_ANIMATION   :: "Mummy_Stagger_inplace"
 GAME_ZOMBIE_WALK_ANIMATION   :: "Mummy_Stagger_inplace"
 GAME_PLAYER_ANIMATION_SAMPLE_COUNT :: c.int(8)
-GAME_ZOMBIE_ANIMATION_SAMPLE_COUNT :: c.int(8)
+GAME_ZOMBIE_ANIMATION_SAMPLE_COUNT :: c.int(16)
 GAME_OCCLUSION_DEBUG_TINT :: rl.Color{255, 96, 200, 255}
 GAME_OCCLUSION_DITHER_VISIBILITY :: f32(0.35)
 GAME_OCCLUSION_DITHER_SCALE :: f32(GAME_SCREEN_WIDTH / GAME_PIXEL_WIDTH)

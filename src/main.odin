@@ -135,42 +135,6 @@ Model_Browser_State :: struct {
     search_editing:       bool,
 }
 
-// inspect_glb :: proc(model_path: string) -> bool {
-//     cgltf_options := cgltf.options{}
-//     model_path_cstr := strings.clone_to_cstring(model_path, context.temp_allocator);
-
-//     gltf_data, parse_result := cgltf.parse_file(cgltf_options, model_path_cstr);
-//     if parse_result != .success {
-//         log.error("Failed to parse GLB file: ", model_path);
-//         return false;
-//     }
-//     defer cgltf.free(gltf_data);
-
-//     load_result := cgltf.load_buffers(cgltf_options, gltf_data, model_path_cstr);
-//     if load_result != .success {
-//         log.error("Failed to load buffers for GLB file: ", model_path);
-//         return false;
-//     }
-
-//     validate_result := cgltf.validate(gltf_data);
-//     if validate_result != .success {
-//         log.error("Failed to validate GLB file: ", model_path);
-//         return false;
-//     }
-
-//     log.info("Successfully loaded and validated GLB file: ", model_path);
-//     log.info("=== glb inspection result ===");
-//     log.info("meshes:     ", len(gltf_data.meshes));
-//     log.info("materials:  ", len(gltf_data.materials));
-//     log.info("textures:   ", len(gltf_data.textures));
-//     log.info("images:     ", len(gltf_data.images));
-//     log.info("nodes:      ", len(gltf_data.nodes));
-//     log.info("skins:      ", len(gltf_data.skins));
-//     log.info("animations: ", len(gltf_data.animations));
-
-//     return true;
-// }
-
 import "core:c"
 
 // Animation_Playback owns raylib animation data, a filtered list of compatible
@@ -1596,8 +1560,8 @@ main :: proc() {
     }
 
     exit_code := 0
-    // Run the application inline because main is its only entry point.
-    for {
+    // Keep inline startup and shutdown under one named cleanup scope.
+    application_scope: {
         console_logger := log.create_console_logger()
         defer log.destroy_console_logger(console_logger)
         context.logger = console_logger
@@ -1607,7 +1571,7 @@ main :: proc() {
         if capture_parse_result.options.help_requested {
             print_capture_usage()
             exit_code = 0
-            break
+            break application_scope
         }
         if capture_parse_result.error != .NONE {
             // Select the parse error text inline at its sole reporting site.
@@ -1659,7 +1623,7 @@ main :: proc() {
             )
             print_capture_usage()
             exit_code = 2
-            break
+            break application_scope
         }
         capture_options := &capture_parse_result.options
         viewer_video_options_error := validate_viewer_video_options(
@@ -1671,7 +1635,7 @@ main :: proc() {
             )
             print_capture_usage()
             exit_code = 2
-            break
+            break application_scope
         }
         viewer_video_enabled := len(capture_options.video_output) > 0
         viewer_video_encoder: Video_Stream_Encoder
@@ -1688,7 +1652,7 @@ main :: proc() {
                     cel_style_error_message(style_error),
                 )
                 exit_code = 2
-                break
+                break application_scope
             }
             replace_cel_style(&cel_style, loaded_style)
         }
@@ -1771,8 +1735,6 @@ main :: proc() {
         defer destroy_model_assets(&model_assets)
 
         rl.SetTraceLogLevel(.WARNING);
-        // inspect_glb(DEFAULT_MODEL_PATH);
-
         if capture_options.enabled {
             if capture_options.hide_window {
                 rl.SetConfigFlags({.WINDOW_ALWAYS_RUN, .WINDOW_HIDDEN})
@@ -1887,7 +1849,7 @@ main :: proc() {
                         capture_options.model_source,
                     )
                     exit_code = 2
-                    break
+                    break application_scope
                 }
                 initial_model_index = requested_model_index
             } else {
@@ -1979,7 +1941,7 @@ main :: proc() {
                                 )
                             }
                             exit_code = 2
-                            break
+                            break application_scope
                         }
                         capture_last_frame := f32(max(
                             capture_animation.keyframeCount - 1,
@@ -1996,7 +1958,7 @@ main :: proc() {
                                 capture_last_frame,
                             )
                             exit_code = 2
-                            break
+                            break application_scope
                         }
                         requested_first_frame := capture_options.animation_frame
                         if capture_options.frame_range_set {
@@ -2023,7 +1985,7 @@ main :: proc() {
                 )
                 if capture_options.enabled {
                     exit_code = 1
-                    break
+                    break application_scope
                 }
             }
         }
@@ -2078,11 +2040,11 @@ main :: proc() {
             )
             if video_start_error == .FFMPEG_NOT_FOUND {
                 exit_code = 2
-                break
+                break application_scope
             }
             if video_start_error != .NONE {
                 exit_code = 1
-                break
+                break application_scope
             }
         }
 
@@ -2961,7 +2923,6 @@ main :: proc() {
                 )
                 // Draw band IDs inline in their only auxiliary render pass.
                 {
-                    shader := cel_band_shader
                     model := active_model
                     camera := render_camera
                     rl.ClearBackground(rl.BLANK)
@@ -3180,9 +3141,9 @@ main :: proc() {
                         for grid_line_index := -grid_half_count;
                             grid_line_index <= grid_half_count;
                             grid_line_index += 1 {
-                            if grid_line_index == 0 {
-                                continue
-                            }
+                            // if grid_line_index == 0 {
+                            //     continue
+                            // }
                             grid_line_offset := f32(grid_line_index) * grid_spacing
                             rl.DrawLine3D(
                                 {-grid_extent, 0, grid_line_offset},
@@ -4960,95 +4921,95 @@ main :: proc() {
                     rl.WHITE,
                 )
                 // Draw the cursor magnifier inline at its only screen pass.
-                {
-                    bounds := magnifier_bounds
-                    source_texture := composite_render_target.texture
-                    mouse_position := rl.GetMousePosition()
-                    mouse_x := min(max(i32(mouse_position.x), 0), screen_width - 1)
-                    mouse_y := min(max(i32(mouse_position.y), 0), screen_height - 1)
-                    sample_x := min(
-                        max(mouse_x - MAGNIFIER_SAMPLE_SIZE / 2, 0),
-                        max(screen_width - MAGNIFIER_SAMPLE_SIZE, 0),
-                    )
-                    sample_y := min(
-                        max(mouse_y - MAGNIFIER_SAMPLE_SIZE / 2, 0),
-                        max(screen_height - MAGNIFIER_SAMPLE_SIZE, 0),
-                    )
+                // {
+                //     bounds := magnifier_bounds
+                //     source_texture := composite_render_target.texture
+                //     mouse_position := rl.GetMousePosition()
+                //     mouse_x := min(max(i32(mouse_position.x), 0), screen_width - 1)
+                //     mouse_y := min(max(i32(mouse_position.y), 0), screen_height - 1)
+                //     sample_x := min(
+                //         max(mouse_x - MAGNIFIER_SAMPLE_SIZE / 2, 0),
+                //         max(screen_width - MAGNIFIER_SAMPLE_SIZE, 0),
+                //     )
+                //     sample_y := min(
+                //         max(mouse_y - MAGNIFIER_SAMPLE_SIZE / 2, 0),
+                //         max(screen_height - MAGNIFIER_SAMPLE_SIZE, 0),
+                //     )
 
-                    display_size := f32(MAGNIFIER_SAMPLE_SIZE * MAGNIFIER_DISPLAY_SCALE)
-                    magnified_image_bounds := rl.Rectangle{
-                        bounds.x + 10,
-                        bounds.y + 28,
-                        display_size,
-                        display_size,
-                    }
-                    texture_source_bounds := rl.Rectangle{
-                        f32(sample_x),
-                        f32(screen_height - sample_y - MAGNIFIER_SAMPLE_SIZE),
-                        f32(MAGNIFIER_SAMPLE_SIZE),
-                        -f32(MAGNIFIER_SAMPLE_SIZE),
-                    }
+                //     display_size := f32(MAGNIFIER_SAMPLE_SIZE * MAGNIFIER_DISPLAY_SCALE)
+                //     magnified_image_bounds := rl.Rectangle{
+                //         bounds.x + 10,
+                //         bounds.y + 28,
+                //         display_size,
+                //         display_size,
+                //     }
+                //     texture_source_bounds := rl.Rectangle{
+                //         f32(sample_x),
+                //         f32(screen_height - sample_y - MAGNIFIER_SAMPLE_SIZE),
+                //         f32(MAGNIFIER_SAMPLE_SIZE),
+                //         -f32(MAGNIFIER_SAMPLE_SIZE),
+                //     }
 
-                    rl.GuiPanel(bounds, "MAGNIFIER 16 x 16")
-                    rl.DrawTexturePro(
-                        source_texture,
-                        texture_source_bounds,
-                        magnified_image_bounds,
-                        {},
-                        0,
-                        rl.WHITE,
-                    )
+                //     rl.GuiPanel(bounds, "MAGNIFIER 16 x 16")
+                //     rl.DrawTexturePro(
+                //         source_texture,
+                //         texture_source_bounds,
+                //         magnified_image_bounds,
+                //         {},
+                //         0,
+                //         rl.WHITE,
+                //     )
 
-                    grid_color := rl.Color{0, 0, 0, 80}
-                    for grid_line_index := 0;
-                        grid_line_index <= MAGNIFIER_SAMPLE_SIZE;
-                        grid_line_index += 1 {
-                        grid_line_offset := f32(grid_line_index * MAGNIFIER_DISPLAY_SCALE)
-                        rl.DrawLineV(
-                            {
-                                magnified_image_bounds.x + grid_line_offset,
-                                magnified_image_bounds.y,
-                            },
-                            {
-                                magnified_image_bounds.x + grid_line_offset,
-                                magnified_image_bounds.y + magnified_image_bounds.height,
-                            },
-                            grid_color,
-                        )
-                        rl.DrawLineV(
-                            {
-                                magnified_image_bounds.x,
-                                magnified_image_bounds.y + grid_line_offset,
-                            },
-                            {
-                                magnified_image_bounds.x + magnified_image_bounds.width,
-                                magnified_image_bounds.y + grid_line_offset,
-                            },
-                            grid_color,
-                        )
-                    }
+                //     grid_color := rl.Color{0, 0, 0, 80}
+                //     for grid_line_index := 0;
+                //         grid_line_index <= MAGNIFIER_SAMPLE_SIZE;
+                //         grid_line_index += 1 {
+                //         grid_line_offset := f32(grid_line_index * MAGNIFIER_DISPLAY_SCALE)
+                //         rl.DrawLineV(
+                //             {
+                //                 magnified_image_bounds.x + grid_line_offset,
+                //                 magnified_image_bounds.y,
+                //             },
+                //             {
+                //                 magnified_image_bounds.x + grid_line_offset,
+                //                 magnified_image_bounds.y + magnified_image_bounds.height,
+                //             },
+                //             grid_color,
+                //         )
+                //         rl.DrawLineV(
+                //             {
+                //                 magnified_image_bounds.x,
+                //                 magnified_image_bounds.y + grid_line_offset,
+                //             },
+                //             {
+                //                 magnified_image_bounds.x + magnified_image_bounds.width,
+                //                 magnified_image_bounds.y + grid_line_offset,
+                //             },
+                //             grid_color,
+                //         )
+                //     }
 
-                    // Keep the exact pixel under the cursor identifiable inside the 16x16 sample.
-                    cursor_column := mouse_x - sample_x
-                    cursor_row := mouse_y - sample_y
-                    cursor_pixel_bounds := rl.Rectangle{
-                        magnified_image_bounds.x + f32(cursor_column * MAGNIFIER_DISPLAY_SCALE),
-                        magnified_image_bounds.y + f32(cursor_row * MAGNIFIER_DISPLAY_SCALE),
-                        MAGNIFIER_DISPLAY_SCALE,
-                        MAGNIFIER_DISPLAY_SCALE,
-                    }
-                    rl.DrawRectangleLinesEx(cursor_pixel_bounds, 2, rl.YELLOW)
-                    rl.DrawRectangleLinesEx(magnified_image_bounds, 1, rl.RAYWHITE)
-                    rl.GuiLabel(
-                        {
-                            bounds.x + 10,
-                            magnified_image_bounds.y + magnified_image_bounds.height + 4,
-                            bounds.width - 20,
-                            18,
-                        },
-                        rl.TextFormat("Cursor: %d, %d", mouse_x, mouse_y),
-                    )
-                }
+                //     // Keep the exact pixel under the cursor identifiable inside the 16x16 sample.
+                //     cursor_column := mouse_x - sample_x
+                //     cursor_row := mouse_y - sample_y
+                //     cursor_pixel_bounds := rl.Rectangle{
+                //         magnified_image_bounds.x + f32(cursor_column * MAGNIFIER_DISPLAY_SCALE),
+                //         magnified_image_bounds.y + f32(cursor_row * MAGNIFIER_DISPLAY_SCALE),
+                //         MAGNIFIER_DISPLAY_SCALE,
+                //         MAGNIFIER_DISPLAY_SCALE,
+                //     }
+                //     rl.DrawRectangleLinesEx(cursor_pixel_bounds, 2, rl.YELLOW)
+                //     rl.DrawRectangleLinesEx(magnified_image_bounds, 1, rl.RAYWHITE)
+                //     rl.GuiLabel(
+                //         {
+                //             bounds.x + 10,
+                //             magnified_image_bounds.y + magnified_image_bounds.height + 4,
+                //             bounds.width - 20,
+                //             18,
+                //         },
+                //         rl.TextFormat("Cursor: %d, %d", mouse_x, mouse_y),
+                //     )
+                // }
             rl.EndDrawing()
 
             if capture_options.enabled {
@@ -5242,10 +5203,10 @@ main :: proc() {
 
         if capture_options.enabled && (!capture_complete || !capture_succeeded) {
             exit_code = 1
-            break
+            break application_scope
         }
         exit_code = 0
-        break
+        break application_scope
     }
     if exit_code != 0 {
         os.exit(exit_code)
