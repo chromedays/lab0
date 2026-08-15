@@ -586,51 +586,9 @@ main :: proc() {
             break application_scope
         }
         if capture_parse_result.error != .NONE {
-            // Select the parse error text inline at its sole reporting site.
-            capture_error_message := "invalid capture configuration"
-            switch capture_parse_result.error {
-            case .NONE:
-                capture_error_message = ""
-            case .MISSING_VALUE:
-                capture_error_message = "capture option requires a value"
-            case .UNKNOWN_ARGUMENT:
-                capture_error_message = "unknown capture option"
-            case .MISSING_CASE:
-                capture_error_message = "capture options require --capture-case <name>"
-            case .INVALID_CASE:
-                capture_error_message = "capture case names may contain only letters, digits, '-' and '_'"
-            case .INVALID_MODEL:
-                capture_error_message = "capture model must be a non-empty asset path or built-in source"
-            case .INVALID_STYLE:
-                capture_error_message = "capture style must be a non-empty .json path"
-            case .INVALID_MODE:
-                capture_error_message = "capture mode must be pixelated, blended, or coverage-mask"
-            case .INVALID_EDGE_AA:
-                capture_error_message = "capture edge AA must be hard or coverage"
-            case .INVALID_VIEW:
-                capture_error_message = "capture view must be default, x, y, z, or isometric"
-            case .INVALID_TARGET:
-                capture_error_message = "capture target must be composite, lens, scene, downsample, or coverage-mask"
-            case .INVALID_FRAME:
-                capture_error_message = "capture frame must be a non-negative number"
-            case .INVALID_FRAME_RANGE:
-                capture_error_message = "capture frame range must be start:end[:step] with non-negative integers, start <= end, and step > 0"
-            case .CONFLICTING_FRAME_OPTIONS:
-                capture_error_message = "capture frame and capture frame range cannot be used together"
-            case .INVALID_WARMUP:
-                capture_error_message = "capture warmup must be an integer from 1 through 600"
-            case .INVALID_OUTPUT:
-                capture_error_message = "capture output must be a non-empty .png path"
-            case .INVALID_VIDEO_OUTPUT:
-                capture_error_message = "Viewer video output must be a non-empty .mp4 path"
-            case .INVALID_VIDEO_DURATION:
-                capture_error_message = "Viewer video duration must be positive, at most 600 seconds, and map to whole 60 fps frames"
-            case .INVALID_OUTPUT_TEMPLATE:
-                capture_error_message = "capture sequence output must contain exactly one %d or %0Nd frame token"
-            }
             log.errorf(
                 "%s: %s",
-                capture_error_message,
+                shared.capture_parse_error_message(capture_parse_result.error),
                 capture_parse_result.error_argument,
             )
             shared.cli_capture_usage_print()
@@ -768,38 +726,83 @@ main :: proc() {
 
         rl.SetTargetFPS(60);
 
-        scene_shader, scene_shader_source, scene_shader_loaded :=
-            shared.shader_program_load_with_includes(VS_PATH, FS_PATH)
+        scene_shader_load := shared.shader_program_load_with_includes(VS_PATH, FS_PATH)
+        scene_shader := scene_shader_load.shader
+        scene_shader_source := scene_shader_load.program_source
         defer rl.UnloadShader(scene_shader)
         defer shared.shader_preprocessed_program_source_destroy(&scene_shader_source)
-        assert(scene_shader_loaded)
+        if scene_shader_load.error != .NONE {
+            log.errorf(
+                "Failed to load Viewer scene shader: %s",
+                shared.shader_load_error_message(scene_shader_load.error),
+            )
+            exit_code = 1
+            break application_scope
+        }
         scene_cel_bindings := shared.cel_shader_bindings_resolve(scene_shader)
 
-        downscale_shader, downscale_shader_source, downscale_shader_loaded :=
-            shared.shader_fragment_load_with_includes(DOWNSCALE_FS_PATH)
+        downscale_shader_load := shared.shader_fragment_load_with_includes(
+            DOWNSCALE_FS_PATH,
+        )
+        downscale_shader := downscale_shader_load.shader
+        downscale_shader_source := downscale_shader_load.source
         defer rl.UnloadShader(downscale_shader)
         defer shared.shader_preprocessed_source_destroy(&downscale_shader_source)
-        assert(downscale_shader_loaded)
+        if downscale_shader_load.error != .NONE {
+            log.errorf(
+                "Failed to load Viewer downscale shader: %s",
+                shared.shader_load_error_message(downscale_shader_load.error),
+            )
+            exit_code = 1
+            break application_scope
+        }
 
-        cel_band_shader, cel_band_shader_source, cel_band_shader_loaded := shared.shader_program_load_with_includes(
+        cel_band_shader_load := shared.shader_program_load_with_includes(
             VS_PATH,
             CEL_BAND_FS_PATH,
         )
+        cel_band_shader := cel_band_shader_load.shader
+        cel_band_shader_source := cel_band_shader_load.program_source
         defer shared.shader_preprocessed_program_source_destroy(&cel_band_shader_source)
-        assert(cel_band_shader_loaded)
+        if cel_band_shader_load.error != .NONE {
+            log.errorf(
+                "Failed to load Viewer cel-band shader: %s",
+                shared.shader_load_error_message(cel_band_shader_load.error),
+            )
+            exit_code = 1
+            break application_scope
+        }
         cel_band_bindings := shared.cel_shader_bindings_resolve(cel_band_shader)
 
-        mask_downscale_shader, mask_downscale_shader_source, mask_downscale_shader_loaded :=
-            shared.shader_fragment_load_with_includes(MASK_DOWNSCALE_FS_PATH)
+        mask_shader_load := shared.shader_fragment_load_with_includes(
+            MASK_DOWNSCALE_FS_PATH,
+        )
+        mask_downscale_shader := mask_shader_load.shader
+        mask_downscale_shader_source := mask_shader_load.source
         defer rl.UnloadShader(mask_downscale_shader)
         defer shared.shader_preprocessed_source_destroy(&mask_downscale_shader_source)
-        assert(mask_downscale_shader_loaded)
+        if mask_shader_load.error != .NONE {
+            log.errorf(
+                "Failed to load Viewer coverage shader: %s",
+                shared.shader_load_error_message(mask_shader_load.error),
+            )
+            exit_code = 1
+            break application_scope
+        }
 
-        outline_shader, outline_shader_source, outline_shader_loaded :=
-            shared.shader_fragment_load_with_includes(OUTLINE_FS_PATH)
+        outline_shader_load := shared.shader_fragment_load_with_includes(OUTLINE_FS_PATH)
+        outline_shader := outline_shader_load.shader
+        outline_shader_source := outline_shader_load.source
         defer rl.UnloadShader(outline_shader)
         defer shared.shader_preprocessed_source_destroy(&outline_shader_source)
-        assert(outline_shader_loaded)
+        if outline_shader_load.error != .NONE {
+            log.errorf(
+                "Failed to load Viewer outline shader: %s",
+                shared.shader_load_error_message(outline_shader_load.error),
+            )
+            exit_code = 1
+            break application_scope
+        }
 
         // Build the ramp texture inline at its only creation site.
         cel_ramp_pixels := shared.cel_ramp_pixels_build(&cel_style)
@@ -874,14 +877,18 @@ main :: proc() {
                 }
             }
 
-            initial_model := shared.model_source_load(&model_assets, initial_model_index)
-            if shared.model_is_loaded(initial_model) {
+            initial_model, initial_model_error := shared.model_source_load(
+                &model_assets,
+                initial_model_index,
+            )
+            if initial_model_error == .NONE {
                 active_model = initial_model
-                animation_playback = shared.animation_playback_load(
+                animation_load := shared.animation_playback_load(
                     active_model,
                     model_assets.paths[initial_model_index],
                     model_assets.kinds[initial_model_index],
                 )
+                animation_playback = animation_load.playback
                 model_center = get_model_center(active_model)
                 loaded_model_index = c.int(initial_model_index)
                 model_active_index = loaded_model_index
@@ -990,11 +997,11 @@ main :: proc() {
                     model_assets.paths[initial_model_index],
                 )
             } else {
-                rl.UnloadModel(initial_model)
                 model_load_failed = true
                 log.errorf(
-                    "Failed to load initial model: %s",
+                    "Failed to load initial model %s: %s",
                     model_assets.paths[initial_model_index],
+                    shared.model_load_error_message(initial_model_error),
                 )
                 if capture_options.enabled {
                     exit_code = 1
@@ -1051,12 +1058,16 @@ main :: proc() {
                 VIEWER_VIDEO_HEIGHT,
                 VIEWER_VIDEO_FRAMES_PER_SECOND,
             )
-            if video_start_error == .FFMPEG_NOT_FOUND {
-                exit_code = 2
-                break application_scope
-            }
             if video_start_error != .NONE {
+                log.errorf(
+                    "Failed to start Viewer video encoder for %s: %s",
+                    capture_options.video_output,
+                    shared.video_stream_start_error_message(video_start_error),
+                )
                 exit_code = 1
+                if video_start_error == .FFMPEG_NOT_FOUND {
+                    exit_code = 2
+                }
                 break application_scope
             }
         }
@@ -1664,29 +1675,47 @@ main :: proc() {
             )
 
             if !capture_options.enabled {
-                if shared.shader_program_reload_with_includes(
+                scene_reload := shared.shader_program_reload_with_includes(
                     VS_PATH,
                     FS_PATH,
                     &scene_shader,
                     &scene_shader_source,
-                ) == .RELOADED {
+                )
+                if scene_reload.status == .FAILED {
+                    log.errorf(
+                        "Failed to reload Viewer scene shader: %s",
+                        shared.shader_load_error_message(scene_reload.error),
+                    )
+                } else if scene_reload.status == .RELOADED {
                     scene_cel_bindings = shared.cel_shader_bindings_resolve(scene_shader)
                 }
 
-                if shared.shader_program_reload_with_includes(
+                cel_band_reload := shared.shader_program_reload_with_includes(
                     VS_PATH,
                     CEL_BAND_FS_PATH,
                     &cel_band_shader,
                     &cel_band_shader_source,
-                ) == .RELOADED {
+                )
+                if cel_band_reload.status == .FAILED {
+                    log.errorf(
+                        "Failed to reload Viewer cel-band shader: %s",
+                        shared.shader_load_error_message(cel_band_reload.error),
+                    )
+                } else if cel_band_reload.status == .RELOADED {
                     cel_band_bindings = shared.cel_shader_bindings_resolve(cel_band_shader)
                 }
 
-                if shared.shader_fragment_reload_with_includes(
+                downscale_reload := shared.shader_fragment_reload_with_includes(
                     DOWNSCALE_FS_PATH,
                     &downscale_shader,
                     &downscale_shader_source,
-                ) == .RELOADED {
+                )
+                if downscale_reload.status == .FAILED {
+                    log.errorf(
+                        "Failed to reload Viewer downscale shader: %s",
+                        shared.shader_load_error_message(downscale_reload.error),
+                    )
+                } else if downscale_reload.status == .RELOADED {
                     downscale_source_resolution_location = rl.GetShaderLocation(
                         downscale_shader,
                         "u_source_resolution",
@@ -1717,11 +1746,17 @@ main :: proc() {
                     )
                 }
 
-                if shared.shader_fragment_reload_with_includes(
+                mask_reload := shared.shader_fragment_reload_with_includes(
                     MASK_DOWNSCALE_FS_PATH,
                     &mask_downscale_shader,
                     &mask_downscale_shader_source,
-                ) == .RELOADED {
+                )
+                if mask_reload.status == .FAILED {
+                    log.errorf(
+                        "Failed to reload Viewer coverage shader: %s",
+                        shared.shader_load_error_message(mask_reload.error),
+                    )
+                } else if mask_reload.status == .RELOADED {
                     mask_downscale_source_resolution_location = rl.GetShaderLocation(
                         mask_downscale_shader,
                         "u_source_resolution",
@@ -1732,11 +1767,17 @@ main :: proc() {
                     )
                 }
 
-                if shared.shader_fragment_reload_with_includes(
+                outline_reload := shared.shader_fragment_reload_with_includes(
                     OUTLINE_FS_PATH,
                     &outline_shader,
                     &outline_shader_source,
-                ) == .RELOADED {
+                )
+                if outline_reload.status == .FAILED {
+                    log.errorf(
+                        "Failed to reload Viewer outline shader: %s",
+                        shared.shader_load_error_message(outline_reload.error),
+                    )
+                } else if outline_reload.status == .RELOADED {
                     outline_target_resolution_location = rl.GetShaderLocation(
                         outline_shader,
                         "u_target_resolution",
@@ -4044,15 +4085,16 @@ main :: proc() {
                 rendered_capture_frames += 1
                 if rendered_capture_frames >= capture_options.warmup_frames {
                     if viewer_video_enabled {
-                        frame_streamed := shared.video_stream_encoder_write_render_texture(
+                        frame_stream_error := shared.video_stream_encoder_write_render_texture(
                             &viewer_video_encoder,
                             composite_render_target.texture,
                         )
-                        if !frame_streamed {
+                        if frame_stream_error != .NONE {
                             log.errorf(
-                                "Failed to stream Viewer case %s at animation frame %.3f",
+                                "Failed to stream Viewer case %s at animation frame %.3f: %s",
                                 capture_options.case_name,
                                 animation_playback.current_frame,
+                                shared.video_stream_write_error_message(frame_stream_error),
                             )
                             capture_complete = true
                             capture_succeeded = false
@@ -4065,12 +4107,20 @@ main :: proc() {
                             if u64(captured_sequence_frames) >=
                                expected_video_frames {
                                 capture_complete = true
-                                capture_succeeded = shared.video_stream_encoder_finish(
+                                finish_error := shared.video_stream_encoder_finish(
                                     &viewer_video_encoder,
                                     capture_options.video_output,
                                     expected_video_frames,
                                     "animation",
                                 )
+                                capture_succeeded = finish_error == .NONE
+                                if finish_error != .NONE {
+                                    log.errorf(
+                                        "Failed to finish Viewer video %s: %s",
+                                        capture_options.video_output,
+                                        shared.video_stream_finish_error_message(finish_error),
+                                    )
+                                }
                                 if capture_succeeded {
                                     log.infof(
                                         "Streamed Viewer source frames %.3f through %.3f exactly once across %d output frames",
@@ -4104,34 +4154,36 @@ main :: proc() {
                         }
                         // Export the selected render target inline at the only capture point.
                         lens_crop_bounds := lens_bounds
+                        capture_error: shared.Capture_Export_Error
                         switch capture_options.target {
                         case .COMPOSITE:
-                            capture_succeeded = shared.capture_render_texture_export_png(
+                            capture_error = shared.capture_render_texture_export_png(
                                 composite_render_target.texture,
                                 capture_output_path,
                             )
                         case .LENS:
-                            capture_succeeded = shared.capture_render_texture_export_png(
+                            capture_error = shared.capture_render_texture_export_png(
                                 composite_render_target.texture,
                                 capture_output_path,
                                 &lens_crop_bounds,
                             )
                         case .SCENE:
-                            capture_succeeded = shared.capture_render_texture_export_png(
+                            capture_error = shared.capture_render_texture_export_png(
                                 scene_render_target.texture,
                                 capture_output_path,
                             )
                         case .DOWNSAMPLE:
-                            capture_succeeded = shared.capture_render_texture_export_png(
+                            capture_error = shared.capture_render_texture_export_png(
                                 outlined_render_target.texture,
                                 capture_output_path,
                             )
                         case .COVERAGE_MASK:
-                            capture_succeeded = shared.capture_render_texture_export_png(
+                            capture_error = shared.capture_render_texture_export_png(
                                 coverage_mask_render_target.texture,
                                 capture_output_path,
                             )
                         }
+                        capture_succeeded = capture_error == .NONE
                         if capture_succeeded {
                             if capture_options.frame_range_set {
                                 captured_sequence_frames += 1
@@ -4150,9 +4202,10 @@ main :: proc() {
                             }
                         } else {
                             log.errorf(
-                                "Failed to capture case %s to %s",
+                                "Failed to capture case %s to %s: %s",
                                 capture_options.case_name,
                                 capture_output_path,
+                                shared.capture_export_error_message(capture_error),
                             )
                         }
                         if capture_output_path_owned {
@@ -4186,12 +4239,12 @@ main :: proc() {
                 int(model_active_index) < len(model_assets.paths) {
                 requested_model_index := int(model_active_index)
                 requested_model_label := model_assets.labels[requested_model_index]
-                requested_model := shared.model_source_load(
+                requested_model, requested_model_error := shared.model_source_load(
                     &model_assets,
                     requested_model_index,
                 )
-                if shared.model_is_loaded(requested_model) {
-                    requested_animation_playback := shared.animation_playback_load(
+                if requested_model_error == .NONE {
+                    requested_animation_load := shared.animation_playback_load(
                         requested_model,
                         model_assets.paths[requested_model_index],
                         model_assets.kinds[requested_model_index],
@@ -4201,7 +4254,7 @@ main :: proc() {
                         rl.UnloadModel(active_model)
                     }
                     active_model = requested_model
-                    animation_playback = requested_animation_playback
+                    animation_playback = requested_animation_load.playback
                     model_center = get_model_center(active_model)
                     loaded_model_index = model_active_index
                     shared.model_browser_active_source_set(
@@ -4217,14 +4270,17 @@ main :: proc() {
                     model_load_failed = false
                     log.infof("Loaded model: %s", requested_model_label)
                 } else {
-                    rl.UnloadModel(requested_model)
                     model_active_index = loaded_model_index
                     shared.model_browser_active_source_set(
                         &model_browser,
                         loaded_model_index,
                     )
                     model_load_failed = true
-                    log.errorf("Failed to load model: %s", requested_model_label)
+                    log.errorf(
+                        "Failed to load model %s: %s",
+                        requested_model_label,
+                        shared.model_load_error_message(requested_model_error),
+                    )
                 }
             }
         }

@@ -6,6 +6,7 @@ package main
 
 import "core:c"
 import "core:fmt"
+import "core:log"
 import "core:math"
 import "core:os"
 import "core:path/filepath"
@@ -401,6 +402,11 @@ scene_editor_add_model :: proc(
     }
     resource, resource_error := shared.scene_model_resource_load(&model)
     if resource_error != .NONE {
+        log.errorf(
+            "Failed to add scene model %s: %s",
+            source,
+            shared.scene_resource_error_message(resource_error),
+        )
         delete(model.id)
         delete(model.name)
         delete(model.source)
@@ -438,6 +444,11 @@ scene_editor_duplicate_selection :: proc(
         duplicate.source = strings.clone(source.source)
         resource, resource_error := shared.scene_model_resource_load(&duplicate)
         if resource_error != .NONE {
+            log.errorf(
+                "Failed to duplicate scene model %s: %s",
+                duplicate.source,
+                shared.scene_resource_error_message(resource_error),
+            )
             delete(duplicate.id)
             delete(duplicate.name)
             delete(duplicate.source)
@@ -523,18 +534,35 @@ scene_editor_open_path :: proc(
     resources: ^shared.Scene_Resources,
 ) -> bool {
     replacement_scene, scene_error := shared.scene_load(path)
-    if scene_error != .NONE { return false }
+    if scene_error != .NONE {
+        log.errorf(
+            "Failed to open scene %s: %s",
+            path,
+            shared.scene_error_message(scene_error),
+        )
+        return false
+    }
     replacement_style, style_error := shared.cel_style_load(replacement_scene.style_path)
     if style_error != .NONE {
+        log.errorf(
+            "Failed to load scene style %s: %s",
+            replacement_scene.style_path,
+            shared.cel_style_error_message(style_error),
+        )
         shared.scene_destroy(&replacement_scene)
         return false
     }
     replacement_renderer: shared.Scene_Renderer
-    if !shared.scene_renderer_init(
+    renderer_error := shared.scene_renderer_init(
         &replacement_renderer,
         &replacement_style,
         replacement_scene.render.downscale_level,
-    ) {
+    )
+    if renderer_error != .NONE {
+        log.errorf(
+            "Failed to initialize replacement scene renderer: %s",
+            shared.scene_renderer_error_message(renderer_error),
+        )
         shared.scene_renderer_destroy(&replacement_renderer)
         shared.cel_style_destroy(&replacement_style)
         shared.scene_destroy(&replacement_scene)
@@ -542,6 +570,10 @@ scene_editor_open_path :: proc(
     }
     replacement_resources, resource_error := shared.scene_resources_load(&replacement_scene)
     if resource_error != .NONE {
+        log.errorf(
+            "Failed to load replacement scene resources: %s",
+            shared.scene_resource_error_message(resource_error),
+        )
         shared.scene_resources_destroy(&replacement_resources)
         shared.scene_renderer_destroy(&replacement_renderer)
         shared.cel_style_destroy(&replacement_style)
@@ -572,15 +604,25 @@ scene_editor_new_default :: proc(
     replacement_scene.dirty = true
     replacement_style, style_error := shared.cel_style_load(replacement_scene.style_path)
     if style_error != .NONE {
+        log.errorf(
+            "Failed to load default scene style %s: %s",
+            replacement_scene.style_path,
+            shared.cel_style_error_message(style_error),
+        )
         shared.scene_destroy(&replacement_scene)
         return false
     }
     replacement_renderer: shared.Scene_Renderer
-    if !shared.scene_renderer_init(
+    renderer_error := shared.scene_renderer_init(
         &replacement_renderer,
         &replacement_style,
         replacement_scene.render.downscale_level,
-    ) {
+    )
+    if renderer_error != .NONE {
+        log.errorf(
+            "Failed to initialize default scene renderer: %s",
+            shared.scene_renderer_error_message(renderer_error),
+        )
         shared.scene_renderer_destroy(&replacement_renderer)
         shared.cel_style_destroy(&replacement_style)
         shared.scene_destroy(&replacement_scene)
@@ -588,6 +630,10 @@ scene_editor_new_default :: proc(
     }
     replacement_resources, resource_error := shared.scene_resources_load(&replacement_scene)
     if resource_error != .NONE {
+        log.errorf(
+            "Failed to load default scene resources: %s",
+            shared.scene_resource_error_message(resource_error),
+        )
         shared.scene_resources_destroy(&replacement_resources)
         shared.scene_renderer_destroy(&replacement_renderer)
         shared.cel_style_destroy(&replacement_style)
@@ -1360,12 +1406,13 @@ scene_editor_draw_selection_inspector :: proc(
                   rl.GuiButton({x, y^, width, 22}, "Enable Fixed Animation Pose") {
             resource := &resources.models[selection.index]
             shared.animation_playback_destroy(&resource.playback)
-            resource.playback = shared.animation_playback_load(
+            playback_load := shared.animation_playback_load(
                 resource.model,
                 item.source,
                 .ASSET,
             )
-            if len(resource.playback.valid_indices) > 0 {
+            resource.playback = playback_load.playback
+            if playback_load.status == .LOADED {
                 raw_clip_index := int(resource.playback.valid_indices[0])
                 item.animation = shared.Scene_Animation_Pose{
                     clip_index = raw_clip_index,

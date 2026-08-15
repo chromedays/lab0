@@ -20,9 +20,14 @@ shader_reload_result_reports_unchanged_dependencies :: proc(
     }
     defer os.remove(path)
 
-    source, preprocess_succeeded := shared.shader_file_preprocess(path)
+    preprocess_result := shared.shader_file_preprocess(path)
+    source := preprocess_result.source
     defer shared.shader_preprocessed_source_destroy(&source)
-    if !testing.expect(t, preprocess_succeeded) {
+    if !testing.expect_value(
+        t,
+        preprocess_result.error,
+        shared.Shader_Preprocess_Error.NONE,
+    ) {
         return
     }
 
@@ -32,5 +37,6 @@ shader_reload_result_reports_unchanged_dependencies :: proc(
         &shader,
         &source,
     )
-    testing.expect_value(t, unchanged, shared.Shader_Reload_Result.UNCHANGED)
+    testing.expect_value(t, unchanged.status, shared.Shader_Reload_Status.UNCHANGED)
+    testing.expect_value(t, unchanged.error, shared.Shader_Load_Error.NONE)
 }

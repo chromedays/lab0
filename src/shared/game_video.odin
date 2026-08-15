@@ -34,6 +34,26 @@ Video_Stream_Start_Error :: enum {
     PROCESS_FAILED,
 }
 
+Video_Stream_Write_Error :: enum {
+    NONE,
+    ENCODER_NOT_RUNNING,
+    TEXTURE_READBACK_FAILED,
+    FRAME_SIZE_MISMATCH,
+    PIXEL_FORMAT_FAILED,
+    PIPE_WRITE_FAILED,
+}
+
+Video_Stream_Finish_Error :: enum {
+    NONE,
+    ENCODER_NOT_RUNNING,
+    PIPE_CLOSE_FAILED,
+    PROCESS_WAIT_FAILED,
+    PROCESS_EXIT_FAILED,
+    FRAME_COUNT_MISMATCH,
+    OUTPUT_MISSING,
+    OUTPUT_FINALIZE_FAILED,
+}
+
 // Video_Stream_Encoder owns the child process, pipe write end, and allocated
 // temporary path. started/stdin make abort and deferred destruction idempotent
 // across partial initialization failures.
@@ -86,7 +106,7 @@ game_video_options_validate :: proc(
 game_video_options_error_message :: proc(error: Game_Video_Options_Error) -> string {
     switch error {
     case .NONE:
-        return "no error"
+        return ""
     case .INVALID_OUTPUT:
         return "--game-video-output requires a non-empty .mp4 path"
     case .MISSING_REPLAY:
@@ -103,6 +123,62 @@ game_video_options_error_message :: proc(error: Game_Video_Options_Error) -> str
         return "--game-video-output cannot be combined with --capture-output"
     }
     return "unknown game video option error"
+}
+
+video_stream_start_error_message :: proc(error: Video_Stream_Start_Error) -> string {
+    switch error {
+    case .NONE:
+        return ""
+    case .OUTPUT_SETUP_FAILED:
+        return "video output could not be prepared"
+    case .PIPE_FAILED:
+        return "FFmpeg input pipe could not be prepared"
+    case .FFMPEG_NOT_FOUND:
+        return "FFmpeg was not found in PATH; install ffmpeg to create a video report"
+    case .PROCESS_FAILED:
+        return "FFmpeg process could not be started"
+    }
+    return "unknown video stream start error"
+}
+
+video_stream_write_error_message :: proc(error: Video_Stream_Write_Error) -> string {
+    switch error {
+    case .NONE:
+        return ""
+    case .ENCODER_NOT_RUNNING:
+        return "video encoder is not running"
+    case .TEXTURE_READBACK_FAILED:
+        return "video texture could not be read from the GPU"
+    case .FRAME_SIZE_MISMATCH:
+        return "video frame dimensions do not match the encoder"
+    case .PIXEL_FORMAT_FAILED:
+        return "video frame could not be converted to RGBA8"
+    case .PIPE_WRITE_FAILED:
+        return "video frame could not be written to FFmpeg"
+    }
+    return "unknown video stream write error"
+}
+
+video_stream_finish_error_message :: proc(error: Video_Stream_Finish_Error) -> string {
+    switch error {
+    case .NONE:
+        return ""
+    case .ENCODER_NOT_RUNNING:
+        return "video encoder is not running"
+    case .PIPE_CLOSE_FAILED:
+        return "FFmpeg input stream could not be closed"
+    case .PROCESS_WAIT_FAILED:
+        return "FFmpeg process could not be joined"
+    case .PROCESS_EXIT_FAILED:
+        return "FFmpeg exited unsuccessfully"
+    case .FRAME_COUNT_MISMATCH:
+        return "video frame count does not match the expected count"
+    case .OUTPUT_MISSING:
+        return "FFmpeg did not create a non-empty video"
+    case .OUTPUT_FINALIZE_FAILED:
+        return "video output could not be finalized"
+    }
+    return "unknown video stream finish error"
 }
 
 video_stream_frame_byte_count :: proc(width, height: int) -> int {
@@ -157,15 +233,14 @@ video_stream_temporary_output_remove :: proc(encoder: ^Video_Stream_Encoder) {
 
 // Ignore SIGPIPE on POSIX so an early FFmpeg exit becomes an ordinary write
 // error that can run cleanup instead of terminating Lab0 asynchronously.
-video_stream_pipe_writes_prepare :: proc() -> bool {
+video_stream_pipe_writes_prepare :: proc() -> Video_Stream_Start_Error {
     when ODIN_OS == .Windows {
-        return true
+        return .NONE
     } else {
         if posix.sigignore(.SIGPIPE) != .OK {
-            log.error("Failed to ignore SIGPIPE for FFmpeg streaming")
-            return false
+            return .PIPE_FAILED
         }
-        return true
+        return .NONE
     }
 }
 
@@ -177,14 +252,15 @@ video_stream_encoder_start :: proc(
     output_path: string,
     width, height, frames_per_second: int,
 ) -> Video_Stream_Start_Error {
-    if width <= 0 || height <= 0 || frames_per_second <= 0 {
-        log.error("Video dimensions and frame rate must be positive")
+    if !video_stream_output_path_is_valid(output_path) ||
+       width <= 0 || height <= 0 || frames_per_second <= 0 {
         return .OUTPUT_SETUP_FAILED
     }
-    if !video_stream_pipe_writes_prepare() {
-        return .PIPE_FAILED
+    if pipe_prepare_error := video_stream_pipe_writes_prepare();
+       pipe_prepare_error != .NONE {
+        return pipe_prepare_error
     }
-    if !capture_output_directory_ensure(output_path) {
+    if capture_output_directory_ensure(output_path) != .NONE {
         return .OUTPUT_SETUP_FAILED
     }
 
@@ -196,7 +272,6 @@ video_stream_encoder_start :: proc(
 
     read_end, write_end, pipe_error := os.pipe()
     if pipe_error != nil {
-        log.errorf("Failed to create FFmpeg input pipe: %v", pipe_error)
         return .PIPE_FAILED
     }
 
@@ -216,10 +291,8 @@ video_stream_encoder_start :: proc(
     if process_error != nil {
         _ = os.close(write_end)
         if process_error == .Not_Exist {
-            log.error("FFmpeg was not found in PATH; install ffmpeg to create a video report")
             return .FFMPEG_NOT_FOUND
         }
-        log.errorf("Failed to start FFmpeg: %v", process_error)
         return .PROCESS_FAILED
     }
 
@@ -234,7 +307,13 @@ video_stream_encoder_start :: proc(
 
 // Pipe writes may be short even without an error. Keep writing the remaining
 // suffix; accepting zero bytes would otherwise spin forever on a broken sink.
-video_stream_pipe_write_all :: proc(file: ^os.File, data: []byte) -> bool {
+video_stream_pipe_write_all :: proc(
+    file: ^os.File,
+    data: []byte,
+) -> Video_Stream_Write_Error {
+    if file == nil {
+        return .ENCODER_NOT_RUNNING
+    }
     bytes_written := 0
     for bytes_written < len(data) {
         count, write_error := os.write(file, data[bytes_written:])
@@ -242,23 +321,13 @@ video_stream_pipe_write_all :: proc(file: ^os.File, data: []byte) -> bool {
             bytes_written += count
         }
         if write_error != nil {
-            log.errorf(
-                "Failed to stream RGBA frame to FFmpeg after %d of %d bytes: %v",
-                bytes_written,
-                len(data),
-                write_error,
-            )
-            return false
+            return .PIPE_WRITE_FAILED
         }
         if count == 0 {
-            log.errorf(
-                "FFmpeg input pipe accepted 0 of %d remaining frame bytes",
-                len(data) - bytes_written,
-            )
-            return false
+            return .PIPE_WRITE_FAILED
         }
     }
-    return true
+    return .NONE
 }
 
 // Read one texture and release its CPU image before returning. No frame queue
@@ -266,24 +335,19 @@ video_stream_pipe_write_all :: proc(file: ^os.File, data: []byte) -> bool {
 video_stream_encoder_write_render_texture :: proc(
     encoder: ^Video_Stream_Encoder,
     texture: rl.Texture2D,
-) -> bool {
+) -> Video_Stream_Write_Error {
+    if encoder == nil || !encoder.started || encoder.stdin == nil {
+        return .ENCODER_NOT_RUNNING
+    }
     texture_readback := rl.LoadImageFromTexture(texture)
     if texture_readback.data == nil {
-        log.error("Failed to read video texture from the GPU")
-        return false
+        return .TEXTURE_READBACK_FAILED
     }
     defer rl.UnloadImage(texture_readback)
 
     if int(texture_readback.width) != encoder.width ||
        int(texture_readback.height) != encoder.height {
-        log.errorf(
-            "Unexpected video frame dimensions: %dx%d, expected %dx%d",
-            int(texture_readback.width),
-            int(texture_readback.height),
-            encoder.width,
-            encoder.height,
-        )
-        return false
+        return .FRAME_SIZE_MISMATCH
     }
 
     // RenderTexture readback is vertically inverted. Keep the raw pixels as-is
@@ -291,8 +355,7 @@ video_stream_encoder_write_render_texture :: proc(
     rl.ImageFormat(&texture_readback, .UNCOMPRESSED_R8G8B8A8)
     if texture_readback.data == nil ||
        texture_readback.format != .UNCOMPRESSED_R8G8B8A8 {
-        log.error("Failed to convert video frame to RGBA8")
-        return false
+        return .PIXEL_FORMAT_FAILED
     }
 
     frame_bytes := video_stream_frame_byte_count(
@@ -300,11 +363,12 @@ video_stream_encoder_write_render_texture :: proc(
         int(texture_readback.height),
     )
     pixels := ([^]byte)(texture_readback.data)[:frame_bytes]
-    if !video_stream_pipe_write_all(encoder.stdin, pixels) {
-        return false
+    if write_error := video_stream_pipe_write_all(encoder.stdin, pixels);
+       write_error != .NONE {
+        return write_error
     }
     encoder.frames_written += 1
-    return true
+    return .NONE
 }
 
 // Abort is safe after any start phase: close stdin, reap or kill the child, and
@@ -332,36 +396,27 @@ video_stream_encoder_finish :: proc(
     output_path: string,
     expected_frames: u64,
     frame_kind: string,
-) -> bool {
-    if encoder.stdin == nil || !encoder.started {
-        log.error("FFmpeg encoder was not running at video completion")
-        return false
+) -> Video_Stream_Finish_Error {
+    if encoder == nil || encoder.stdin == nil || !encoder.started {
+        return .ENCODER_NOT_RUNNING
     }
 
     close_error := os.close(encoder.stdin)
     encoder.stdin = nil
     if close_error != nil {
-        log.errorf("Failed to close FFmpeg input stream: %v", close_error)
-        return false
+        return .PIPE_CLOSE_FAILED
     }
 
     process_state, wait_error := os.process_wait(encoder.process)
     if wait_error != nil {
-        log.errorf("Failed while waiting for FFmpeg: %v", wait_error)
-        return false
+        return .PROCESS_WAIT_FAILED
     }
     encoder.started = false
     if !process_state.exited || process_state.exit_code != 0 {
-        log.errorf("FFmpeg exited with status %d", process_state.exit_code)
-        return false
+        return .PROCESS_EXIT_FAILED
     }
     if encoder.frames_written != expected_frames {
-        log.errorf(
-            "Video frame count mismatch: streamed %d, expected %d",
-            int(encoder.frames_written),
-            int(expected_frames),
-        )
-        return false
+        return .FRAME_COUNT_MISMATCH
     }
 
     file_info, stat_error := os.stat(
@@ -369,29 +424,13 @@ video_stream_encoder_finish :: proc(
         context.temp_allocator,
     )
     if stat_error != nil || file_info.size <= 0 {
-        log.errorf(
-            "FFmpeg did not create a non-empty MP4 at %s",
-            encoder.temporary_path,
-        )
-        return false
+        return .OUTPUT_MISSING
     }
     if rename_error := os.rename(encoder.temporary_path, output_path);
        rename_error != nil {
-        log.errorf(
-            "Failed to finalize video %s: %v",
-            output_path,
-            rename_error,
-        )
-        return false
+        return .OUTPUT_FINALIZE_FAILED
     }
-
-    log.infof(
-        "Streamed %d %s frames through FFmpeg to %s",
-        int(encoder.frames_written),
-        frame_kind,
-        output_path,
-    )
-    return true
+    return .NONE
 }
 
 video_stream_encoder_destroy :: proc(encoder: ^Video_Stream_Encoder) {

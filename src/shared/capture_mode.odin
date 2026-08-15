@@ -5,7 +5,6 @@ package shared
 // same GPU pipeline as the interactive viewer without depending on user input.
 
 import "core:fmt"
-import "core:log"
 import "core:math"
 import "core:os"
 import "core:path/filepath"
@@ -56,6 +55,74 @@ Capture_Parse_Error :: enum {
     INVALID_VIDEO_OUTPUT,
     INVALID_VIDEO_DURATION,
     INVALID_OUTPUT_TEMPLATE,
+}
+
+capture_parse_error_message :: proc(error: Capture_Parse_Error) -> string {
+    switch error {
+    case .NONE:
+        return ""
+    case .MISSING_VALUE:
+        return "capture option requires a value"
+    case .UNKNOWN_ARGUMENT:
+        return "unknown capture option"
+    case .MISSING_CASE:
+        return "capture options require --capture-case <name>"
+    case .INVALID_CASE:
+        return "capture case names may contain only letters, digits, '-' and '_'"
+    case .INVALID_MODEL:
+        return "capture model must be a non-empty asset path or built-in source"
+    case .INVALID_STYLE:
+        return "capture style must be a non-empty .json path"
+    case .INVALID_MODE:
+        return "capture mode must be pixelated, blended, or coverage-mask"
+    case .INVALID_EDGE_AA:
+        return "capture edge AA must be hard or coverage"
+    case .INVALID_VIEW:
+        return "capture view must be default, x, y, z, or isometric"
+    case .INVALID_TARGET:
+        return "capture target must be composite, lens, scene, downsample, or coverage-mask"
+    case .INVALID_FRAME:
+        return "capture frame must be a non-negative number"
+    case .INVALID_FRAME_RANGE:
+        return "capture frame range must be start:end[:step] with non-negative integers, start <= end, and step > 0"
+    case .CONFLICTING_FRAME_OPTIONS:
+        return "capture frame and capture frame range cannot be used together"
+    case .INVALID_WARMUP:
+        return "capture warmup must be an integer from 1 through 600"
+    case .INVALID_OUTPUT:
+        return "capture output must be a non-empty .png path"
+    case .INVALID_VIDEO_OUTPUT:
+        return "Viewer video output must be a non-empty .mp4 path"
+    case .INVALID_VIDEO_DURATION:
+        return "Viewer video duration must be positive, at most 600 seconds, and map to whole 60 fps frames"
+    case .INVALID_OUTPUT_TEMPLATE:
+        return "capture sequence output must contain exactly one %d or %0Nd frame token"
+    }
+    return "invalid capture configuration"
+}
+
+Capture_Export_Error :: enum {
+    NONE,
+    OUTPUT_DIRECTORY_FAILED,
+    TEXTURE_READBACK_FAILED,
+    IMAGE_CONVERSION_FAILED,
+    IMAGE_EXPORT_FAILED,
+}
+
+capture_export_error_message :: proc(error: Capture_Export_Error) -> string {
+    switch error {
+    case .NONE:
+        return ""
+    case .OUTPUT_DIRECTORY_FAILED:
+        return "capture output directory could not be created"
+    case .TEXTURE_READBACK_FAILED:
+        return "capture texture could not be read from the GPU"
+    case .IMAGE_CONVERSION_FAILED:
+        return "capture image could not be converted to RGBA8"
+    case .IMAGE_EXPORT_FAILED:
+        return "capture PNG could not be written"
+    }
+    return "unknown capture export error"
 }
 
 // Capture_Output_Template stores byte offsets into the original output path.
@@ -547,10 +614,10 @@ capture_find_model_source :: proc(
 
 // capture_output_directory_ensure creates all parent directories for a PNG.
 // Existing directories are accepted to support concurrent capture workers.
-capture_output_directory_ensure :: proc(output_path: string) -> bool {
+capture_output_directory_ensure :: proc(output_path: string) -> Capture_Export_Error {
     output_directory := filepath.dir(output_path)
     if output_directory == "" || output_directory == "." {
-        return true
+        return .NONE
     }
     if directory_error := os.make_directory_all(output_directory);
        directory_error != nil {
@@ -558,16 +625,11 @@ capture_output_directory_ensure :: proc(output_path: string) -> bool {
         // already exists on some platforms. Another capture worker may also
         // create it between our call and this check, so accept either case.
         if os.is_directory(output_directory) {
-            return true
+            return .NONE
         }
-        log.errorf(
-            "Failed to create capture output directory %s: %v",
-            output_directory,
-            directory_error,
-        )
-        return false
+        return .OUTPUT_DIRECTORY_FAILED
     }
-    return true
+    return .NONE
 }
 
 // capture_render_texture_export_png reads an RGBA texture from the GPU, fixes the
@@ -577,15 +639,15 @@ capture_render_texture_export_png :: proc(
     texture: rl.Texture2D,
     output_path: string,
     crop_bounds: ^rl.Rectangle = nil,
-) -> bool {
-    if !capture_output_directory_ensure(output_path) {
-        return false
+) -> Capture_Export_Error {
+    if directory_error := capture_output_directory_ensure(output_path);
+       directory_error != .NONE {
+        return directory_error
     }
 
     texture_readback := rl.LoadImageFromTexture(texture)
     if texture_readback.data == nil {
-        log.error("Failed to read capture texture from the GPU")
-        return false
+        return .TEXTURE_READBACK_FAILED
     }
     defer rl.UnloadImage(texture_readback)
 
@@ -596,10 +658,17 @@ capture_render_texture_export_png :: proc(
         rl.ImageCrop(&texture_readback, crop_bounds^)
     }
     rl.ImageFormat(&texture_readback, .UNCOMPRESSED_R8G8B8A8)
+    if texture_readback.data == nil ||
+       texture_readback.format != .UNCOMPRESSED_R8G8B8A8 {
+        return .IMAGE_CONVERSION_FAILED
+    }
 
     output_path_cstr := strings.clone_to_cstring(
         output_path,
         context.temp_allocator,
     )
-    return rl.ExportImage(texture_readback, output_path_cstr)
+    if !rl.ExportImage(texture_readback, output_path_cstr) {
+        return .IMAGE_EXPORT_FAILED
+    }
+    return .NONE
 }

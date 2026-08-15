@@ -4,7 +4,6 @@ package shared
 // raylib. It also records every transitive dependency so the interactive viewer
 // can hot-reload a shader when any included file changes.
 
-import "core:log"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -28,6 +27,38 @@ Preprocessed_Shader_Source :: struct {
 Preprocessed_Shader_Program_Source :: struct {
 	vertex:   Preprocessed_Shader_Source,
 	fragment: Preprocessed_Shader_Source,
+}
+
+Shader_Preprocess_Error :: enum {
+	NONE,
+	PATH_NORMALIZE_FAILED,
+	SOURCE_READ_FAILED,
+	INCLUDE_CYCLE,
+	MALFORMED_INCLUDE,
+	INCLUDE_RESOLVE_FAILED,
+}
+
+Shader_Preprocess_Result :: struct {
+	source: Preprocessed_Shader_Source,
+	error:  Shader_Preprocess_Error,
+}
+
+shader_preprocess_error_message :: proc(error: Shader_Preprocess_Error) -> string {
+	switch error {
+	case .NONE:
+		return ""
+	case .PATH_NORMALIZE_FAILED:
+		return "shader path could not be normalized"
+	case .SOURCE_READ_FAILED:
+		return "shader source could not be read"
+	case .INCLUDE_CYCLE:
+		return "shader includes contain a cycle"
+	case .MALFORMED_INCLUDE:
+		return "shader include directive is malformed"
+	case .INCLUDE_RESOLVE_FAILED:
+		return "shader include path could not be resolved"
+	}
+	return "unknown shader preprocessing error"
 }
 
 // shader_preprocessed_source_destroy releases expanded code, cloned paths, and
@@ -82,11 +113,10 @@ shader_file_preprocess_recursive :: proc(
 	output_builder: ^strings.Builder,
 	dependencies: ^[dynamic]Shader_Source_Dependency,
 	include_stack: ^[dynamic]string,
-) -> bool {
+) -> Shader_Preprocess_Error {
 	for active_path in include_stack^ {
 		if active_path == path {
-			log.error("Cyclic shader include detected at %s", path)
-			return false
+			return .INCLUDE_CYCLE
 		}
 	}
 
@@ -116,8 +146,7 @@ shader_file_preprocess_recursive :: proc(
 		context.allocator,
 	)
 	if read_error != nil {
-		log.error("Failed to read shader source %s: %v", path, read_error)
-		return false
+		return .SOURCE_READ_FAILED
 	}
 	defer delete(shader_source_bytes)
 
@@ -125,10 +154,7 @@ shader_file_preprocess_recursive :: proc(
 	defer pop(include_stack)
 
 	shader_contents := string(shader_source_bytes)
-	line_number := 0
 	for line in strings.split_lines_iterator(&shader_contents) {
-		line_number += 1
-
 		// Parse include syntax inline before recursively expanding the line.
 		include_path: string
 		is_include := false
@@ -169,8 +195,7 @@ shader_file_preprocess_recursive :: proc(
 			continue
 		}
 		if !include_is_valid {
-			log.error("Malformed shader include in %s:%d", path, line_number)
-			return false
+			return .MALFORMED_INCLUDE
 		}
 
 		include_candidate := include_path
@@ -178,13 +203,7 @@ shader_file_preprocess_recursive :: proc(
 		if !filepath.is_abs(include_path) {
 			joined_path, join_error := filepath.join({filepath.dir(path), include_path})
 			if join_error != nil {
-				log.error(
-					"Failed to resolve shader include %s from %s: %v",
-					include_path,
-					path,
-					join_error,
-				)
-				return false
+				return .INCLUDE_RESOLVE_FAILED
 			}
 			include_candidate = joined_path
 			include_candidate_is_owned = true
@@ -195,44 +214,32 @@ shader_file_preprocess_recursive :: proc(
 			delete(include_candidate)
 		}
 		if normalization_error != nil {
-			log.error(
-				"Failed to normalize shader include %s from %s: %v",
-				include_path,
-				path,
-				normalization_error,
-			)
-			return false
+			return .INCLUDE_RESOLVE_FAILED
 		}
 
-		include_preprocessing_succeeded := shader_file_preprocess_recursive(
+		include_error := shader_file_preprocess_recursive(
 			resolved_path,
 			output_builder,
 			dependencies,
 			include_stack,
 		)
 		delete(resolved_path)
-		if !include_preprocessing_succeeded {
-			return false
+		if include_error != .NONE {
+			return include_error
 		}
 	}
-	return true
+	return .NONE
 }
 
 // shader_file_preprocess normalizes the root path, initializes recursion state,
 // and returns owned expanded source even when dependency data accompanies a
 // preprocessing failure for later cleanup.
-shader_file_preprocess :: proc(path: string) -> (
-	preprocessed_source: Preprocessed_Shader_Source,
-	preprocessing_succeeded: bool,
-) {
+shader_file_preprocess :: proc(path: string) -> Shader_Preprocess_Result {
+	result: Shader_Preprocess_Result
 	normalized_path, normalization_error := filepath.clean(path)
 	if normalization_error != nil {
-		log.error(
-			"Failed to normalize shader path %s: %v",
-			path,
-			normalization_error,
-		)
-		return {}, false
+		result.error = .PATH_NORMALIZE_FAILED
+		return result
 	}
 	defer delete(normalized_path)
 
@@ -241,16 +248,16 @@ shader_file_preprocess :: proc(path: string) -> (
 	include_stack: [dynamic]string
 	defer delete(include_stack)
 
-	preprocessing_succeeded = shader_file_preprocess_recursive(
+	result.error = shader_file_preprocess_recursive(
 		normalized_path,
 		&output_builder,
-		&preprocessed_source.dependencies,
+		&result.source.dependencies,
 		&include_stack,
 	)
-	if preprocessing_succeeded {
-		preprocessed_source.code = strings.clone(
+	if result.error == .NONE {
+		result.source.code = strings.clone(
 			strings.to_string(output_builder),
 		)
 	}
-	return preprocessed_source, preprocessing_succeeded
+	return result
 }

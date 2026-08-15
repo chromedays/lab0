@@ -60,9 +60,38 @@ Scene_Error :: enum {
     INVALID_SPOT_LIGHT,
 }
 
+Scene_Resource_Error :: enum {
+    NONE,
+    PRIMITIVE_CREATE_FAILED,
+    MODEL_LOAD_FAILED,
+    ANIMATION_NOT_FOUND,
+    ANIMATION_INVALID,
+}
+
+Scene_Renderer_Error :: enum {
+    NONE,
+    COLOR_SHADER_LOAD_FAILED,
+    BAND_SHADER_LOAD_FAILED,
+    SHADOW_SHADER_LOAD_FAILED,
+    DOWNSCALE_SHADER_LOAD_FAILED,
+    MASK_SHADER_LOAD_FAILED,
+    OUTLINE_SHADER_LOAD_FAILED,
+    CEL_RAMP_CREATE_FAILED,
+    SHADOW_TARGET_CREATE_FAILED,
+    RENDER_TARGET_CREATE_FAILED,
+    LOW_TARGET_CREATE_FAILED,
+    INVALID_RENDER_STATE,
+}
+
+Scene_Capture_Error :: enum {
+    NONE,
+    UNSUPPORTED_TARGET,
+    TARGET_UNAVAILABLE,
+}
+
 scene_error_message :: proc(error: Scene_Error) -> string {
     switch error {
-    case .NONE:                      return "no error"
+    case .NONE:                      return ""
     case .READ_FAILED:               return "scene file could not be read"
     case .PARSE_FAILED:              return "scene file is not valid strict JSON"
     case .WRITE_FAILED:              return "scene file could not be written"
@@ -86,6 +115,44 @@ scene_error_message :: proc(error: Scene_Error) -> string {
     case .INVALID_SPOT_LIGHT:        return "scene spot light is invalid"
     }
     return "unknown scene error"
+}
+
+scene_resource_error_message :: proc(error: Scene_Resource_Error) -> string {
+    switch error {
+    case .NONE:                    return ""
+    case .PRIMITIVE_CREATE_FAILED: return "scene primitive resource could not be created"
+    case .MODEL_LOAD_FAILED:       return "scene model resource could not be loaded"
+    case .ANIMATION_NOT_FOUND:     return "scene model has no compatible animation"
+    case .ANIMATION_INVALID:       return "scene animation pose is invalid"
+    }
+    return "unknown scene resource error"
+}
+
+scene_renderer_error_message :: proc(error: Scene_Renderer_Error) -> string {
+    switch error {
+    case .NONE:                           return ""
+    case .COLOR_SHADER_LOAD_FAILED:       return "scene color shader could not be loaded"
+    case .BAND_SHADER_LOAD_FAILED:        return "scene cel-band shader could not be loaded"
+    case .SHADOW_SHADER_LOAD_FAILED:      return "scene shadow shader could not be loaded"
+    case .DOWNSCALE_SHADER_LOAD_FAILED:   return "scene downscale shader could not be loaded"
+    case .MASK_SHADER_LOAD_FAILED:        return "scene coverage shader could not be loaded"
+    case .OUTLINE_SHADER_LOAD_FAILED:     return "scene outline shader could not be loaded"
+    case .CEL_RAMP_CREATE_FAILED:         return "scene cel-ramp texture could not be created"
+    case .SHADOW_TARGET_CREATE_FAILED:    return "scene shadow render target could not be created"
+    case .RENDER_TARGET_CREATE_FAILED:    return "scene render targets could not be created"
+    case .LOW_TARGET_CREATE_FAILED:       return "scene low-resolution render targets could not be created"
+    case .INVALID_RENDER_STATE:           return "scene renderer is not in a valid state"
+    }
+    return "unknown scene renderer error"
+}
+
+scene_capture_error_message :: proc(error: Scene_Capture_Error) -> string {
+    switch error {
+    case .NONE:               return ""
+    case .UNSUPPORTED_TARGET: return "capture target is not supported by the scene renderer"
+    case .TARGET_UNAVAILABLE: return "scene capture target is unavailable"
+    }
+    return "unknown scene capture error"
 }
 
 Scene_Projection :: enum {

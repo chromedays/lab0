@@ -370,6 +370,14 @@ capture_output_directory_can_be_reused :: proc(t: ^testing.T) {
     }
     defer delete(output_path)
 
-    testing.expect(t, capture_output_directory_ensure(output_path))
-    testing.expect(t, capture_output_directory_ensure(output_path))
+    testing.expect_value(
+        t,
+        capture_output_directory_ensure(output_path),
+        Capture_Export_Error.NONE,
+    )
+    testing.expect_value(
+        t,
+        capture_output_directory_ensure(output_path),
+        Capture_Export_Error.NONE,
+    )
 }

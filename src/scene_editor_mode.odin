@@ -185,7 +185,11 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
         return 0
     }
     if capture_result.error != .NONE {
-        log.errorf("Invalid shared.Scene Editor capture argument: %s", capture_result.error_argument)
+        log.errorf(
+            "Invalid Scene Editor capture argument %s: %s",
+            capture_result.error_argument,
+            shared.capture_parse_error_message(capture_result.error),
+        )
         print_scene_editor_usage()
         return 2
     }
@@ -248,7 +252,16 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     rl.SetTargetFPS(60)
 
     renderer: shared.Scene_Renderer
-    if !shared.scene_renderer_init(&renderer, &style, scene.render.downscale_level) {
+    renderer_error := shared.scene_renderer_init(
+        &renderer,
+        &style,
+        scene.render.downscale_level,
+    )
+    if renderer_error != .NONE {
+        log.errorf(
+            "Failed to initialize Scene Editor renderer: %s",
+            shared.scene_renderer_error_message(renderer_error),
+        )
         shared.scene_renderer_destroy(&renderer)
         return 1
     }
@@ -257,8 +270,11 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     resources, resource_error := shared.scene_resources_load(&scene)
     defer shared.scene_resources_destroy(&resources)
     if resource_error != .NONE {
-        log.errorf("Failed to load scene resources: %s", shared.scene_error_message(resource_error))
-        return 2
+        log.errorf(
+            "Failed to load scene resources: %s",
+            shared.scene_resource_error_message(resource_error),
+        )
+        return 1
     }
 
     editor_ui: Scene_Editor_UI_State
@@ -275,15 +291,32 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
                 SCENE_VIDEO_HEIGHT,
                 SCENE_VIDEO_FRAMES_PER_SECOND,
             )
-            if video_start_error == .FFMPEG_NOT_FOUND { return 2 }
-            if video_start_error != .NONE { return 1 }
+            if video_start_error != .NONE {
+                log.errorf(
+                    "Failed to start Scene Editor video encoder for %s: %s",
+                    run_options.video_output,
+                    shared.video_stream_start_error_message(video_start_error),
+                )
+                if video_start_error == .FFMPEG_NOT_FOUND { return 2 }
+                return 1
+            }
 
             // Warmup renders the authored pose but is not part of the stream.
             // Every output camera is then derived from this immutable snapshot,
             // avoiding incremental orbit drift across hundreds of frames.
             authored_camera := scene.camera
             for _ in 0 ..< capture.warmup_frames {
-                if !shared.scene_renderer_render(&renderer, &resources, &scene, &style) {
+                render_error := shared.scene_renderer_render(
+                    &renderer,
+                    &resources,
+                    &scene,
+                    &style,
+                )
+                if render_error != .NONE {
+                    log.errorf(
+                        "Failed to render Scene Editor video warmup: %s",
+                        shared.scene_renderer_error_message(render_error),
+                    )
                     return 1
                 }
             }
@@ -295,27 +328,46 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
                     frame_index,
                     run_options.video_frame_count,
                 )
-                if !shared.scene_renderer_render(&renderer, &resources, &scene, &style) {
+                render_error := shared.scene_renderer_render(
+                    &renderer,
+                    &resources,
+                    &scene,
+                    &style,
+                )
+                if render_error != .NONE {
+                    log.errorf(
+                        "Failed to render Scene Editor orbit frame %d: %s",
+                        int(frame_index),
+                        shared.scene_renderer_error_message(render_error),
+                    )
                     return 1
                 }
-                if !shared.video_stream_encoder_write_render_texture(
+                write_error := shared.video_stream_encoder_write_render_texture(
                     &video_encoder,
                     renderer.composite_target.texture,
-                ) {
+                )
+                if write_error != .NONE {
                     log.errorf(
-                        "Failed to stream shared.Scene Editor case %s at orbit frame %d",
+                        "Failed to stream Scene Editor case %s at orbit frame %d: %s",
                         capture.case_name,
                         int(frame_index),
+                        shared.video_stream_write_error_message(write_error),
                     )
                     return 1
                 }
             }
-            if !shared.video_stream_encoder_finish(
+            finish_error := shared.video_stream_encoder_finish(
                 &video_encoder,
                 run_options.video_output,
                 run_options.video_frame_count,
                 "scene-orbit",
-            ) {
+            )
+            if finish_error != .NONE {
+                log.errorf(
+                    "Failed to finish Scene Editor video %s: %s",
+                    run_options.video_output,
+                    shared.video_stream_finish_error_message(finish_error),
+                )
                 return 1
             }
             log.infof(
@@ -330,19 +382,42 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
             return 0
         }
         for frame_index := 0; frame_index <= capture.warmup_frames; frame_index += 1 {
-            if !shared.scene_renderer_render(&renderer, &resources, &scene, &style) {
+            render_error := shared.scene_renderer_render(
+                &renderer,
+                &resources,
+                &scene,
+                &style,
+            )
+            if render_error != .NONE {
+                log.errorf(
+                    "Failed to render Scene Editor capture warmup %d: %s",
+                    frame_index,
+                    shared.scene_renderer_error_message(render_error),
+                )
                 return 1
             }
         }
-        texture := shared.scene_renderer_capture_texture(&renderer, capture.target)
-        if !rl.IsTextureValid(texture) {
+        texture, texture_error := shared.scene_renderer_capture_texture(
+            &renderer,
+            capture.target,
+        )
+        if texture_error != .NONE {
+            log.errorf(
+                "Failed to select Scene Editor capture texture: %s",
+                shared.scene_capture_error_message(texture_error),
+            )
             return 1
         }
-        if !shared.capture_render_texture_export_png(texture, capture.output_path) {
+        capture_error := shared.capture_render_texture_export_png(
+            texture,
+            capture.output_path,
+        )
+        if capture_error != .NONE {
             log.errorf(
-                "Failed to capture shared.Scene Editor case %s to %s",
+                "Failed to capture Scene Editor case %s to %s: %s",
                 capture.case_name,
                 capture.output_path,
+                shared.capture_export_error_message(capture_error),
             )
             return 1
         }
@@ -426,7 +501,17 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
                 }
             }
         }
-        if !shared.scene_renderer_render(&renderer, &resources, &scene, &style) {
+        render_error := shared.scene_renderer_render(
+            &renderer,
+            &resources,
+            &scene,
+            &style,
+        )
+        if render_error != .NONE {
+            log.errorf(
+                "Failed to render Scene Editor frame: %s",
+                shared.scene_renderer_error_message(render_error),
+            )
             return 1
         }
         rl.BeginDrawing()

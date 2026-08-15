@@ -120,6 +120,7 @@ model_browser_state_destroy :: shared.model_browser_state_destroy
 scene_destroy :: shared.scene_destroy
 scene_file_destroy :: shared.scene_file_destroy
 capture_output_directory_ensure :: shared.capture_output_directory_ensure
+Capture_Export_Error :: shared.Capture_Export_Error
 execute_ui_command :: app.execute_ui_command
 capture_find_model_source :: shared.capture_find_model_source
 capture_sequence_output_path_format :: shared.capture_sequence_output_path_format

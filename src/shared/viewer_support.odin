@@ -56,6 +56,24 @@ Model_Source_Kind :: enum {
     TRIANGLE,
 }
 
+Model_Load_Error :: enum {
+    NONE,
+    INVALID_SOURCE_INDEX,
+    LOAD_FAILED,
+}
+
+model_load_error_message :: proc(error: Model_Load_Error) -> string {
+    switch error {
+    case .NONE:
+        return ""
+    case .INVALID_SOURCE_INDEX:
+        return "model source index is invalid"
+    case .LOAD_FAILED:
+        return "model source could not be loaded"
+    }
+    return "unknown model load error"
+}
+
 // Builtin_Model_Source supplies the path-like ID and browser label for a
 // generated primitive.
 Builtin_Model_Source :: struct {
@@ -134,64 +152,121 @@ Animation_Playback :: struct {
     pose_dirty:      bool,
 }
 
+Animation_Playback_Load_Status :: enum {
+    LOADED,
+    NOT_APPLICABLE,
+    NO_ANIMATIONS,
+    NO_COMPATIBLE_ANIMATIONS,
+}
+
+Animation_Playback_Load_Result :: struct {
+    playback: Animation_Playback,
+    status:   Animation_Playback_Load_Status,
+}
+
+Shader_Load_Error :: enum {
+    NONE,
+    VERTEX_PREPROCESS_FAILED,
+    FRAGMENT_PREPROCESS_FAILED,
+    COMPILE_FAILED,
+}
+
+Shader_Fragment_Load_Result :: struct {
+    shader: rl.Shader,
+    source: Preprocessed_Shader_Source,
+    error:  Shader_Load_Error,
+}
+
+Shader_Program_Load_Result :: struct {
+    shader:         rl.Shader,
+    program_source: Preprocessed_Shader_Program_Source,
+    error:          Shader_Load_Error,
+}
+
+shader_load_error_message :: proc(error: Shader_Load_Error) -> string {
+    switch error {
+    case .NONE:
+        return ""
+    case .VERTEX_PREPROCESS_FAILED:
+        return "vertex shader preprocessing failed"
+    case .FRAGMENT_PREPROCESS_FAILED:
+        return "fragment shader preprocessing failed"
+    case .COMPILE_FAILED:
+        return "shader compilation failed"
+    }
+    return "unknown shader load error"
+}
+
 // shader_fragment_load_with_includes preprocesses one fragment stage, compiles
 // it from memory, and returns dependency state even when compilation fails.
-shader_fragment_load_with_includes :: proc(fragment_path: string) -> (
-    shader: rl.Shader,
-    preprocessed_source: Preprocessed_Shader_Source,
-    loaded: bool,
-) {
-    preprocess_succeeded: bool
-    preprocessed_source, preprocess_succeeded = shader_file_preprocess(fragment_path)
-    if !preprocess_succeeded {
-        return {}, preprocessed_source, false
+shader_fragment_load_with_includes :: proc(
+    fragment_path: string,
+) -> Shader_Fragment_Load_Result {
+    result: Shader_Fragment_Load_Result
+    preprocess_result := shader_file_preprocess(fragment_path)
+    result.source = preprocess_result.source
+    if preprocess_result.error != .NONE {
+        result.error = .FRAGMENT_PREPROCESS_FAILED
+        return result
     }
 
     source_code_cstr := strings.clone_to_cstring(
-        preprocessed_source.code,
+        result.source.code,
         context.temp_allocator,
     )
-    shader = rl.LoadShaderFromMemory(nil, source_code_cstr)
-    return shader, preprocessed_source, rl.IsShaderValid(shader)
+    result.shader = rl.LoadShaderFromMemory(nil, source_code_cstr)
+    if !rl.IsShaderValid(result.shader) {
+        result.error = .COMPILE_FAILED
+    }
+    return result
 }
 
 // shader_program_load_with_includes preprocesses both program stages and compiles them
 // together. The caller owns both the raylib shader and preprocessed sources.
-shader_program_load_with_includes :: proc(vertex_path, fragment_path: string) -> (
-    shader: rl.Shader,
-    preprocessed_program: Preprocessed_Shader_Program_Source,
-    loaded: bool,
-) {
+shader_program_load_with_includes :: proc(
+    vertex_path, fragment_path: string,
+) -> Shader_Program_Load_Result {
+    result: Shader_Program_Load_Result
     // Preprocess both shader stages inline at this sole program-load site.
-    vertex_preprocess_succeeded, fragment_preprocess_succeeded: bool
-    preprocessed_program.vertex, vertex_preprocess_succeeded =
-        shader_file_preprocess(vertex_path)
-    preprocessed_program.fragment, fragment_preprocess_succeeded =
-        shader_file_preprocess(fragment_path)
-    preprocess_succeeded := vertex_preprocess_succeeded &&
-                            fragment_preprocess_succeeded
-    if !preprocess_succeeded {
-        return {}, preprocessed_program, false
+    vertex_result := shader_file_preprocess(vertex_path)
+    fragment_result := shader_file_preprocess(fragment_path)
+    result.program_source.vertex = vertex_result.source
+    result.program_source.fragment = fragment_result.source
+    if vertex_result.error != .NONE {
+        result.error = .VERTEX_PREPROCESS_FAILED
+        return result
+    }
+    if fragment_result.error != .NONE {
+        result.error = .FRAGMENT_PREPROCESS_FAILED
+        return result
     }
 
     vertex_code_cstr := strings.clone_to_cstring(
-        preprocessed_program.vertex.code,
+        result.program_source.vertex.code,
         context.temp_allocator,
     )
     fragment_code_cstr := strings.clone_to_cstring(
-        preprocessed_program.fragment.code,
+        result.program_source.fragment.code,
         context.temp_allocator,
     )
-    shader = rl.LoadShaderFromMemory(vertex_code_cstr, fragment_code_cstr)
-    return shader, preprocessed_program, rl.IsShaderValid(shader)
+    result.shader = rl.LoadShaderFromMemory(vertex_code_cstr, fragment_code_cstr)
+    if !rl.IsShaderValid(result.shader) {
+        result.error = .COMPILE_FAILED
+    }
+    return result
 }
 
 // Shader_Reload_Result distinguishes an idle hot-reload check from a successful
 // replacement and a failed attempt that kept the previous shader active.
-Shader_Reload_Result :: enum {
+Shader_Reload_Status :: enum {
     UNCHANGED,
     RELOADED,
     FAILED,
+}
+
+Shader_Reload_Result :: struct {
+    status: Shader_Reload_Status,
+    error:  Shader_Load_Error,
 }
 
 // shader_fragment_reload_with_includes recompiles only after a dependency
@@ -203,26 +278,23 @@ shader_fragment_reload_with_includes :: proc(
     preprocessed_source: ^Preprocessed_Shader_Source,
 ) -> Shader_Reload_Result {
     if !shader_source_has_dependency_changes(preprocessed_source) {
-        return .UNCHANGED
+        return {.UNCHANGED, .NONE}
     }
 
-    log.info("Shader dependency changed; reloading %s", fragment_path)
-    replacement_shader, replacement_source, reload_succeeded :=
-        shader_fragment_load_with_includes(fragment_path)
+    replacement := shader_fragment_load_with_includes(fragment_path)
     shader_preprocessed_source_destroy(preprocessed_source)
-    preprocessed_source^ = replacement_source
+    preprocessed_source^ = replacement.source
 
-    if !reload_succeeded {
-        log.error("Failed to reload %s. Keeping the old shader.", fragment_path)
-        if rl.IsShaderValid(replacement_shader) {
-            rl.UnloadShader(replacement_shader)
+    if replacement.error != .NONE {
+        if rl.IsShaderValid(replacement.shader) {
+            rl.UnloadShader(replacement.shader)
         }
-        return .FAILED
+        return {.FAILED, replacement.error}
     }
 
     rl.UnloadShader(shader^)
-    shader^ = replacement_shader
-    return .RELOADED
+    shader^ = replacement.shader
+    return {.RELOADED, .NONE}
 }
 
 // shader_program_reload_with_includes applies the same safe replacement policy to a
@@ -237,32 +309,26 @@ shader_program_reload_with_includes :: proc(
         shader_source_has_dependency_changes(&preprocessed_program.vertex) ||
         shader_source_has_dependency_changes(&preprocessed_program.fragment)
     if !dependencies_changed {
-        return .UNCHANGED
+        return {.UNCHANGED, .NONE}
     }
 
-    log.info(
-        "Shader dependency changed; reloading %s and %s",
-        vertex_path,
-        fragment_path,
-    )
-    replacement_shader, replacement_program, reload_succeeded := shader_program_load_with_includes(
+    replacement := shader_program_load_with_includes(
         vertex_path,
         fragment_path,
     )
     shader_preprocessed_program_source_destroy(preprocessed_program)
-    preprocessed_program^ = replacement_program
+    preprocessed_program^ = replacement.program_source
 
-    if !reload_succeeded {
-        log.error("Failed to reload %s. Keeping the old shader.", fragment_path)
-        if rl.IsShaderValid(replacement_shader) {
-            rl.UnloadShader(replacement_shader)
+    if replacement.error != .NONE {
+        if rl.IsShaderValid(replacement.shader) {
+            rl.UnloadShader(replacement.shader)
         }
-        return .FAILED
+        return {.FAILED, replacement.error}
     }
 
     rl.UnloadShader(shader^)
-    shader^ = replacement_shader
-    return .RELOADED
+    shader^ = replacement.shader
+    return {.RELOADED, .NONE}
 }
 
 // model_assets_destroy frees every cloned path/label and all parallel arrays.
@@ -434,25 +500,43 @@ model_browser_active_source_set :: proc(
 
 // model_source_load dispatches disk loading or procedural mesh generation from
 // one canonical source index. The caller owns and must unload a valid model.
-model_source_load :: proc(model_assets: ^Model_Assets, source_index: int) -> rl.Model {
+model_source_load :: proc(
+    model_assets: ^Model_Assets,
+    source_index: int,
+) -> (rl.Model, Model_Load_Error) {
+    if model_assets == nil || source_index < 0 ||
+       source_index >= len(model_assets.kinds) ||
+       source_index >= len(model_assets.paths) {
+        return {}, .INVALID_SOURCE_INDEX
+    }
+
+    model: rl.Model
     switch model_assets.kinds[source_index] {
     case .ASSET:
-        return rl.LoadModel(
+        model = rl.LoadModel(
             strings.clone_to_cstring(
                 model_assets.paths[source_index],
                 context.temp_allocator,
             ),
         )
     case .CUBE:
-        return rl.LoadModelFromMesh(rl.GenMeshCube(1, 1, 1))
+        model = rl.LoadModelFromMesh(rl.GenMeshCube(1, 1, 1))
     case .SPHERE:
         // A denser silhouette prevents low-resolution pixels from changing
         // merely because the camera orbited around an otherwise round sphere.
-        return rl.LoadModelFromMesh(rl.GenMeshSphere(0.5, 64, 64))
+        model = rl.LoadModelFromMesh(rl.GenMeshSphere(0.5, 64, 64))
     case .TRIANGLE:
-        return rl.LoadModelFromMesh(rl.GenMeshPoly(3, 0.65))
+        model = rl.LoadModelFromMesh(rl.GenMeshPoly(3, 0.65))
+    case:
+        return {}, .INVALID_SOURCE_INDEX
     }
-    return {}
+    if !model_is_loaded(model) {
+        if model.meshCount > 0 || model.materialCount > 0 {
+            rl.UnloadModel(model)
+        }
+        return {}, .LOAD_FAILED
+    }
+    return model, .NONE
 }
 
 // model_is_loaded accepts drawable geometry even when raylib rejects a model for
@@ -712,14 +796,15 @@ gltf_find_skinned_mesh_uniform_scale :: proc(
 
 // animation_playback_load loads all clips, filters empty/incompatible entries,
 // builds raygui option text, applies the glTF scale correction, and initializes
-// the model to the first valid pose. Non-asset primitives return empty playback.
+// the model to the first valid pose. Its status distinguishes normal absence of
+// animation from a successfully loaded playback.
 animation_playback_load :: proc(
     model: rl.Model,
     model_path: string,
     source_kind: Model_Source_Kind,
-) -> Animation_Playback {
+) -> Animation_Playback_Load_Result {
     if source_kind != .ASSET {
-        return {}
+        return {{}, .NOT_APPLICABLE}
     }
 
     playback := Animation_Playback{
@@ -736,7 +821,7 @@ animation_playback_load :: proc(
         &playback.animation_count,
     )
     if playback.animations == nil || playback.animation_count <= 0 {
-        return playback
+        return {playback, .NO_ANIMATIONS}
     }
 
     clip_options_builder := strings.builder_make()
@@ -781,7 +866,7 @@ animation_playback_load :: proc(
 
     if len(playback.valid_indices) == 0 {
         animation_playback_destroy(&playback)
-        return {}
+        return {{}, .NO_COMPATIBLE_ANIMATIONS}
     }
 
     playback.clip_options = strings.clone_to_cstring(
@@ -840,7 +925,7 @@ animation_playback_load :: proc(
         len(playback.valid_indices),
         model_path,
     )
-    return playback
+    return {playback, .LOADED}
 }
 
 // animation_sample_count_max excludes the duplicate terminal loop keyframe while

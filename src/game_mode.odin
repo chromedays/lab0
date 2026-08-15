@@ -530,22 +530,24 @@ game_load_assets :: proc() -> Game_Assets {
     rl.UnloadImage(white_image)
 
     if assets.player.valid {
-        assets.animation = shared.animation_playback_load(
+        animation_load := shared.animation_playback_load(
             assets.player.model,
             GAME_PLAYER_MODEL_PATH,
             .ASSET,
         )
+        assets.animation = animation_load.playback
         game_configure_player_animation(&assets.animation)
         assets.walk_clip = game_find_animation_clip(&assets.animation, "Walking")
         assets.run_clip = game_find_animation_clip(&assets.animation, "Running")
         assets.active_clip = -1
     }
     if assets.zombie.valid {
-        assets.zombie_animation = shared.animation_playback_load(
+        zombie_animation_load := shared.animation_playback_load(
             assets.zombie.model,
             GAME_ZOMBIE_MODEL_PATH,
             .ASSET,
         )
+        assets.zombie_animation = zombie_animation_load.playback
         zombie_playback := &assets.zombie_animation
         zombie_playback.sampled_playback = true
         zombie_playback.sample_count = GAME_ZOMBIE_ANIMATION_SAMPLE_COUNT
@@ -694,45 +696,60 @@ game_draw_imported_debug_tint :: proc(
 // failed partial renderer, so every successfully created handle is stored in
 // renderer immediately rather than in an untracked local owner.
 game_renderer_init :: proc(renderer: ^Game_Renderer, style: ^shared.Cel_Style) -> bool {
-    scene_loaded: bool
-    renderer.scene_shader, renderer.scene_source, scene_loaded =
-        shared.shader_program_load_with_includes(VS_PATH, FS_PATH)
-    if !scene_loaded {
-        log.error("Failed to load the game scene shader")
+    scene_load := shared.shader_program_load_with_includes(VS_PATH, FS_PATH)
+    renderer.scene_shader = scene_load.shader
+    renderer.scene_source = scene_load.program_source
+    if scene_load.error != .NONE {
+        log.errorf(
+            "Failed to load the game scene shader: %s",
+            shared.shader_load_error_message(scene_load.error),
+        )
         return false
     }
     renderer.scene_bindings = shared.cel_shader_bindings_resolve(renderer.scene_shader)
 
-    band_loaded: bool
-    renderer.cel_band_shader, renderer.cel_band_source, band_loaded =
-        shared.shader_program_load_with_includes(VS_PATH, CEL_BAND_FS_PATH)
-    if !band_loaded {
-        log.error("Failed to load the game cel-band shader")
+    band_load := shared.shader_program_load_with_includes(VS_PATH, CEL_BAND_FS_PATH)
+    renderer.cel_band_shader = band_load.shader
+    renderer.cel_band_source = band_load.program_source
+    if band_load.error != .NONE {
+        log.errorf(
+            "Failed to load the game cel-band shader: %s",
+            shared.shader_load_error_message(band_load.error),
+        )
         return false
     }
     renderer.cel_band_bindings = shared.cel_shader_bindings_resolve(renderer.cel_band_shader)
 
-    downscale_loaded: bool
-    renderer.downscale_shader, renderer.downscale_source, downscale_loaded =
-        shared.shader_fragment_load_with_includes(DOWNSCALE_FS_PATH)
-    if !downscale_loaded {
-        log.error("Failed to load the game downscale shader")
+    downscale_load := shared.shader_fragment_load_with_includes(DOWNSCALE_FS_PATH)
+    renderer.downscale_shader = downscale_load.shader
+    renderer.downscale_source = downscale_load.source
+    if downscale_load.error != .NONE {
+        log.errorf(
+            "Failed to load the game downscale shader: %s",
+            shared.shader_load_error_message(downscale_load.error),
+        )
         return false
     }
 
-    mask_loaded: bool
-    renderer.mask_shader, renderer.mask_source, mask_loaded =
-        shared.shader_fragment_load_with_includes(MASK_DOWNSCALE_FS_PATH)
-    if !mask_loaded {
-        log.error("Failed to load the game coverage shader")
+    mask_load := shared.shader_fragment_load_with_includes(MASK_DOWNSCALE_FS_PATH)
+    renderer.mask_shader = mask_load.shader
+    renderer.mask_source = mask_load.source
+    if mask_load.error != .NONE {
+        log.errorf(
+            "Failed to load the game coverage shader: %s",
+            shared.shader_load_error_message(mask_load.error),
+        )
         return false
     }
 
-    outline_loaded: bool
-    renderer.outline_shader, renderer.outline_source, outline_loaded =
-        shared.shader_fragment_load_with_includes(OUTLINE_FS_PATH)
-    if !outline_loaded {
-        log.error("Failed to load the game outline shader")
+    outline_load := shared.shader_fragment_load_with_includes(OUTLINE_FS_PATH)
+    renderer.outline_shader = outline_load.shader
+    renderer.outline_source = outline_load.source
+    if outline_load.error != .NONE {
+        log.errorf(
+            "Failed to load the game outline shader: %s",
+            shared.shader_load_error_message(outline_load.error),
+        )
         return false
     }
 
@@ -2999,7 +3016,11 @@ run_game_mode :: proc(arguments: []string) -> int {
         return 0
     }
     if capture_result.error != .NONE {
-        log.errorf("Invalid game capture argument: %s", capture_result.error_argument)
+        log.errorf(
+            "Invalid game capture argument %s: %s",
+            capture_result.error_argument,
+            shared.capture_parse_error_message(capture_result.error),
+        )
         print_game_usage()
         return 2
     }
@@ -3081,10 +3102,15 @@ run_game_mode :: proc(arguments: []string) -> int {
             GAME_SCREEN_HEIGHT,
             60,
         )
-        if video_start_error == .FFMPEG_NOT_FOUND {
-            return 2
-        }
         if video_start_error != .NONE {
+            log.errorf(
+                "Failed to start game video encoder for %s: %s",
+                run_options.video_output,
+                shared.video_stream_start_error_message(video_start_error),
+            )
+            if video_start_error == .FFMPEG_NOT_FOUND {
+                return 2
+            }
             return 1
         }
     }
@@ -3298,25 +3324,44 @@ run_game_mode :: proc(arguments: []string) -> int {
                     )
                     capture_complete = true
                     capture_succeeded = false
-                } else if !shared.video_stream_encoder_write_render_texture(
-                    &video_encoder,
-                    renderer.composite_target.texture,
-                ) {
-                    log.errorf(
-                        "Failed to stream game case %s at tick %d",
-                        capture.case_name,
-                        int(state.tick),
-                    )
-                    capture_complete = true
-                    capture_succeeded = false
-                } else if replay_player.ticks_played >= replay.total_ticks {
-                    capture_complete = true
-                    capture_succeeded = shared.video_stream_encoder_finish(
+                } else {
+                    write_error := shared.video_stream_encoder_write_render_texture(
                         &video_encoder,
-                        run_options.video_output,
-                        replay.total_ticks,
-                        "fixed-tick",
+                        renderer.composite_target.texture,
                     )
+                    if write_error != .NONE {
+                        log.errorf(
+                            "Failed to stream game case %s at tick %d: %s",
+                            capture.case_name,
+                            int(state.tick),
+                            shared.video_stream_write_error_message(write_error),
+                        )
+                        capture_complete = true
+                        capture_succeeded = false
+                    } else if replay_player.ticks_played >= replay.total_ticks {
+                        capture_complete = true
+                        finish_error := shared.video_stream_encoder_finish(
+                            &video_encoder,
+                            run_options.video_output,
+                            replay.total_ticks,
+                            "fixed-tick",
+                        )
+                        capture_succeeded = finish_error == .NONE
+                        if finish_error != .NONE {
+                            log.errorf(
+                                "Failed to finish game video %s: %s",
+                                run_options.video_output,
+                                shared.video_stream_finish_error_message(finish_error),
+                            )
+                        } else {
+                            log.infof(
+                                "Streamed %d fixed-tick frames for game case %s to %s",
+                                int(replay.total_ticks),
+                                capture.case_name,
+                                run_options.video_output,
+                            )
+                        }
+                    }
                 }
             } else if recording_enabled && ticks_run > 0 {
                 capture_texture := game_capture_texture(&renderer, capture.target)
@@ -3325,16 +3370,17 @@ run_game_mode :: proc(arguments: []string) -> int {
                     run_options.record_directory,
                     int(state.tick),
                 )
-                frame_succeeded := shared.capture_render_texture_export_png(
+                frame_error := shared.capture_render_texture_export_png(
                     capture_texture,
                     frame_path,
                 )
                 delete(frame_path)
-                if !frame_succeeded {
+                if frame_error != .NONE {
                     log.errorf(
-                        "Failed to record game case %s at tick %d",
+                        "Failed to record game case %s at tick %d: %s",
                         capture.case_name,
                         int(state.tick),
+                        shared.capture_export_error_message(frame_error),
                     )
                     capture_complete = true
                     capture_succeeded = false
@@ -3359,10 +3405,11 @@ run_game_mode :: proc(arguments: []string) -> int {
                 }
                 if tick_ready && capture_frames >= capture.warmup_frames {
                     capture_texture := game_capture_texture(&renderer, capture.target)
-                    capture_succeeded = shared.capture_render_texture_export_png(
+                    capture_error := shared.capture_render_texture_export_png(
                         capture_texture,
                         capture.output_path,
                     )
+                    capture_succeeded = capture_error == .NONE
                     capture_complete = true
                     if capture_succeeded {
                         log.infof(
@@ -3373,9 +3420,10 @@ run_game_mode :: proc(arguments: []string) -> int {
                         )
                     } else {
                         log.errorf(
-                            "Failed to capture game case %s to %s",
+                            "Failed to capture game case %s to %s: %s",
                             capture.case_name,
                             capture.output_path,
+                            shared.capture_export_error_message(capture_error),
                         )
                     }
                 }

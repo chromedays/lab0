@@ -5,7 +5,6 @@ package shared
 // capture bytes are not affected by the multi-light implementation.
 
 import "core:c"
-import "core:log"
 import "core:math"
 import "core:strings"
 import rl "vendor:raylib"
@@ -191,10 +190,12 @@ scene_shadow_frame_make :: proc(scene: ^Scene) -> Scene_Shadow_Frame {
 // LoadRenderTexture creates a depth renderbuffer, which cannot be sampled by
 // the receiver shaders. Directional shadows need a depth-only framebuffer with
 // a texture attachment so the depth pass and comparison use the same GPU value.
-scene_shadow_target_load :: proc(width, height: c.int) -> (rl.RenderTexture2D, bool) {
+scene_shadow_target_load :: proc(
+    width, height: c.int,
+) -> (rl.RenderTexture2D, Scene_Renderer_Error) {
     target: rl.RenderTexture2D
     target.id = rgl.LoadFramebuffer()
-    if target.id == 0 { return target, false }
+    if target.id == 0 { return target, .SHADOW_TARGET_CREATE_FAILED }
 
     target.texture.width = width
     target.texture.height = height
@@ -211,7 +212,7 @@ scene_shadow_target_load :: proc(width, height: c.int) -> (rl.RenderTexture2D, b
     }
     if target.depth.id == 0 {
         rgl.UnloadFramebuffer(target.id)
-        return {}, false
+        return {}, .SHADOW_TARGET_CREATE_FAILED
     }
 
     rgl.EnableFramebuffer(target.id)
@@ -227,7 +228,7 @@ scene_shadow_target_load :: proc(width, height: c.int) -> (rl.RenderTexture2D, b
     if !complete {
         rgl.UnloadTexture(target.depth.id)
         rgl.UnloadFramebuffer(target.id)
-        return {}, false
+        return {}, .SHADOW_TARGET_CREATE_FAILED
     }
 
     rgl.TextureParameters(
@@ -250,7 +251,7 @@ scene_shadow_target_load :: proc(width, height: c.int) -> (rl.RenderTexture2D, b
         rgl.TEXTURE_WRAP_T,
         rgl.TEXTURE_WRAP_CLAMP,
     )
-    return target, true
+    return target, .NONE
 }
 
 scene_shadow_target_unload :: proc(target: ^rl.RenderTexture2D) {
@@ -412,14 +413,14 @@ scene_renderer_low_targets_unload :: proc(renderer: ^Scene_Renderer) {
 scene_renderer_low_targets_ensure :: proc(
     renderer: ^Scene_Renderer,
     downscale_level: int,
-) -> bool {
+) -> Scene_Renderer_Error {
     low_width := render_downsample_dimension(SCENE_SCREEN_WIDTH, c.int(downscale_level))
     low_height := render_downsample_dimension(SCENE_SCREEN_HEIGHT, c.int(downscale_level))
     if renderer.low_width == low_width && renderer.low_height == low_height &&
        rl.IsRenderTextureValid(renderer.downsample_target) &&
        rl.IsRenderTextureValid(renderer.coverage_target) &&
        rl.IsRenderTextureValid(renderer.outlined_target) {
-        return true
+        return .NONE
     }
     scene_renderer_low_targets_unload(renderer)
     renderer.downsample_target = rl.LoadRenderTexture(low_width, low_height)
@@ -429,28 +430,33 @@ scene_renderer_low_targets_ensure :: proc(
        !rl.IsRenderTextureValid(renderer.coverage_target) ||
        !rl.IsRenderTextureValid(renderer.outlined_target) {
         scene_renderer_low_targets_unload(renderer)
-        log.error("Failed to create Scene Editor low-resolution render targets")
-        return false
+        return .LOW_TARGET_CREATE_FAILED
     }
     renderer.low_width = low_width
     renderer.low_height = low_height
     rl.SetTextureFilter(renderer.downsample_target.texture, .POINT)
     rl.SetTextureFilter(renderer.coverage_target.texture, .POINT)
     rl.SetTextureFilter(renderer.outlined_target.texture, .POINT)
-    return true
+    return .NONE
 }
 
 scene_renderer_init :: proc(
     renderer: ^Scene_Renderer,
     style: ^Cel_Style,
     downscale_level: int,
-) -> bool {
-    scene_loaded: bool
-    renderer.scene_shader, renderer.scene_source, scene_loaded =
-        shader_program_load_with_includes(SCENE_VERTEX_SHADER_PATH, SCENE_FRAGMENT_SHADER_PATH)
-    if !scene_loaded {
-        log.error("Failed to load the Scene Editor color shader")
-        return false
+) -> Scene_Renderer_Error {
+    if renderer == nil || style == nil {
+        return .INVALID_RENDER_STATE
+    }
+
+    scene_load := shader_program_load_with_includes(
+        SCENE_VERTEX_SHADER_PATH,
+        SCENE_FRAGMENT_SHADER_PATH,
+    )
+    renderer.scene_shader = scene_load.shader
+    renderer.scene_source = scene_load.program_source
+    if scene_load.error != .NONE {
+        return .COLOR_SHADER_LOAD_FAILED
     }
     renderer.scene_style = cel_shader_bindings_resolve(renderer.scene_shader)
     renderer.scene_lights = scene_light_bindings_resolve(renderer.scene_shader)
@@ -458,12 +464,14 @@ scene_renderer_init :: proc(
         renderer.scene_shader,
     )
 
-    band_loaded: bool
-    renderer.band_shader, renderer.band_source, band_loaded =
-        shader_program_load_with_includes(SCENE_VERTEX_SHADER_PATH, SCENE_BAND_SHADER_PATH)
-    if !band_loaded {
-        log.error("Failed to load the Scene Editor metadata shader")
-        return false
+    band_load := shader_program_load_with_includes(
+        SCENE_VERTEX_SHADER_PATH,
+        SCENE_BAND_SHADER_PATH,
+    )
+    renderer.band_shader = band_load.shader
+    renderer.band_source = band_load.program_source
+    if band_load.error != .NONE {
+        return .BAND_SHADER_LOAD_FAILED
     }
     renderer.band_style = cel_shader_bindings_resolve(renderer.band_shader)
     renderer.band_lights = scene_light_bindings_resolve(renderer.band_shader)
@@ -471,33 +479,32 @@ scene_renderer_init :: proc(
         renderer.band_shader,
     )
 
-    shadow_loaded: bool
-    renderer.shadow_shader, renderer.shadow_source, shadow_loaded =
-        shader_program_load_with_includes(
-            SCENE_SHADOW_VERTEX_SHADER_PATH,
-            SCENE_SHADOW_FRAGMENT_SHADER_PATH,
-        )
-    if !shadow_loaded {
-        log.error("Failed to load the Scene Editor shadow-depth shader")
-        return false
+    shadow_load := shader_program_load_with_includes(
+        SCENE_SHADOW_VERTEX_SHADER_PATH,
+        SCENE_SHADOW_FRAGMENT_SHADER_PATH,
+    )
+    renderer.shadow_shader = shadow_load.shader
+    renderer.shadow_source = shadow_load.program_source
+    if shadow_load.error != .NONE {
+        return .SHADOW_SHADER_LOAD_FAILED
     }
     renderer.shadow_depth = {
         alpha_mode = rl.GetShaderLocation(renderer.shadow_shader, "u_alpha_mode"),
         alpha_cutoff = rl.GetShaderLocation(renderer.shadow_shader, "u_alpha_cutoff"),
     }
 
-    downscale_loaded: bool
-    renderer.downscale_shader, renderer.downscale_source, downscale_loaded =
-        shader_fragment_load_with_includes(DOWNSCALE_FS_PATH)
-    if !downscale_loaded { return false }
-    mask_loaded: bool
-    renderer.mask_shader, renderer.mask_source, mask_loaded =
-        shader_fragment_load_with_includes(MASK_DOWNSCALE_FS_PATH)
-    if !mask_loaded { return false }
-    outline_loaded: bool
-    renderer.outline_shader, renderer.outline_source, outline_loaded =
-        shader_fragment_load_with_includes(OUTLINE_FS_PATH)
-    if !outline_loaded { return false }
+    downscale_load := shader_fragment_load_with_includes(DOWNSCALE_FS_PATH)
+    renderer.downscale_shader = downscale_load.shader
+    renderer.downscale_source = downscale_load.source
+    if downscale_load.error != .NONE { return .DOWNSCALE_SHADER_LOAD_FAILED }
+    mask_load := shader_fragment_load_with_includes(MASK_DOWNSCALE_FS_PATH)
+    renderer.mask_shader = mask_load.shader
+    renderer.mask_source = mask_load.source
+    if mask_load.error != .NONE { return .MASK_SHADER_LOAD_FAILED }
+    outline_load := shader_fragment_load_with_includes(OUTLINE_FS_PATH)
+    renderer.outline_shader = outline_load.shader
+    renderer.outline_source = outline_load.source
+    if outline_load.error != .NONE { return .OUTLINE_SHADER_LOAD_FAILED }
 
     ramp_pixels := cel_ramp_pixels_build(style)
     ramp_image := rl.Image{
@@ -508,25 +515,33 @@ scene_renderer_init :: proc(
         format = .UNCOMPRESSED_R8G8B8A8,
     }
     renderer.cel_ramp_texture = rl.LoadTextureFromImage(ramp_image)
-    if !rl.IsTextureValid(renderer.cel_ramp_texture) { return false }
+    if !rl.IsTextureValid(renderer.cel_ramp_texture) {
+        return .CEL_RAMP_CREATE_FAILED
+    }
     rl.SetTextureFilter(renderer.cel_ramp_texture, .POINT)
     rl.SetTextureWrap(renderer.cel_ramp_texture, .CLAMP)
 
     renderer.scene_target = rl.LoadRenderTexture(SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT)
     renderer.band_target = rl.LoadRenderTexture(SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT)
     renderer.composite_target = rl.LoadRenderTexture(SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT)
-    shadow_target_loaded: bool
-    renderer.shadow_target, shadow_target_loaded = scene_shadow_target_load(
+    shadow_target_error: Scene_Renderer_Error
+    renderer.shadow_target, shadow_target_error = scene_shadow_target_load(
         SCENE_SHADOW_MAP_SIZE,
         SCENE_SHADOW_MAP_SIZE,
     )
+    if shadow_target_error != .NONE {
+        return shadow_target_error
+    }
     if !rl.IsRenderTextureValid(renderer.scene_target) ||
        !rl.IsRenderTextureValid(renderer.band_target) ||
-       !rl.IsRenderTextureValid(renderer.composite_target) ||
-       !shadow_target_loaded ||
-       !scene_renderer_low_targets_ensure(renderer, downscale_level) {
-        log.error("Failed to create Scene Editor render targets")
-        return false
+       !rl.IsRenderTextureValid(renderer.composite_target) {
+        return .RENDER_TARGET_CREATE_FAILED
+    }
+    if low_target_error := scene_renderer_low_targets_ensure(
+        renderer,
+        downscale_level,
+    ); low_target_error != .NONE {
+        return low_target_error
     }
     rl.SetTextureFilter(renderer.band_target.texture, .POINT)
     rl.SetTextureWrap(renderer.band_target.texture, .CLAMP)
@@ -547,7 +562,7 @@ scene_renderer_init :: proc(
     renderer.outline_color = rl.GetShaderLocation(renderer.outline_shader, "u_outline_color")
     renderer.outline_coverage_threshold = rl.GetShaderLocation(renderer.outline_shader, "u_coverage_threshold")
     renderer.outline_edge_aa = rl.GetShaderLocation(renderer.outline_shader, "u_edge_aa_mode")
-    return true
+    return .NONE
 }
 
 scene_renderer_destroy :: proc(renderer: ^Scene_Renderer) {
@@ -597,14 +612,16 @@ scene_primitive_model_make :: proc(shape: Scene_Primitive_Shape) -> rl.Model {
 // Primitive models are shared immutable shape resources; imported models are
 // appended in Scene.models order. The caller destroys a partial result on any
 // error, preserving one cleanup path for staged editor loads.
-scene_resources_load :: proc(scene: ^Scene) -> (Scene_Resources, Scene_Error) {
+scene_resources_load :: proc(
+    scene: ^Scene,
+) -> (Scene_Resources, Scene_Resource_Error) {
     resources: Scene_Resources
     for shape_index := 0; shape_index < len(resources.primitives); shape_index += 1 {
         resources.primitives[shape_index] = scene_primitive_model_make(
             Scene_Primitive_Shape(shape_index),
         )
         if !model_is_loaded(resources.primitives[shape_index]) {
-            return resources, .INVALID_PRIMITIVE
+            return resources, .PRIMITIVE_CREATE_FAILED
         }
     }
 
@@ -620,21 +637,27 @@ scene_resources_load :: proc(scene: ^Scene) -> (Scene_Resources, Scene_Error) {
 
 scene_model_resource_load :: proc(
     model_data: ^Scene_Model,
-) -> (Scene_Model_Resource, Scene_Error) {
+) -> (Scene_Model_Resource, Scene_Resource_Error) {
         model_path := strings.clone_to_cstring(model_data.source, context.temp_allocator)
         resource := Scene_Model_Resource{model = rl.LoadModel(model_path)}
         if !model_is_loaded(resource.model) {
             if resource.model.meshCount > 0 || resource.model.materialCount > 0 {
                 rl.UnloadModel(resource.model)
             }
-            return {}, .INVALID_MODEL
+            return {}, .MODEL_LOAD_FAILED
         }
         if pose, pose_present := model_data.animation.?; pose_present {
-            resource.playback = animation_playback_load(
+            playback_load := animation_playback_load(
                 resource.model,
                 model_data.source,
                 .ASSET,
             )
+            resource.playback = playback_load.playback
+            if playback_load.status != .LOADED {
+                animation_playback_destroy(&resource.playback)
+                rl.UnloadModel(resource.model)
+                return {}, .ANIMATION_NOT_FOUND
+            }
             raw_clip_valid := false
             for valid_clip_index in resource.playback.valid_indices {
                 if int(valid_clip_index) == pose.clip_index {
@@ -646,13 +669,13 @@ scene_model_resource_load :: proc(
                pose.clip_index >= int(resource.playback.animation_count) {
                 animation_playback_destroy(&resource.playback)
                 rl.UnloadModel(resource.model)
-                return {}, .INVALID_ANIMATION
+                return {}, .ANIMATION_INVALID
             }
             animation := resource.playback.animations[pose.clip_index]
             if pose.frame >= int(animation.keyframeCount) {
                 animation_playback_destroy(&resource.playback)
                 rl.UnloadModel(resource.model)
-                return {}, .INVALID_ANIMATION
+                return {}, .ANIMATION_INVALID
             }
             rl.UpdateModelAnimation(resource.model, animation, f32(pose.frame))
         }
@@ -781,9 +804,15 @@ scene_renderer_render :: proc(
     resources: ^Scene_Resources,
     scene: ^Scene,
     style: ^Cel_Style,
-) -> bool {
-    if !scene_renderer_low_targets_ensure(renderer, scene.render.downscale_level) {
-        return false
+) -> Scene_Renderer_Error {
+    if renderer == nil || resources == nil || scene == nil || style == nil {
+        return .INVALID_RENDER_STATE
+    }
+    if low_target_error := scene_renderer_low_targets_ensure(
+        renderer,
+        scene.render.downscale_level,
+    ); low_target_error != .NONE {
+        return low_target_error
     }
     camera := scene_camera_to_raylib_camera(scene.camera)
     shadow_frame := scene_shadow_frame_make(scene)
@@ -931,21 +960,29 @@ scene_renderer_render :: proc(
         rl.ClearBackground(scene.render.background)
         rl.DrawTexturePro(renderer.outlined_target.texture, low_source, {0, 0, SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT}, {}, 0, rl.WHITE)
     rl.EndTextureMode()
-    return true
+    return .NONE
 }
 
 // Map public capture targets to the authoritative pass outputs. LENS belongs to
-// Viewer mode and deliberately returns an invalid texture here.
+// Viewer mode and is reported explicitly instead of using an invalid texture as
+// a failure sentinel.
 scene_renderer_capture_texture :: proc(
     renderer: ^Scene_Renderer,
     target: Capture_Target,
-) -> rl.Texture2D {
-    switch target {
-    case .COMPOSITE:     return renderer.composite_target.texture
-    case .SCENE:         return renderer.scene_target.texture
-    case .DOWNSAMPLE:    return renderer.outlined_target.texture
-    case .COVERAGE_MASK: return renderer.coverage_target.texture
-    case .LENS:          return {}
+) -> (rl.Texture2D, Scene_Capture_Error) {
+    if renderer == nil {
+        return {}, .TARGET_UNAVAILABLE
     }
-    return {}
+    texture: rl.Texture2D
+    switch target {
+    case .COMPOSITE:     texture = renderer.composite_target.texture
+    case .SCENE:         texture = renderer.scene_target.texture
+    case .DOWNSAMPLE:    texture = renderer.outlined_target.texture
+    case .COVERAGE_MASK: texture = renderer.coverage_target.texture
+    case .LENS:          return {}, .UNSUPPORTED_TARGET
+    }
+    if !rl.IsTextureValid(texture) {
+        return {}, .TARGET_UNAVAILABLE
+    }
+    return texture, .NONE
 }
