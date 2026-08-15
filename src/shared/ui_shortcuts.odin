@@ -66,7 +66,7 @@ UI_Shortcut_Binding :: struct {
 
 // UI_SHORTCUT_BINDINGS is ordered for deterministic first-match dispatch. Any
 // duplicate key/modifier pair would make the later binding unreachable.
-UI_SHORTCUT_BINDINGS := [?]UI_Shortcut_Binding{
+UI_SHORTCUT_BINDINGS :: [?]UI_Shortcut_Binding{
     {.TOGGLE_HELP,                 .F1,            0},
     {.TOGGLE_HELP,                 .SLASH,         UI_MOD_SHIFT},
     {.QUIT,                        .Q,             UI_MOD_PRIMARY},
@@ -202,10 +202,6 @@ UI_Keyboard_State :: struct {
     clip_bounds:    rl.Rectangle,
 }
 
-// ui_keyboard is intentionally global because every wrapper participates in one
-// frame-wide focus registry.
-ui_keyboard: UI_Keyboard_State
-
 // ui_primary_modifier_down treats Control and Command/Super as one portable
 // primary modifier so shortcuts behave naturally on macOS and other platforms.
 ui_primary_modifier_down :: proc() -> bool {
@@ -279,40 +275,135 @@ ui_focus_fallback :: proc(focused: UI_Focus_ID) -> UI_Focus_ID {
     return .NONE
 }
 
+// ui_keyboard_begin_frame resets the visible-control registry and applies Tab
+// traversal using the order retained from the previous frame.
+ui_keyboard_begin_frame :: proc(
+    keyboard: ^UI_Keyboard_State,
+    enabled: bool,
+    trap_tab: bool,
+) {
+    keyboard.enabled = enabled
+    keyboard.current_count = 0
+    if !enabled {
+        keyboard.focused = .NONE
+        return
+    }
+    if trap_tab || !rl.IsKeyPressed(.TAB) || keyboard.previous_count <= 0 {
+        return
+    }
+
+    focused_index := ui_find_focus_index(
+        &keyboard.previous_order[0],
+        keyboard.previous_count,
+        keyboard.focused,
+    )
+    move_backward := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+    if move_backward {
+        if focused_index < 0 {
+            focused_index = keyboard.previous_count - 1
+        } else {
+            focused_index = (focused_index - 1 + keyboard.previous_count) %
+                            keyboard.previous_count
+        }
+    } else {
+        focused_index = (focused_index + 1) % keyboard.previous_count
+    }
+    keyboard.focused = keyboard.previous_order[focused_index]
+}
+
+// ui_keyboard_end_frame validates focus against the controls drawn this frame
+// and retains their traversal order for the next frame.
+ui_keyboard_end_frame :: proc(keyboard: ^UI_Keyboard_State) {
+    if !keyboard.enabled {
+        return
+    }
+    if keyboard.focused != .NONE &&
+       ui_find_focus_index(
+           &keyboard.current_order[0],
+           keyboard.current_count,
+           keyboard.focused,
+       ) < 0 {
+        fallback := ui_focus_fallback(keyboard.focused)
+        if fallback != .NONE &&
+           ui_find_focus_index(
+               &keyboard.current_order[0],
+               keyboard.current_count,
+               fallback,
+           ) >= 0 {
+            keyboard.focused = fallback
+        } else {
+            keyboard.focused = .NONE
+        }
+    }
+    keyboard.previous_count = keyboard.current_count
+    for control_index := 0;
+        control_index < keyboard.current_count;
+        control_index += 1 {
+        keyboard.previous_order[control_index] =
+            keyboard.current_order[control_index]
+    }
+}
+
+// ui_keyboard_set_clip limits focus registration to one visible UI region.
+ui_keyboard_set_clip :: proc(
+    keyboard: ^UI_Keyboard_State,
+    bounds: rl.Rectangle,
+) {
+    keyboard.clip_active = true
+    keyboard.clip_bounds = bounds
+}
+
+// ui_keyboard_clear_clip restores focus registration for the full UI.
+ui_keyboard_clear_clip :: proc(keyboard: ^UI_Keyboard_State) {
+    keyboard.clip_active = false
+}
+
 // ui_keyboard_clear_focus relinquishes keyboard ownership without altering order.
-ui_keyboard_clear_focus :: proc() {
-    ui_keyboard.focused = .NONE
+ui_keyboard_clear_focus :: proc(keyboard: ^UI_Keyboard_State) {
+    keyboard.focused = .NONE
 }
 
 // ui_keyboard_set_focus transfers keyboard ownership to a known control ID.
-ui_keyboard_set_focus :: proc(focused: UI_Focus_ID) {
-    ui_keyboard.focused = focused
+ui_keyboard_set_focus :: proc(
+    keyboard: ^UI_Keyboard_State,
+    focused: UI_Focus_ID,
+) {
+    keyboard.focused = focused
+}
+
+// ui_keyboard_focused_id returns the control that currently owns keyboard focus.
+ui_keyboard_focused_id :: proc(keyboard: ^UI_Keyboard_State) -> UI_Focus_ID {
+    return keyboard.focused
 }
 
 // ui_keyboard_has_focus reports whether navigation is enabled and non-empty.
-ui_keyboard_has_focus :: proc() -> bool {
-    return ui_keyboard.enabled && ui_keyboard.focused != .NONE
+ui_keyboard_has_focus :: proc(keyboard: ^UI_Keyboard_State) -> bool {
+    return keyboard.enabled && keyboard.focused != .NONE
 }
 
 // ui_register_control appends a visible widget to this frame's traversal order,
 // updates focus on a mouse press, and returns whether the widget owns focus.
-ui_register_control :: proc(id: UI_Focus_ID, bounds: rl.Rectangle) -> bool {
-    if !ui_keyboard.enabled || id == .NONE {
+ui_register_control :: proc(
+    keyboard: ^UI_Keyboard_State,
+    id: UI_Focus_ID,
+    bounds: rl.Rectangle,
+) -> bool {
+    if !keyboard.enabled || id == .NONE {
         return false
     }
-    if ui_keyboard.clip_active &&
-       !rl.CheckCollisionRecs(bounds, ui_keyboard.clip_bounds) {
+    if keyboard.clip_active &&
+       !rl.CheckCollisionRecs(bounds, keyboard.clip_bounds) {
         return false
     }
-    if ui_keyboard.current_count < UI_MAX_FOCUSABLE_CONTROLS {
-        ui_keyboard.current_order[ui_keyboard.current_count] = id
-        ui_keyboard.current_count += 1
+    if keyboard.current_count < UI_MAX_FOCUSABLE_CONTROLS {
+        keyboard.current_order[keyboard.current_count] = id
+        keyboard.current_count += 1
     }
     if !rl.GuiIsLocked() && rl.IsMouseButtonPressed(.LEFT) &&
        rl.CheckCollisionPointRec(rl.GetMousePosition(), bounds) {
-        ui_keyboard.focused = id
+        keyboard.focused = id
     }
-    return ui_keyboard.focused == id
+    return keyboard.focused == id
 }
 
 // ui_draw_focus paints the shared high-contrast focus ring outside widget bounds.
@@ -340,11 +431,12 @@ ui_activation_pressed :: proc() -> bool {
 
 // ui_gui_button layers keyboard focus and activation over a standard raygui button.
 ui_gui_button :: proc(
+    keyboard: ^UI_Keyboard_State,
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
     text: cstring,
 ) -> bool {
-    focused := ui_register_control(id, bounds)
+    focused := ui_register_control(keyboard, id, bounds)
     activated := rl.GuiButton(bounds, text) ||
                  (focused && ui_activation_pressed())
     ui_draw_focus(bounds, focused)
@@ -354,12 +446,13 @@ ui_gui_button :: proc(
 // ui_gui_check_box supports Space toggling and returns an actual value change,
 // independent of whether the mouse or keyboard produced it.
 ui_gui_check_box :: proc(
+    keyboard: ^UI_Keyboard_State,
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
     text: cstring,
     checked: ^bool,
 ) -> bool {
-    focused := ui_register_control(id, bounds)
+    focused := ui_register_control(keyboard, id, bounds)
     previous := checked^
     rl.GuiCheckBox(bounds, text, checked)
     if focused && ui_modifier_mask() == 0 && rl.IsKeyPressed(.SPACE) {
@@ -372,13 +465,14 @@ ui_gui_check_box :: proc(
 // ui_gui_slider_bar adds stepped arrow/Home/End control to a continuous raygui
 // slider while preserving direct mouse edits and coarse Shift adjustments.
 ui_gui_slider_bar :: proc(
+    keyboard: ^UI_Keyboard_State,
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
     left_text, right_text: cstring,
     value: ^f32,
     minimum, maximum, step, coarse_step: f32,
 ) -> bool {
-    focused := ui_register_control(id, bounds)
+    focused := ui_register_control(keyboard, id, bounds)
     previous := value^
     rl.GuiSliderBar(bounds, left_text, right_text, value, minimum, maximum)
     if focused && !ui_primary_modifier_down() &&
@@ -434,6 +528,7 @@ ui_adjust_int :: proc(
 
 // ui_gui_spinner combines raygui editing with deterministic keyboard adjustment.
 ui_gui_spinner :: proc(
+    keyboard: ^UI_Keyboard_State,
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
     text: cstring,
@@ -441,7 +536,7 @@ ui_gui_spinner :: proc(
     minimum, maximum, step, coarse_step: c.int,
     edit_mode: bool,
 ) -> bool {
-    focused := ui_register_control(id, bounds)
+    focused := ui_register_control(keyboard, id, bounds)
     previous := value^
     rl.GuiSpinner(bounds, text, value, minimum, maximum, edit_mode)
     if focused && !ui_primary_modifier_down() &&
@@ -454,13 +549,14 @@ ui_gui_spinner :: proc(
 
 // ui_gui_combo_box clamps arrow-driven selection to the supplied item count.
 ui_gui_combo_box :: proc(
+    keyboard: ^UI_Keyboard_State,
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
     text: cstring,
     active: ^c.int,
     item_count: c.int,
 ) -> bool {
-    focused := ui_register_control(id, bounds)
+    focused := ui_register_control(keyboard, id, bounds)
     previous := active^
     rl.GuiComboBox(bounds, text, active)
     if focused && !ui_primary_modifier_down() &&
@@ -474,32 +570,33 @@ ui_gui_combo_box :: proc(
 // ui_gui_color_picker adds keyboard channel selection and byte adjustment to
 // raygui's mouse picker. color_channel persists when focus moves between pickers.
 ui_gui_color_picker :: proc(
+    keyboard: ^UI_Keyboard_State,
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
     color: ^rl.Color,
     include_alpha: bool,
 ) -> bool {
-    focused := ui_register_control(id, bounds)
+    focused := ui_register_control(keyboard, id, bounds)
     previous := color^
     rl.GuiColorPicker(bounds, nil, color)
     channel_count: c.int = 3
     if include_alpha {
         channel_count = 4
     }
-    ui_keyboard.color_channel = clamp(
-        ui_keyboard.color_channel,
+    keyboard.color_channel = clamp(
+        keyboard.color_channel,
         c.int(0),
         channel_count - 1,
     )
     if focused && !ui_primary_modifier_down() &&
        !(rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)) {
         if ui_key_pressed_or_repeat(.UP) {
-            ui_keyboard.color_channel =
-                (ui_keyboard.color_channel - 1 + channel_count) % channel_count
+            keyboard.color_channel =
+                (keyboard.color_channel - 1 + channel_count) % channel_count
         }
         if ui_key_pressed_or_repeat(.DOWN) {
-            ui_keyboard.color_channel =
-                (ui_keyboard.color_channel + 1) % channel_count
+            keyboard.color_channel =
+                (keyboard.color_channel + 1) % channel_count
         }
         adjustment: i32 = 1
         if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
@@ -507,7 +604,7 @@ ui_gui_color_picker :: proc(
         }
         component: ^u8
         channel_name: cstring = "R"
-        switch ui_keyboard.color_channel {
+        switch keyboard.color_channel {
         case 0:
             component = &color.r
             channel_name = "R"
@@ -562,7 +659,7 @@ ui_shortcut_matches :: proc(
            binding.command == .TOGGLE_HELP
 }
 
-UI_SHORTCUT_HELP_LEFT := [?]cstring{
+UI_SHORTCUT_HELP_LEFT :: [?]cstring{
     "GENERAL",
     "F1 / ?       Shortcut help",
     "Tab          Next control",
@@ -586,7 +683,7 @@ UI_SHORTCUT_HELP_LEFT := [?]cstring{
     "WASD/QE      Pan / zoom",
 }
 
-UI_SHORTCUT_HELP_RIGHT := [?]cstring{
+UI_SHORTCUT_HELP_RIGHT :: [?]cstring{
     "ANIMATION",
     "Space        Play / pause",
     "Home         First frame",

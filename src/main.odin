@@ -303,6 +303,7 @@ camera_input_permissions :: proc(
 // App_UI_Command_Context groups pointers to every state slice a semantic command
 // may mutate, keeping execute_ui_command independent of frame-local variables.
 App_UI_Command_Context :: struct {
+    keyboard:                ^shared.UI_Keyboard_State,
     quit_requested:          ^bool,
     shortcuts_help_open:     ^bool,
     export_requested:        ^bool,
@@ -334,9 +335,9 @@ execute_ui_command :: proc(
         command_context.shortcuts_help_open^ =
             !command_context.shortcuts_help_open^
         if command_context.shortcuts_help_open^ {
-            shared.ui_keyboard_set_focus(.HELP_CLOSE)
+            shared.ui_keyboard_set_focus(command_context.keyboard, .HELP_CLOSE)
         } else {
-            shared.ui_keyboard_clear_focus()
+            shared.ui_keyboard_clear_focus(command_context.keyboard)
         }
     case .QUIT:
         command_context.quit_requested^ = true
@@ -347,7 +348,7 @@ execute_ui_command :: proc(
         command_context.animation.dropdown_open = false
         command_context.background_picker_open^ = false
         command_context.cel_ui.color_target = .NONE
-        shared.ui_keyboard_set_focus(.MODEL_SEARCH)
+        shared.ui_keyboard_set_focus(command_context.keyboard, .MODEL_SEARCH)
         // Prevent the shortcut key from becoming search text.
         for rl.GetCharPressed() != 0 {}
     case .TOGGLE_MODEL_SECTION:
@@ -380,7 +381,7 @@ execute_ui_command :: proc(
             command_context.inspector.scroll_y = inspector_cel_section_offset(
                 command_context.inspector,
             )
-            shared.ui_keyboard_set_focus(.CEL_HEADER)
+            shared.ui_keyboard_set_focus(command_context.keyboard, .CEL_HEADER)
         } else {
             command_context.cel_ui.color_target = .NONE
         }
@@ -537,7 +538,7 @@ execute_ui_command :: proc(
         if command_context.background_picker_open^ {
             command_context.cel_ui.color_target = .NONE
             command_context.animation.dropdown_open = false
-            shared.ui_keyboard_set_focus(.BACKGROUND_PICKER)
+            shared.ui_keyboard_set_focus(command_context.keyboard, .BACKGROUND_PICKER)
         }
     case .RESET_BACKGROUND:
         command_context.background_color^ = rl.BLACK
@@ -980,6 +981,7 @@ main :: proc() {
                         shared.update_animation_playback(
                             &animation_playback,
                             active_model,
+                            0,
                         )
                     }
                 }
@@ -1151,6 +1153,7 @@ main :: proc() {
             model_open = true,
             camera_open = true,
         }
+        ui_keyboard: shared.UI_Keyboard_State
         cel_style_ui: Cel_Style_UI_State
         animation_controls_bounds := rl.Rectangle{10, 190, 280, 190}
         magnifier_bounds := rl.Rectangle{10, f32(screen_height) - 194, 148, 184}
@@ -1174,6 +1177,7 @@ main :: proc() {
         shortcuts_help_open := false
 
         for !rl.WindowShouldClose() && !capture_complete && !quit_requested {
+            frame_delta_seconds := rl.GetFrameTime()
             if downscale_level != applied_downscale_level {
                 requested_downscale_level := clamp(
                     downscale_level,
@@ -1264,53 +1268,25 @@ main :: proc() {
                             animation_playback.dropdown_open ||
                             model_browser.search_editing ||
                             cel_style_ui.color_target != .NONE
-            // Initialize keyboard navigation inline at its only frame start.
-            for {
-                enabled := window_focused
-                trap_tab := active_modal
-                shared.ui_keyboard.enabled = enabled
-                shared.ui_keyboard.current_count = 0
-                if !enabled {
-                    shared.ui_keyboard.focused = .NONE
-                    break
-                }
-
-                if !trap_tab && rl.IsKeyPressed(.TAB) && shared.ui_keyboard.previous_count > 0 {
-                    focused_index := shared.ui_find_focus_index(
-                        &shared.ui_keyboard.previous_order[0],
-                        shared.ui_keyboard.previous_count,
-                        shared.ui_keyboard.focused,
-                    )
-                    move_backward := rl.IsKeyDown(.LEFT_SHIFT) ||
-                                     rl.IsKeyDown(.RIGHT_SHIFT)
-                    if move_backward {
-                        if focused_index < 0 {
-                            focused_index = shared.ui_keyboard.previous_count - 1
-                        } else {
-                            focused_index = (focused_index - 1 + shared.ui_keyboard.previous_count) %
-                                            shared.ui_keyboard.previous_count
-                        }
-                    } else {
-                        focused_index = (focused_index + 1) % shared.ui_keyboard.previous_count
-                    }
-                    shared.ui_keyboard.focused = shared.ui_keyboard.previous_order[focused_index]
-                }
-                break
-            }
+            shared.ui_keyboard_begin_frame(
+                &ui_keyboard,
+                window_focused,
+                active_modal,
+            )
             if shortcuts_help_open {
-                shared.ui_keyboard_set_focus(.HELP_CLOSE)
+                shared.ui_keyboard_set_focus(&ui_keyboard, .HELP_CLOSE)
             } else if model_browser.search_editing {
-                shared.ui_keyboard_set_focus(.MODEL_SEARCH)
+                shared.ui_keyboard_set_focus(&ui_keyboard, .MODEL_SEARCH)
             } else if animation_playback.dropdown_open {
-                shared.ui_keyboard_set_focus(.ANIMATION_CLIP)
+                shared.ui_keyboard_set_focus(&ui_keyboard, .ANIMATION_CLIP)
             } else if background_picker_open {
-                shared.ui_keyboard_set_focus(.BACKGROUND_PICKER)
+                shared.ui_keyboard_set_focus(&ui_keyboard, .BACKGROUND_PICKER)
             } else {
                 switch cel_style_ui.color_target {
-                case .BAND_TINT: shared.ui_keyboard_set_focus(.CEL_BAND_TINT_PICKER)
-                case .RIM:       shared.ui_keyboard_set_focus(.CEL_RIM_PICKER)
-                case .HIGHLIGHT: shared.ui_keyboard_set_focus(.CEL_HIGHLIGHT_PICKER)
-                case .OUTLINE:   shared.ui_keyboard_set_focus(.CEL_OUTLINE_PICKER)
+                case .BAND_TINT: shared.ui_keyboard_set_focus(&ui_keyboard, .CEL_BAND_TINT_PICKER)
+                case .RIM:       shared.ui_keyboard_set_focus(&ui_keyboard, .CEL_RIM_PICKER)
+                case .HIGHLIGHT: shared.ui_keyboard_set_focus(&ui_keyboard, .CEL_HIGHLIGHT_PICKER)
+                case .OUTLINE:   shared.ui_keyboard_set_focus(&ui_keyboard, .CEL_OUTLINE_PICKER)
                 case .NONE:
                 }
             }
@@ -1318,17 +1294,17 @@ main :: proc() {
             if window_focused && rl.IsKeyPressed(.ESCAPE) {
                 if shortcuts_help_open {
                     shortcuts_help_open = false
-                    shared.ui_keyboard_clear_focus()
+                    shared.ui_keyboard_clear_focus(&ui_keyboard)
                 } else if animation_playback.dropdown_open {
                     animation_playback.dropdown_open = false
-                    shared.ui_keyboard_set_focus(.ANIMATION_CLIP)
+                    shared.ui_keyboard_set_focus(&ui_keyboard, .ANIMATION_CLIP)
                 } else if background_picker_open {
                     background_picker_open = false
-                    shared.ui_keyboard_set_focus(.BACKGROUND_PICKER_TOGGLE)
+                    shared.ui_keyboard_set_focus(&ui_keyboard, .BACKGROUND_PICKER_TOGGLE)
                 } else if cel_style_ui.color_target != .NONE {
                     cel_style_ui.color_target = .NONE
                 } else if !model_browser.search_editing {
-                    shared.ui_keyboard_clear_focus()
+                    shared.ui_keyboard_clear_focus(&ui_keyboard)
                 }
             }
 
@@ -1347,12 +1323,13 @@ main :: proc() {
             }
 
             // Check focused-control conflicts inline before dispatching the command.
+            focused_id := shared.ui_keyboard_focused_id(&ui_keyboard)
             shortcut_conflicts_with_focus := false
             #partial switch shortcut_command {
             case .ANIMATION_PLAY_PAUSE:
-                shortcut_conflicts_with_focus = shared.ui_keyboard.focused != .NONE
+                shortcut_conflicts_with_focus = focused_id != .NONE
             case .ANIMATION_FIRST_FRAME:
-                #partial switch shared.ui_keyboard.focused {
+                #partial switch focused_id {
                 case .ANIMATION_TIMELINE, .ANIMATION_SPEED,
                      .ANIMATION_SAMPLE_COUNT, .MODEL_LIST, .CAMERA_DOWNSCALE,
                      .CAMERA_EDGE_AA,
@@ -1371,10 +1348,10 @@ main :: proc() {
                 }
             case .INSPECTOR_PAGE_UP, .INSPECTOR_PAGE_DOWN:
                 shortcut_conflicts_with_focus =
-                    shared.ui_keyboard.focused == .MODEL_LIST ||
-                    shared.ui_keyboard.focused == .INSPECTOR_SCROLLBAR
+                    focused_id == .MODEL_LIST ||
+                    focused_id == .INSPECTOR_SCROLLBAR
             }
-            if shared.ui_keyboard_has_focus() && shortcut_conflicts_with_focus {
+            if shared.ui_keyboard_has_focus(&ui_keyboard) && shortcut_conflicts_with_focus {
                 shortcut_command = .NONE
             }
             if active_modal && shortcut_command != .TOGGLE_HELP &&
@@ -1387,6 +1364,7 @@ main :: proc() {
                 f32(0),
             )
             command_context := App_UI_Command_Context{
+                keyboard = &ui_keyboard,
                 quit_requested = &quit_requested,
                 shortcuts_help_open = &shortcuts_help_open,
                 export_requested = &export_requested,
@@ -1469,18 +1447,17 @@ main :: proc() {
             camera_shortcut_modifiers := shared.ui_modifier_mask()
             shortcut_uses_command_modifier :=
                 camera_shortcut_modifiers & (shared.UI_MOD_PRIMARY | shared.UI_MOD_ALT) != 0
-            if shared.ui_keyboard_has_focus() || shortcut_uses_command_modifier {
+            if shared.ui_keyboard_has_focus(&ui_keyboard) || shortcut_uses_command_modifier {
                 camera_input.keyboard = false
             }
             if !mouse_over_ui &&
                (rl.IsMouseButtonPressed(.LEFT) ||
                 rl.IsMouseButtonPressed(.MIDDLE)) {
-                shared.ui_keyboard_clear_focus()
+                shared.ui_keyboard_clear_focus(&ui_keyboard)
             }
             if camera_input.keyboard || camera_input.mouse {
                 // Apply keyboard, orbit, pan, and zoom input inline at the sole update site.
                 camera := &control_camera
-                frame_time := rl.GetFrameTime()
                 move_speed := scene_size * 2.0
                 camera_forward := rl.GetCameraForward(camera)
                 camera_right := rl.GetCameraRight(camera)
@@ -1492,7 +1469,7 @@ main :: proc() {
                     if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
                         move_speed *= 4.0
                     }
-                    move_distance := move_speed * frame_time
+                    move_distance := move_speed * frame_delta_seconds
 
                     // Translate in the visible plane; Q/E control orthographic zoom.
                     pan_delta: rl.Vector3
@@ -1513,7 +1490,7 @@ main :: proc() {
                         camera.target += pan_delta
                     }
 
-                    keyboard_zoom_factor := 1.0 + frame_time * 1.5
+                    keyboard_zoom_factor := 1.0 + frame_delta_seconds * 1.5
                     if rl.IsKeyDown(.Q) {
                         camera.fovy *= keyboard_zoom_factor
                     }
@@ -1680,7 +1657,11 @@ main :: proc() {
                 render_camera.target += snap_correction
             }
 
-            shared.update_animation_playback(&animation_playback, active_model)
+            shared.update_animation_playback(
+                &animation_playback,
+                active_model,
+                frame_delta_seconds,
+            )
 
             if !capture_options.enabled {
                 if shared.reload_shader_with_includes(
@@ -2331,6 +2312,7 @@ main :: proc() {
                     28,
                 }
                 if shared.ui_gui_button(
+                    &ui_keyboard,
                     .EXPORT_PNG,
                     export_button_bounds,
                     rl.TextFormat(
@@ -2397,6 +2379,7 @@ main :: proc() {
                     play_width := content_width - reset_width - step_width * 2 - button_gap * 3
 
                     if shared.ui_gui_button(
+                        &ui_keyboard,
                         .ANIMATION_FIRST,
                         {content_x, transport_y, reset_width, 24},
                         "|<",
@@ -2405,6 +2388,7 @@ main :: proc() {
                     }
                     previous_button_x := content_x + reset_width + button_gap
                     if shared.ui_gui_button(
+                        &ui_keyboard,
                         .ANIMATION_PREVIOUS,
                         {previous_button_x, transport_y, step_width, 24},
                         "<",
@@ -2418,6 +2402,7 @@ main :: proc() {
                         play_label = "Pause [Space]"
                     }
                     if shared.ui_gui_button(
+                        &ui_keyboard,
                         .ANIMATION_PLAY,
                         {play_button_x, transport_y, play_width, 24},
                         play_label,
@@ -2428,6 +2413,7 @@ main :: proc() {
                     next_button_x := play_button_x + play_width + button_gap
                     last_frame := f32(max(animation.keyframeCount - 1, 0))
                     if shared.ui_gui_button(
+                        &ui_keyboard,
                         .ANIMATION_NEXT,
                         {next_button_x, transport_y, step_width, 24},
                         ">",
@@ -2447,6 +2433,7 @@ main :: proc() {
                     )
                     previous_frame := playback.current_frame
                     _ = shared.ui_gui_slider_bar(
+                        &ui_keyboard,
                         .ANIMATION_TIMELINE,
                         {content_x, bounds.y + 108, content_width, 18},
                         nil,
@@ -2471,6 +2458,7 @@ main :: proc() {
                     options_y := bounds.y + 136
                     rl.GuiLabel({content_x, options_y, 40, 18}, "Speed")
                     _ = shared.ui_gui_slider_bar(
+                        &ui_keyboard,
                         .ANIMATION_SPEED,
                         {content_x + 42, options_y, 105, 18},
                         nil,
@@ -2486,6 +2474,7 @@ main :: proc() {
                         rl.TextFormat("%.2fx", playback.speed),
                     )
                     _ = shared.ui_gui_check_box(
+                        &ui_keyboard,
                         .ANIMATION_LOOP,
                         {content_x + 202, options_y + 1, 16, 16},
                         nil,
@@ -2496,6 +2485,7 @@ main :: proc() {
                     sample_options_y := bounds.y + 162
                     previous_sampled_playback := playback.sampled_playback
                     _ = shared.ui_gui_check_box(
+                        &ui_keyboard,
                         .ANIMATION_SAMPLED,
                         {content_x, sample_options_y + 1, 16, 16},
                         nil,
@@ -2505,6 +2495,7 @@ main :: proc() {
                     rl.GuiLabel({content_x + 91, sample_options_y, 42, 18}, "Count")
                     previous_sample_count := playback.sample_count
                     _ = shared.ui_gui_spinner(
+                        &ui_keyboard,
                         .ANIMATION_SAMPLE_COUNT,
                         {content_x + 136, sample_options_y - 2, content_width - 136, 22},
                         nil,
@@ -2540,7 +2531,11 @@ main :: proc() {
                     } else {
                         previous_active_index := playback.active_index
                         // Run the focus-aware dropdown inline in its sole clip selector.
-                        clip_focused := shared.ui_register_control(.ANIMATION_CLIP, clip_bounds)
+                        clip_focused := shared.ui_register_control(
+                            &ui_keyboard,
+                            .ANIMATION_CLIP,
+                            clip_bounds,
+                        )
                         clip_toggled := rl.GuiDropdownBox(
                             clip_bounds,
                             playback.clip_options,
@@ -2565,7 +2560,7 @@ main :: proc() {
                         if clip_toggled {
                             playback.dropdown_open = !playback.dropdown_open
                             if playback.dropdown_open {
-                                shared.ui_keyboard_set_focus(.ANIMATION_CLIP)
+                                shared.ui_keyboard_set_focus(&ui_keyboard, .ANIMATION_CLIP)
                             }
                         }
                         if playback.active_index != previous_active_index {
@@ -2630,8 +2625,7 @@ main :: proc() {
                     c.int(view.height),
                 )
                     // Limit keyboard focus registration to the visible inspector viewport.
-                    shared.ui_keyboard.clip_active = true
-                    shared.ui_keyboard.clip_bounds = view
+                    shared.ui_keyboard_set_clip(&ui_keyboard, view)
                     model_height := inspector_section_height(state.model_open, 310)
                     // Render the model browser inline in its only inspector location.
                     for {
@@ -2643,6 +2637,7 @@ main :: proc() {
                         rl.GuiPanel(bounds, nil)
                         was_expanded := expanded^
                         draw_collapsible_header(
+                            &ui_keyboard,
                             .MODEL_HEADER,
                             {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
                             "MODEL ASSETS",
@@ -2669,7 +2664,11 @@ main :: proc() {
                         }
                         search_was_editing := browser.search_editing
                         // Run the focus-aware text box inline in its sole search field.
-                        search_focused := shared.ui_register_control(.MODEL_SEARCH, search_bounds)
+                        search_focused := shared.ui_register_control(
+                            &ui_keyboard,
+                            .MODEL_SEARCH,
+                            search_bounds,
+                        )
                         search_was_locked := rl.GuiIsLocked()
                         unlock_for_keyboard_edit := search_was_locked && search_focused &&
                                                     browser.search_editing
@@ -2709,6 +2708,7 @@ main :: proc() {
                             )
                         }
                         if shared.ui_gui_button(
+                            &ui_keyboard,
                             .MODEL_CLEAR,
                             clear_bounds,
                             rl.GuiIconText(.ICON_CROSS_SMALL, nil),
@@ -2718,7 +2718,8 @@ main :: proc() {
                         }
 
                         search_keyboard_active := search_was_editing || browser.search_editing
-                        list_has_keyboard_focus := shared.ui_keyboard.focused == .MODEL_LIST
+                        list_has_keyboard_focus :=
+                            shared.ui_keyboard_focused_id(&ui_keyboard) == .MODEL_LIST
                         enter_pressed := (search_keyboard_active || list_has_keyboard_focus) &&
                                          (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.KP_ENTER))
                         if search_keyboard_active && rl.IsKeyPressed(.ESCAPE) {
@@ -2777,7 +2778,11 @@ main :: proc() {
                             bounds.height - 92,
                         }
                         if len(browser.result_labels) > 0 {
-                            list_focused := shared.ui_register_control(.MODEL_LIST, list_bounds)
+                            list_focused := shared.ui_register_control(
+                                &ui_keyboard,
+                                .MODEL_LIST,
+                                list_bounds,
+                            )
                             rl.GuiListViewEx(
                                 list_bounds,
                                 raw_data(browser.result_labels[:]),
@@ -2833,6 +2838,7 @@ main :: proc() {
                         expanded := &state.camera_open
                         rl.GuiPanel(bounds, nil)
                         draw_collapsible_header(
+                            &ui_keyboard,
                             .CAMERA_HEADER,
                             {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
                             "CAMERA CONTROLS",
@@ -2856,6 +2862,7 @@ main :: proc() {
                         button_gap: f32 = 6
                         button_width := (content_width - button_gap * 2) / 3
                         if shared.ui_gui_button(
+                            &ui_keyboard,
                             .CAMERA_X,
                             {content_x, content_y, button_width, 24},
                             "X",
@@ -2870,6 +2877,7 @@ main :: proc() {
                             log.info("Camera reset to +X axis view")
                         }
                         if shared.ui_gui_button(
+                            &ui_keyboard,
                             .CAMERA_Y,
                             {content_x + button_width + button_gap, content_y, button_width, 24},
                             "Y",
@@ -2884,6 +2892,7 @@ main :: proc() {
                             log.info("Camera reset to +Y axis view")
                         }
                         if shared.ui_gui_button(
+                            &ui_keyboard,
                             .CAMERA_Z,
                             {
                                 content_x + (button_width + button_gap) * 2,
@@ -2905,6 +2914,7 @@ main :: proc() {
                         content_y += 28
 
                         if shared.ui_gui_button(
+                            &ui_keyboard,
                             .CAMERA_ISOMETRIC,
                             {content_x, content_y, content_width, 24},
                             "Isometric [I]",
@@ -2922,6 +2932,7 @@ main :: proc() {
 
                         rl.GuiLabel({content_x, content_y, 104, 22}, "Downscale level")
                         _ = shared.ui_gui_spinner(
+                            &ui_keyboard,
                             .CAMERA_DOWNSCALE,
                             {content_x + 108, content_y, content_width - 108, 22},
                             nil,
@@ -2952,6 +2963,7 @@ main :: proc() {
                         edge_aa_mode_index := c.int(edge_aa_mode_ptr^)
                         previous_edge_aa_mode := edge_aa_mode_index
                         _ = shared.ui_gui_combo_box(
+                            &ui_keyboard,
                             .CAMERA_EDGE_AA,
                             {content_x + 108, content_y, content_width - 108, 22},
                             "Hard;Coverage",
@@ -2995,6 +3007,7 @@ main :: proc() {
                         rl.GuiPanel(bounds, nil)
                         was_open := state.open
                         draw_collapsible_header(
+                            &ui_keyboard,
                             .CEL_HEADER,
                             {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
                             "CEL SHADING [C]",
@@ -3018,6 +3031,7 @@ main :: proc() {
                         reset_width := width - combo_width - reload_width - save_width - button_gap * 3
                         previous_preset := state.preset_index
                         _ = shared.ui_gui_combo_box(
+                            &ui_keyboard,
                             .CEL_PRESET,
                             {x, y, combo_width, 24},
                             CEL_STYLE_PRESET_OPTIONS,
@@ -3028,15 +3042,15 @@ main :: proc() {
                             _ = load_selected_cel_style_preset(state, style)
                         }
                         button_x := x + combo_width + button_gap
-                        if shared.ui_gui_button(.CEL_RELOAD, {button_x, y, reload_width, 24}, "Reload") {
+                        if shared.ui_gui_button(&ui_keyboard, .CEL_RELOAD, {button_x, y, reload_width, 24}, "Reload") {
                             _ = load_selected_cel_style_preset(state, style)
                         }
                         button_x += reload_width + button_gap
-                        if shared.ui_gui_button(.CEL_SAVE, {button_x, y, save_width, 24}, "Save") {
+                        if shared.ui_gui_button(&ui_keyboard, .CEL_SAVE, {button_x, y, save_width, 24}, "Save") {
                             _ = save_selected_cel_style_preset(state, style)
                         }
                         button_x += save_width + button_gap
-                        if shared.ui_gui_button(.CEL_RESET, {button_x, y, reset_width, 24}, "Reset") {
+                        if shared.ui_gui_button(&ui_keyboard, .CEL_RESET, {button_x, y, reset_width, 24}, "Reset") {
                             reset_cel_style_to_classic(state, style)
                         }
                         y += 30
@@ -3087,6 +3101,7 @@ main :: proc() {
 
                         light_was_open := state.light_open
                         draw_cel_subsection(
+                            &ui_keyboard,
                             .CEL_LIGHT_HEADER,
                             x,
                             y,
@@ -3108,6 +3123,7 @@ main :: proc() {
                             light_space := c.int(style.light_space)
                             previous_light_space := light_space
                             _ = shared.ui_gui_combo_box(
+                                &ui_keyboard,
                                 .CEL_LIGHT_SPACE,
                                 {content_x + 108, cursor_y, content_width - 108, 22},
                                 "World;Camera;Model",
@@ -3120,6 +3136,7 @@ main :: proc() {
                             }
                             cursor_y += 30
                             if draw_cel_style_slider(
+                                &ui_keyboard,
                                 .CEL_LIGHT_AZIMUTH,
                                 content_x,
                                 cursor_y,
@@ -3136,6 +3153,7 @@ main :: proc() {
                             }
                             cursor_y += 28
                             if draw_cel_style_slider(
+                                &ui_keyboard,
                                 .CEL_LIGHT_ELEVATION,
                                 content_x,
                                 cursor_y,
@@ -3152,6 +3170,7 @@ main :: proc() {
                             }
                             cursor_y += 28
                             content_changed = draw_cel_style_slider(
+                                &ui_keyboard,
                                 .CEL_LIGHT_WRAP,
                                 content_x,
                                 cursor_y,
@@ -3180,6 +3199,7 @@ main :: proc() {
 
                         bands_was_open := state.bands_open
                         draw_cel_subsection(
+                            &ui_keyboard,
                             .CEL_BANDS_HEADER,
                             x,
                             y,
@@ -3205,6 +3225,7 @@ main :: proc() {
                             rl.GuiLabel({bands_x, cursor_y, 38, 22}, "Band")
                             selected_display := state.selected_band + 1
                             _ = shared.ui_gui_spinner(
+                                &ui_keyboard,
                                 .CEL_BAND_SELECT,
                                 {bands_x + 40, cursor_y, 62, 22},
                                 nil,
@@ -3218,6 +3239,7 @@ main :: proc() {
                             state.selected_band = selected_display - 1
                             add_width := (bands_width - 110) * 0.5
                             if shared.ui_gui_button(
+                                &ui_keyboard,
                                 .CEL_BAND_ADD,
                                 {bands_x + 108, cursor_y, add_width, 22},
                                 "Add after",
@@ -3228,6 +3250,7 @@ main :: proc() {
                                 }
                             }
                             if shared.ui_gui_button(
+                                &ui_keyboard,
                                 .CEL_BAND_REMOVE,
                                 {
                                     bands_x + 112 + add_width,
@@ -3270,6 +3293,7 @@ main :: proc() {
                                                        shared.CEL_BOUNDARY_MINIMUM_GAP
                                 }
                                 bands_changed = draw_cel_style_slider(
+                                    &ui_keyboard,
                                     .CEL_BAND_UPPER_BOUND,
                                     bands_x,
                                     cursor_y,
@@ -3284,6 +3308,7 @@ main :: proc() {
                                 cursor_y += 28
                             }
                             bands_changed = draw_cel_style_slider(
+                                &ui_keyboard,
                                 .CEL_BAND_BRIGHTNESS,
                                 bands_x,
                                 cursor_y,
@@ -3297,6 +3322,7 @@ main :: proc() {
                             ) || bands_changed
                             cursor_y += 28
                             bands_changed = draw_cel_style_slider(
+                                &ui_keyboard,
                                 .CEL_BAND_TINT_MIX,
                                 bands_x,
                                 cursor_y,
@@ -3312,6 +3338,7 @@ main :: proc() {
 
                             tint_color := cel_vector_color_to_raylib(band.tint)
                             draw_cel_color_swatch(
+                                &ui_keyboard,
                                 .CEL_BAND_TINT_SWATCH,
                                 bands_x,
                                 cursor_y,
@@ -3325,6 +3352,7 @@ main :: proc() {
                             if state.color_target == .BAND_TINT {
                                 previous_tint_color := tint_color
                                 _ = shared.ui_gui_color_picker(
+                                    &ui_keyboard,
                                     .CEL_BAND_TINT_PICKER,
                                     {bands_x, cursor_y, 150, 150},
                                     &tint_color,
@@ -3341,6 +3369,7 @@ main :: proc() {
                             alpha_mode := c.int(style.alpha_mode)
                             previous_alpha_mode := alpha_mode
                             _ = shared.ui_gui_combo_box(
+                                &ui_keyboard,
                                 .CEL_ALPHA_MODE,
                                 {bands_x + 108, cursor_y, bands_width - 108, 22},
                                 "Opaque;Mask",
@@ -3354,6 +3383,7 @@ main :: proc() {
                             cursor_y += 30
                             if style.alpha_mode == .MASK {
                                 bands_changed = draw_cel_style_slider(
+                                    &ui_keyboard,
                                     .CEL_ALPHA_CUTOFF,
                                     bands_x,
                                     cursor_y,
@@ -3375,6 +3405,7 @@ main :: proc() {
 
                         accents_was_open := state.accents_open
                         draw_cel_subsection(
+                            &ui_keyboard,
                             .CEL_ACCENTS_HEADER,
                             x,
                             y,
@@ -3392,6 +3423,7 @@ main :: proc() {
                             accents_y := y + CEL_SUBSECTION_HEADER_HEIGHT + 8
                             accents_width := width - 16
                             rim_changed := draw_cel_accent_content(
+                                &ui_keyboard,
                                 accents_x,
                                 accents_y,
                                 accents_width,
@@ -3403,6 +3435,7 @@ main :: proc() {
                             highlight_y := accents_y + cel_accent_block_height(state, .RIM) + 8
                             rl.GuiLine({accents_x, highlight_y - 6, accents_width, 2}, nil)
                             highlight_changed := draw_cel_accent_content(
+                                &ui_keyboard,
                                 accents_x,
                                 highlight_y,
                                 accents_width,
@@ -3420,6 +3453,7 @@ main :: proc() {
 
                         outline_was_open := state.outline_open
                         draw_cel_subsection(
+                            &ui_keyboard,
                             .CEL_OUTLINE_HEADER,
                             x,
                             y,
@@ -3440,6 +3474,7 @@ main :: proc() {
                             outline_width := c.int(style.outline.width)
                             previous_width := outline_width
                             _ = shared.ui_gui_spinner(
+                                &ui_keyboard,
                                 .CEL_OUTLINE_WIDTH,
                                 {
                                     outline_x + 108,
@@ -3461,6 +3496,7 @@ main :: proc() {
                             }
                             cursor_y += 32
                             outline_changed = draw_cel_style_slider(
+                                &ui_keyboard,
                                 .CEL_OUTLINE_COVERAGE,
                                 outline_x,
                                 cursor_y,
@@ -3476,6 +3512,7 @@ main :: proc() {
 
                             outline_color := style.outline.color
                             draw_cel_color_swatch(
+                                &ui_keyboard,
                                 .CEL_OUTLINE_SWATCH,
                                 outline_x,
                                 cursor_y,
@@ -3489,6 +3526,7 @@ main :: proc() {
                             if state.color_target == .OUTLINE {
                                 previous_color := outline_color
                                 _ = shared.ui_gui_color_picker(
+                                    &ui_keyboard,
                                     .CEL_OUTLINE_PICKER,
                                     {outline_x, cursor_y, 160, 160},
                                     &outline_color,
@@ -3506,6 +3544,7 @@ main :: proc() {
                             alpha := f32(style.outline.color.a) / 255
                             previous_alpha := alpha
                             outline_changed = draw_cel_style_slider(
+                                &ui_keyboard,
                                 .CEL_OUTLINE_ALPHA,
                                 outline_x,
                                 cursor_y,
@@ -3560,6 +3599,7 @@ main :: proc() {
                         rl.GuiPanel(bounds, nil)
                         was_expanded := expanded^
                         draw_collapsible_header(
+                            &ui_keyboard,
                             .BACKGROUND_HEADER,
                             {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
                             "SCENE BACKGROUND",
@@ -3588,16 +3628,18 @@ main :: proc() {
                             picker_button_text = "Close color picker"
                         }
                         if shared.ui_gui_button(
+                            &ui_keyboard,
                             .BACKGROUND_PICKER_TOGGLE,
                             {button_x, bounds.y + 30, button_width, 25},
                             picker_button_text,
                         ) {
                             picker_open^ = !picker_open^
                             if picker_open^ {
-                                shared.ui_keyboard_set_focus(.BACKGROUND_PICKER)
+                                shared.ui_keyboard_set_focus(&ui_keyboard, .BACKGROUND_PICKER)
                             }
                         }
                         if shared.ui_gui_button(
+                            &ui_keyboard,
                             .BACKGROUND_RESET,
                             {button_x, bounds.y + 59, button_width, 25},
                             "Reset to black",
@@ -3618,7 +3660,7 @@ main :: proc() {
                         break
                     }
                     // End the inspector's sole focus-clipping region.
-                    shared.ui_keyboard.clip_active = false
+                    shared.ui_keyboard_clear_clip(&ui_keyboard)
                 rl.EndScissorMode()
                 if content_locked_here {
                     rl.GuiUnlock()
@@ -3646,7 +3688,11 @@ main :: proc() {
                     }
                     thumb := rl.Rectangle{track.x + 2, thumb_y, track.width - 4, thumb_height}
                     mouse_position := rl.GetMousePosition()
-                    scrollbar_focused := shared.ui_register_control(.INSPECTOR_SCROLLBAR, track)
+                    scrollbar_focused := shared.ui_register_control(
+                        &ui_keyboard,
+                        .INSPECTOR_SCROLLBAR,
+                        track,
+                    )
 
                     if scrollbar_focused {
                         if shared.ui_key_pressed_or_repeat(.UP) {
@@ -3716,6 +3762,7 @@ main :: proc() {
                         break
                     }
                     _ = shared.ui_gui_color_picker(
+                        &ui_keyboard,
                         .BACKGROUND_PICKER,
                         {
                             picker_bounds.x + 12,
@@ -3745,12 +3792,13 @@ main :: proc() {
                         rl.DrawRectangle(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight(), rl.Color{0, 0, 0, 170})
                         rl.GuiPanel(bounds, "KEYBOARD SHORTCUTS")
                         if shared.ui_gui_button(
+                            &ui_keyboard,
                             .HELP_CLOSE,
                             {bounds.x + bounds.width - 34, bounds.y + 4, 28, 22},
                             "X",
                         ) {
                             open^ = false
-                            shared.ui_keyboard_clear_focus()
+                            shared.ui_keyboard_clear_focus(&ui_keyboard)
                             break
                         }
 
@@ -3790,38 +3838,7 @@ main :: proc() {
                         break
                     }
                 }
-                // Finalize keyboard focus order inline at the only frame end.
-                for {
-                    if !shared.ui_keyboard.enabled {
-                        break
-                    }
-                    if shared.ui_keyboard.focused != .NONE &&
-                       shared.ui_find_focus_index(
-                           &shared.ui_keyboard.current_order[0],
-                           shared.ui_keyboard.current_count,
-                           shared.ui_keyboard.focused,
-                       ) < 0 {
-                        fallback := shared.ui_focus_fallback(shared.ui_keyboard.focused)
-                        if fallback != .NONE &&
-                           shared.ui_find_focus_index(
-                               &shared.ui_keyboard.current_order[0],
-                               shared.ui_keyboard.current_count,
-                               fallback,
-                           ) >= 0 {
-                            shared.ui_keyboard.focused = fallback
-                        } else {
-                            shared.ui_keyboard.focused = .NONE
-                        }
-                    }
-                    shared.ui_keyboard.previous_count = shared.ui_keyboard.current_count
-                    for control_index := 0;
-                        control_index < shared.ui_keyboard.current_count;
-                        control_index += 1 {
-                        shared.ui_keyboard.previous_order[control_index] =
-                            shared.ui_keyboard.current_order[control_index]
-                    }
-                    break
-                }
+                shared.ui_keyboard_end_frame(&ui_keyboard)
             rl.EndTextureMode()
 
             if export_requested {

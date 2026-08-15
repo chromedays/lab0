@@ -24,7 +24,7 @@ MASK_DOWNSCALE_FS_PATH :: "shaders/mask_downscale.fs"
 OUTLINE_FS_PATH :: "shaders/outline.fs"
 VIEWER_VIDEO_FRAMES_PER_SECOND :: 60
 
-SUPPORTED_MODEL_EXTENSIONS := [?]string{
+SUPPORTED_MODEL_EXTENSIONS :: [?]string{
     ".obj",
     ".iqm",
     ".gltf",
@@ -65,7 +65,7 @@ Builtin_Model_Source :: struct {
 }
 
 // Built-ins are appended after sorted disk assets in this stable order.
-BUILTIN_MODEL_SOURCES := [?]Builtin_Model_Source{
+BUILTIN_MODEL_SOURCES :: [?]Builtin_Model_Source{
     {.CUBE,     "builtin:cube",     "Built-in / Cube"},
     {.SPHERE,   "builtin:sphere",   "Built-in / Sphere"},
     {.TRIANGLE, "builtin:triangle", "Built-in / Triangle"},
@@ -964,11 +964,12 @@ animation_cycle_clip :: proc(
     return true
 }
 
-// update_animation_playback advances time, applies loop/end rules, quantizes the
-// pose when requested, and calls raylib only when the resolved pose changed.
+// update_animation_playback advances by caller-supplied time, applies loop/end
+// rules, quantizes the pose, and updates raylib only when that pose changed.
 update_animation_playback :: proc(
     playback: ^Animation_Playback,
     model: rl.Model,
+    delta_seconds: f32,
 ) {
     animation, animation_found := get_active_animation(playback)
     if !animation_found {
@@ -986,7 +987,7 @@ update_animation_playback :: proc(
             playback.current_frame = 0
             playback.is_playing = false
         } else {
-            playback.current_frame += rl.GetFrameTime() *
+            playback.current_frame += max(delta_seconds, f32(0)) *
                                       f32(ANIMATION_SAMPLE_FPS) *
                                       playback.speed
             if playback.sampled_playback && !playback.loop {

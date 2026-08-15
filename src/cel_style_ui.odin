@@ -247,6 +247,7 @@ remove_cel_band :: proc(style: ^shared.Cel_Style, selected_band: int) -> bool {
 // draw_collapsible_header renders a keyboard-focusable section header and
 // toggles the supplied expansion flag on mouse or keyboard activation.
 draw_collapsible_header :: proc(
+    keyboard: ^shared.UI_Keyboard_State,
     id: shared.UI_Focus_ID,
     bounds: rl.Rectangle,
     title: cstring,
@@ -259,6 +260,7 @@ draw_collapsible_header :: proc(
         label = rl.TextFormat("+  %s", title)
     }
     if shared.ui_gui_button(
+        keyboard,
         id,
         {bounds.x + 3, bounds.y + 3, bounds.width - 6, bounds.height - 6},
         label,
@@ -270,6 +272,7 @@ draw_collapsible_header :: proc(
 // draw_cel_style_slider combines a label, focus-aware slider, and numeric readout.
 // step/coarse_step define deterministic keyboard adjustments.
 draw_cel_style_slider :: proc(
+    keyboard: ^shared.UI_Keyboard_State,
     id: shared.UI_Focus_ID,
     x, y, width: f32,
     label: cstring,
@@ -284,6 +287,7 @@ draw_cel_style_slider :: proc(
     rl.GuiLabel({x, y, label_width, 20}, label)
     previous := value^
     changed := shared.ui_gui_slider_bar(
+        keyboard,
         id,
         {slider_x, y, slider_width, 20},
         nil,
@@ -304,6 +308,7 @@ draw_cel_style_slider :: proc(
 // draw_cel_color_swatch toggles the requested color picker and transfers focus
 // to the correct picker control while always displaying the encoded RGB value.
 draw_cel_color_swatch :: proc(
+    keyboard: ^shared.UI_Keyboard_State,
     id: shared.UI_Focus_ID,
     x, y, width: f32,
     label: cstring,
@@ -313,16 +318,16 @@ draw_cel_color_swatch :: proc(
 ) {
     rl.GuiLabel({x, y, 104, 22}, label)
     swatch_bounds := rl.Rectangle{x + 108, y, 52, 22}
-    if shared.ui_gui_button(id, swatch_bounds, nil) {
+    if shared.ui_gui_button(keyboard, id, swatch_bounds, nil) {
         if state.color_target == target {
             state.color_target = .NONE
         } else {
             state.color_target = target
             switch target {
-            case .BAND_TINT: shared.ui_keyboard_set_focus(.CEL_BAND_TINT_PICKER)
-            case .RIM:       shared.ui_keyboard_set_focus(.CEL_RIM_PICKER)
-            case .HIGHLIGHT: shared.ui_keyboard_set_focus(.CEL_HIGHLIGHT_PICKER)
-            case .OUTLINE:   shared.ui_keyboard_set_focus(.CEL_OUTLINE_PICKER)
+            case .BAND_TINT: shared.ui_keyboard_set_focus(keyboard, .CEL_BAND_TINT_PICKER)
+            case .RIM:       shared.ui_keyboard_set_focus(keyboard, .CEL_RIM_PICKER)
+            case .HIGHLIGHT: shared.ui_keyboard_set_focus(keyboard, .CEL_HIGHLIGHT_PICKER)
+            case .OUTLINE:   shared.ui_keyboard_set_focus(keyboard, .CEL_OUTLINE_PICKER)
             case .NONE:
             }
         }
@@ -434,6 +439,7 @@ cel_style_editor_height :: proc(
 // draw_cel_accent_content renders the common rim/highlight controls. Focus IDs
 // are selected from target so both blocks share layout logic without collisions.
 draw_cel_accent_content :: proc(
+    keyboard: ^shared.UI_Keyboard_State,
     x, y, width: f32,
     label: cstring,
     target: Cel_Color_Target,
@@ -458,6 +464,7 @@ draw_cel_accent_content :: proc(
     }
     previous_enabled := accent.enabled
     _ = shared.ui_gui_check_box(
+        keyboard,
         enabled_focus,
         {x, cursor_y + 2, 18, 18},
         nil,
@@ -467,11 +474,13 @@ draw_cel_accent_content :: proc(
     changed = accent.enabled != previous_enabled
     cursor_y += 22
     changed = draw_cel_style_slider(
+        keyboard,
         threshold_focus,
         x, cursor_y, width, "Threshold", &accent.threshold, 0, 1, 0.01, 0.1,
     ) || changed
     cursor_y += 28
     changed = draw_cel_style_slider(
+        keyboard,
         strength_focus,
         x, cursor_y, width, "Strength", &accent.strength, 0, 2, 0.05, 0.25,
     ) || changed
@@ -480,6 +489,7 @@ draw_cel_accent_content :: proc(
     preserve_samples := c.int(accent.preserve_samples)
     previous_samples := preserve_samples
     _ = shared.ui_gui_spinner(
+        keyboard,
         samples_focus,
         {x + 108, cursor_y, width - 108, 22},
         nil,
@@ -497,6 +507,7 @@ draw_cel_accent_content :: proc(
     cursor_y += 30
     color := cel_vector_color_to_raylib(accent.color)
     draw_cel_color_swatch(
+        keyboard,
         swatch_focus,
         x,
         cursor_y,
@@ -510,6 +521,7 @@ draw_cel_accent_content :: proc(
     if state.color_target == target {
         previous_color := color
         _ = shared.ui_gui_color_picker(
+            keyboard,
             picker_focus,
             {x, cursor_y, 126, 126},
             &color,
@@ -526,6 +538,7 @@ draw_cel_accent_content :: proc(
 // draw_cel_subsection renders the panel chrome and delegates expansion behavior
 // to the shared collapsible-header control.
 draw_cel_subsection :: proc(
+    keyboard: ^shared.UI_Keyboard_State,
     id: shared.UI_Focus_ID,
     x, y, width: f32,
     title: cstring,
@@ -533,6 +546,7 @@ draw_cel_subsection :: proc(
 ) {
     rl.GuiPanel({x, y, width, CEL_SUBSECTION_HEADER_HEIGHT}, nil)
     draw_collapsible_header(
+        keyboard,
         id,
         {x, y, width, CEL_SUBSECTION_HEADER_HEIGHT},
         title,
