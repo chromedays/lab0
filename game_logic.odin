@@ -32,6 +32,13 @@ GAME_ZOMBIE_WINDUP_TIME    :: f32(0.46)
 GAME_ZOMBIE_LUNGE_TIME     :: f32(0.22)
 GAME_ZOMBIE_LUNGE_SPEED    :: f32(7.0)
 GAME_ZOMBIE_RECOVERY_TIME  :: f32(0.62)
+GAME_ZOMBIE_SEPARATION      :: f32(GAME_ZOMBIE_RADIUS * 2.0)
+GAME_ZOMBIE_COMFORT_RADIUS  :: f32(0.92)
+GAME_ZOMBIE_LEASH_RADIUS    :: f32(7.5)
+GAME_ZOMBIE_REENGAGE_RADIUS :: f32(6.5)
+GAME_ZOMBIE_REENGAGE_DELAY  :: f32(0.75)
+GAME_ZOMBIE_RETURN_RADIUS   :: f32(0.12)
+GAME_HIT_FEEDBACK_TIME      :: f32(0.55)
 // The T01 diagnostic moves both subjects by exactly one quarter of a 256x144
 // render pixel per fixed tick: (8 world units / 144 pixels) * 60 Hz / 4.
 GAME_PIXEL_SNAP_TEST_SPEED :: f32(5.0 / 6.0)
@@ -57,6 +64,7 @@ Game_Player_Mode :: enum {
 Game_Zombie_Mode :: enum {
     SHAMBLING,
     CHASING,
+    RETURNING,
     WINDUP,
     LUNGING,
     RECOVERING,
@@ -158,14 +166,18 @@ Game_Player :: struct {
 }
 
 Game_Zombie :: struct {
-    position:        rl.Vector3,
-    facing:          rl.Vector2,
-    mode:            Game_Zombie_Mode,
-    mode_elapsed:    f32,
-    alert_memory:    f32,
-    last_known:      rl.Vector3,
+    position:         rl.Vector3,
+    facing:           rl.Vector2,
+    mode:             Game_Zombie_Mode,
+    mode_elapsed:     f32,
+    alert_memory:     f32,
+    last_known:       rl.Vector3,
     attack_direction: rl.Vector2,
-    patrol_to_end:   bool,
+    return_target:    rl.Vector3,
+    blocked_time:     f32,
+    reengage_delay:   f32,
+    avoidance_sign:   f32,
+    patrol_to_end:    bool,
 }
 
 Game_State :: struct {
@@ -180,6 +192,7 @@ Game_State :: struct {
     elapsed_time:       f32,
     dash_count:         int,
     zombie_hits:        int,
+    hit_feedback:       f32,
     reset_count:        int,
     tick:               u64,
     debug_visible:      bool,
@@ -499,7 +512,12 @@ game_reset_zombie :: proc(state: ^Game_State, zombie_index: int) {
         facing = patrol_direction,
         mode = .SHAMBLING,
         last_known = spawn.position,
+        return_target = spawn.position,
+        avoidance_sign = f32(1),
         patrol_to_end = true,
+    }
+    if zombie_index % 2 != 0 {
+        state.zombies[zombie_index].avoidance_sign = -1
     }
 }
 
@@ -527,6 +545,72 @@ game_zombie_position_blocked :: proc(
     return !game_position_inside_room_radius(room_id, position, GAME_ZOMBIE_RADIUS) ||
            game_position_hits_obstacle_radius(room_id, position, GAME_ZOMBIE_RADIUS) ||
            game_position_hits_hazard_radius(room_id, position, GAME_ZOMBIE_RADIUS)
+}
+
+game_zombie_position_hits_peer :: proc(
+    state: ^Game_State,
+    zombie_index: int,
+    position: rl.Vector3,
+) -> (int, bool) {
+    room_id := GAME_ZOMBIE_SPAWNS[zombie_index].room
+    minimum_distance_squared := GAME_ZOMBIE_SEPARATION * GAME_ZOMBIE_SEPARATION
+    for other, other_index in state.zombies {
+        if other_index == zombie_index ||
+           GAME_ZOMBIE_SPAWNS[other_index].room != room_id {
+            continue
+        }
+        delta_x := position.x - other.position.x
+        delta_z := position.z - other.position.z
+        if delta_x * delta_x + delta_z * delta_z < minimum_distance_squared {
+            return other_index, true
+        }
+    }
+    return -1, false
+}
+
+game_zombie_position_available :: proc(
+    state: ^Game_State,
+    zombie_index: int,
+    position: rl.Vector3,
+) -> bool {
+    room_id := GAME_ZOMBIE_SPAWNS[zombie_index].room
+    if game_zombie_position_blocked(room_id, position) {
+        return false
+    }
+    _, hits_peer := game_zombie_position_hits_peer(state, zombie_index, position)
+    return !hits_peer
+}
+
+game_zombie_patrol_anchor :: proc(
+    zombie_index: int,
+    position: rl.Vector3,
+) -> rl.Vector3 {
+    spawn := GAME_ZOMBIE_SPAWNS[zombie_index]
+    segment := rl.Vector2{
+        spawn.patrol_end.x - spawn.position.x,
+        spawn.patrol_end.z - spawn.position.z,
+    }
+    length_squared := segment.x * segment.x + segment.y * segment.y
+    if length_squared <= 0.00001 {
+        return spawn.position
+    }
+    from_start := rl.Vector2{
+        position.x - spawn.position.x,
+        position.z - spawn.position.z,
+    }
+    progress := clamp(
+        (from_start.x * segment.x + from_start.y * segment.y) / length_squared,
+        f32(0),
+        f32(1),
+    )
+    return spawn.position + rl.Vector3{segment.x * progress, 0, segment.y * progress}
+}
+
+game_zombie_begin_return :: proc(zombie: ^Game_Zombie, zombie_index: int) {
+    zombie.return_target = game_zombie_patrol_anchor(zombie_index, zombie.position)
+    zombie.alert_memory = 0
+    zombie.reengage_delay = GAME_ZOMBIE_REENGAGE_DELAY
+    game_set_zombie_mode(zombie, .RETURNING)
 }
 
 game_line_of_sight_clear :: proc(
@@ -590,7 +674,7 @@ game_move_zombie :: proc(
     candidate_x := start
     candidate_x.x += displacement.x
     candidate_x.y = game_room(room_id).floor_y
-    if !game_zombie_position_blocked(room_id, candidate_x) {
+    if game_zombie_position_available(state, zombie_index, candidate_x) {
         zombie.position = candidate_x
         moved = true
     }
@@ -598,7 +682,7 @@ game_move_zombie :: proc(
     candidate_z := zombie.position
     candidate_z.z += displacement.y
     candidate_z.y = game_room(room_id).floor_y
-    if !game_zombie_position_blocked(room_id, candidate_z) {
+    if game_zombie_position_available(state, zombie_index, candidate_z) {
         zombie.position = candidate_z
         moved = true
     }
@@ -621,9 +705,94 @@ game_zombie_walk_towards :: proc(
         return false
     }
     direction /= distance
-    zombie.facing = direction
+
+    // Keep a small comfort band before the hard collision radius. This avoids
+    // visible shoulder merging while still allowing a true single-file queue.
+    separation: rl.Vector2
+    for other, other_index in state.zombies {
+        if other_index == zombie_index ||
+           GAME_ZOMBIE_SPAWNS[other_index].room != GAME_ZOMBIE_SPAWNS[zombie_index].room {
+            continue
+        }
+        away := rl.Vector2{
+            zombie.position.x - other.position.x,
+            zombie.position.z - other.position.z,
+        }
+        peer_distance := game_vector_length(away)
+        if peer_distance > 0.0001 && peer_distance < GAME_ZOMBIE_COMFORT_RADIUS {
+            separation += away / peer_distance *
+                          ((GAME_ZOMBIE_COMFORT_RADIUS - peer_distance) /
+                           GAME_ZOMBIE_COMFORT_RADIUS)
+        }
+    }
+    if game_vector_length(separation) > 0.0001 {
+        direction = game_normalize_input(direction + separation * 0.85)
+    }
     step := min(speed * dt, distance)
-    return game_move_zombie(state, zombie_index, direction * step)
+
+    // If the direct lane is occupied by a peer closer to the goal, wait in a
+    // stable queue. Agents only sidestep static geometry or peers approaching
+    // from the side, which prevents doorway jitter and swapping.
+    direct_candidate := zombie.position + rl.Vector3{
+        direction.x * step,
+        0,
+        direction.y * step,
+    }
+    blocker_index, peer_blocked := game_zombie_position_hits_peer(
+        state,
+        zombie_index,
+        direct_candidate,
+    )
+    if peer_blocked {
+        blocker := state.zombies[blocker_index]
+        blocker_delta := rl.Vector2{
+            target.x - blocker.position.x,
+            target.z - blocker.position.z,
+        }
+        if game_vector_length(blocker_delta) + 0.02 < distance {
+            zombie.blocked_time += dt
+            return false
+        }
+    }
+
+    // Probe deterministic steering angles. The 90-degree candidates let the
+    // leader slide along a wall; followers continue to queue behind it.
+    turns := [7]f32{
+        0,
+        zombie.avoidance_sign * 0.52,
+        -zombie.avoidance_sign * 0.52,
+        zombie.avoidance_sign * 1.05,
+        -zombie.avoidance_sign * 1.05,
+        zombie.avoidance_sign * 1.57,
+        -zombie.avoidance_sign * 1.57,
+    }
+    for turn in turns {
+        cosine := f32(math.cos(f64(turn)))
+        sine := f32(math.sin(f64(turn)))
+        candidate_direction := rl.Vector2{
+            direction.x * cosine - direction.y * sine,
+            direction.x * sine + direction.y * cosine,
+        }
+        candidate := zombie.position + rl.Vector3{
+            candidate_direction.x * step,
+            0,
+            candidate_direction.y * step,
+        }
+        candidate.y = game_room(GAME_ZOMBIE_SPAWNS[zombie_index].room).floor_y
+        if !game_zombie_position_available(state, zombie_index, candidate) {
+            continue
+        }
+        zombie.position = candidate
+        zombie.facing = candidate_direction
+        zombie.blocked_time = max(zombie.blocked_time - dt * 2, 0)
+        return true
+    }
+    zombie.blocked_time += dt
+    if zombie.blocked_time >= 0.65 {
+        zombie.avoidance_sign = -zombie.avoidance_sign
+        zombie.blocked_time = 0
+    }
+    return false
 }
 
 game_zombie_hits_player :: proc(
@@ -658,6 +827,7 @@ game_update_zombie :: proc(
         return false
     }
     zombie := &state.zombies[zombie_index]
+    zombie.reengage_delay = max(zombie.reengage_delay - dt, 0)
     if spawn.room == .TEST_PIXEL_SNAP {
         // Keep the diagnostic independent from perception, attacks, and their
         // pose changes. The subject only translates along its authored lane.
@@ -695,6 +865,21 @@ game_update_zombie :: proc(
     } else {
         zombie.alert_memory = max(zombie.alert_memory - dt, 0)
     }
+    patrol_anchor := game_zombie_patrol_anchor(zombie_index, zombie.position)
+    leash_delta := rl.Vector2{
+        zombie.position.x - patrol_anchor.x,
+        zombie.position.z - patrol_anchor.z,
+    }
+    beyond_leash := game_vector_length(leash_delta) > GAME_ZOMBIE_LEASH_RADIUS
+    player_patrol_anchor := game_zombie_patrol_anchor(
+        zombie_index,
+        state.player.position,
+    )
+    player_patrol_delta := rl.Vector2{
+        state.player.position.x - player_patrol_anchor.x,
+        state.player.position.z - player_patrol_anchor.z,
+    }
+    player_patrol_distance := game_vector_length(player_patrol_delta)
 
     switch zombie.mode {
     case .SHAMBLING:
@@ -723,6 +908,10 @@ game_update_zombie :: proc(
         }
 
     case .CHASING:
+        if beyond_leash || player_patrol_distance > GAME_ZOMBIE_LEASH_RADIUS {
+            game_zombie_begin_return(zombie, zombie_index)
+            return false
+        }
         if sees_player && player_distance <= GAME_ZOMBIE_ATTACK_RANGE {
             attack_direction := game_normalize_input(to_player)
             if game_vector_length(attack_direction) <= 0.001 {
@@ -734,13 +923,44 @@ game_update_zombie :: proc(
             return false
         }
         if zombie.alert_memory <= 0 {
-            game_set_zombie_mode(zombie, .SHAMBLING)
+            game_zombie_begin_return(zombie, zombie_index)
             return false
         }
         game_zombie_walk_towards(
             state,
             zombie_index,
             zombie.last_known,
+            GAME_ZOMBIE_CHASE_SPEED,
+            dt,
+        )
+
+    case .RETURNING:
+        if zombie.reengage_delay <= 0 &&
+           !beyond_leash &&
+           player_patrol_distance <= GAME_ZOMBIE_REENGAGE_RADIUS &&
+           (sees_player || hears_player) {
+            game_set_zombie_mode(zombie, .CHASING)
+            return false
+        }
+        return_delta := rl.Vector2{
+            zombie.return_target.x - zombie.position.x,
+            zombie.return_target.z - zombie.position.z,
+        }
+        if game_vector_length(return_delta) <= GAME_ZOMBIE_RETURN_RADIUS {
+            if game_zombie_position_available(
+                state,
+                zombie_index,
+                zombie.return_target,
+            ) {
+                zombie.position = zombie.return_target
+                game_set_zombie_mode(zombie, .SHAMBLING)
+            }
+            return false
+        }
+        game_zombie_walk_towards(
+            state,
+            zombie_index,
+            zombie.return_target,
             GAME_ZOMBIE_CHASE_SPEED,
             dt,
         )
@@ -784,7 +1004,7 @@ game_update_zombie :: proc(
             if zombie.alert_memory > 0 {
                 game_set_zombie_mode(zombie, .CHASING)
             } else {
-                game_set_zombie_mode(zombie, .SHAMBLING)
+                game_zombie_begin_return(zombie, zombie_index)
             }
         }
     }
@@ -800,6 +1020,7 @@ game_update_zombies :: proc(
         if game_update_zombie(state, zombie_index, dash_noise, dt) {
             state.zombie_hits += 1
             game_reset_current_room(state)
+            state.hit_feedback = GAME_HIT_FEEDBACK_TIME
             return true
         }
     }
@@ -1008,6 +1229,7 @@ game_update_progress :: proc(state: ^Game_State) {
 game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
     state.tick += 1
     state.elapsed_time += dt
+    state.hit_feedback = max(state.hit_feedback - dt, 0)
     game_particles_fixed_update(&state.particle_system, dt)
     dash_noise := raw_input.dash_pressed || state.player.mode == .DASHING
     state.player.dash_cooldown = max(state.player.dash_cooldown - dt, 0)

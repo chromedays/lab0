@@ -190,7 +190,11 @@ player through an unobstructed field of view, hear nearby dashes, and pursue the
 last detected position. Their committed lunge has a bright ground telegraph;
 dash across the lane during the windup to evade it. A lunge hit returns the
 player and that room's zombies to their room spawns, while the HUD retains the
-hit count.
+hit count. Crowd steering maintains body separation, queues followers behind a
+closer zombie in tight lanes, and returns disengaged zombies to the nearest
+point on their authored patrol segment.
+Attack lanes use a dark outline, neon core, and bright endpoint for contrast;
+hits add a persistent full-screen flash, border, and impact label after reset.
 
 Start directly in a room for inspection with `--game-room R00` through
 `--game-room R06`. Game captures are deterministic at the selected room spawn:
@@ -375,9 +379,18 @@ odin run . -- \
   --capture-output artifacts/traversal/zombie-windup-tick-50.png
 ```
 
+The R02 fixture wakes its single zombie, exposes a windup, retreats beyond the
+chase, and records the zombie's return to its patrol lane:
+
+```sh
+scripts/test-game.sh \
+  --video-report artifacts/zombie-r02-disengage-report \
+  --replay replays/zombie-r02-disengage.json
+```
+
 For a longer stress run, `zombie-gauntlet-30s.json` drives 1,800 fixed ticks
 through the six-zombie R03 arena. It performs 39 dashes, triggers group chases,
-and intentionally records three room resets:
+and records one post-disengagement room reset for hit-feedback review:
 
 ```sh
 scripts/test-game.sh \

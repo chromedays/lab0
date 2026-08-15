@@ -72,6 +72,11 @@ game_zombie_animation_maps_movement_attack_and_recovery_states :: proc(
     )
     testing.expect_value(
         t,
+        game_zombie_animation_kind(.RETURNING),
+        Game_Zombie_Animation_Kind.WALKING,
+    )
+    testing.expect_value(
+        t,
         game_zombie_animation_kind(.WINDUP),
         Game_Zombie_Animation_Kind.ATTACK,
     )
