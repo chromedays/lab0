@@ -97,7 +97,7 @@ game_dash_has_a_fixed_frame_rate_independent_distance :: proc(t: ^testing.T) {
     )
     testing.expectf(
         t,
-        math.abs((position_60hz.x - 0) - GAME_DASH_SPEED * GAME_DASH_DURATION) < 0.0001,
+        math.abs((position_60hz.x - 0) - GAME_DASH_DISTANCE) < 0.0001,
         "dash should travel the configured distance, got %.6f",
         position_60hz.x,
     )

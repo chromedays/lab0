@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "start_room": "R04",
+  "segments": [
+    {"ticks": 24, "move": [1.0, 0.0], "dash_on_first": false},
+    {"ticks": 8, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 30, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 12, "move": [0.0, 0.0], "dash_on_first": false},
+
+    {"ticks": 1, "move": [1.0, 0.0], "dash_on_first": true},
+    {"ticks": 16, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 1, "move": [-1.0, 0.0], "dash_on_first": true},
+    {"ticks": 16, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 1, "move": [1.0, 0.0], "dash_on_first": true},
+    {"ticks": 20, "move": [0.0, 0.0], "dash_on_first": false},
+
+    {"ticks": 30, "move": [-1.0, 0.0], "dash_on_first": false},
+    {"ticks": 6, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 55, "move": [0.0, -1.0], "dash_on_first": false},
+    {"ticks": 1, "move": [1.0, -0.5], "dash_on_first": true},
+    {"ticks": 20, "move": [0.0, 0.0], "dash_on_first": false},
+    {"ticks": 1, "move": [0.0, -1.0], "dash_on_first": true},
+    {"ticks": 40, "move": [0.0, 0.0], "dash_on_first": false}
+  ]
+}

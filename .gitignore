@@ -30,4 +30,5 @@ docs/*
 !docs/cel-shading-v1-spec.md
 !docs/scene-editor-v1-spec.md
 !docs/traversal-prototype-spec.md
+!docs/traversal-tuning-playtest.md
 !docs/video-report-streaming-spec.md
