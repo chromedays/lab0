@@ -90,7 +90,7 @@ Scene_File_Spot_Light :: struct {
 }
 
 // Scene_File is the versioned wire owner. Strings and dynamic arrays produced
-// by JSON unmarshal or scene_to_file must be released by destroy_scene_file;
+// by JSON unmarshal or scene_to_file_data must be released by scene_file_destroy;
 // none of them are transferred into the runtime Scene by reference.
 Scene_File :: struct {
     schema_version:    int,
@@ -108,7 +108,7 @@ Scene_File :: struct {
 // Odin's core JSON parser intentionally accepts a trailing comma in strict
 // mode. Scene files tighten that behavior and also require exactly one root
 // value so the on-disk contract remains RFC-style strict JSON.
-scene_strict_json_valid :: proc(data: []byte) -> bool {
+scene_strict_json_is_valid :: proc(data: []byte) -> bool {
     if !json.is_valid(data, spec = .JSON) {
         return false
     }
@@ -151,25 +151,25 @@ scene_strict_json_valid :: proc(data: []byte) -> bool {
     }
 }
 
-scene_vector3_from_file :: proc(value: [3]f32) -> rl.Vector3 {
+scene_vector3_from_file_data :: proc(value: [3]f32) -> rl.Vector3 {
     return {value[0], value[1], value[2]}
 }
 
-scene_vector3_to_file :: proc(value: rl.Vector3) -> [3]f32 {
+scene_vector3_to_file_data :: proc(value: rl.Vector3) -> [3]f32 {
     return {value.x, value.y, value.z}
 }
 
-scene_transform_from_file :: proc(
+scene_transform_from_file_data :: proc(
     position, rotation_euler_deg, scale: [3]f32,
 ) -> Scene_Transform {
     return {
-        position = scene_vector3_from_file(position),
-        rotation_euler_deg = scene_vector3_from_file(rotation_euler_deg),
-        scale = scene_vector3_from_file(scale),
+        position = scene_vector3_from_file_data(position),
+        rotation_euler_deg = scene_vector3_from_file_data(rotation_euler_deg),
+        scale = scene_vector3_from_file_data(scale),
     }
 }
 
-scene_file_path_portable :: proc(path: string, extension: string) -> bool {
+scene_file_path_is_portable :: proc(path: string, extension: string) -> bool {
     if len(path) == 0 || filepath.is_abs(path) ||
        strings.contains(path, "\\") ||
        path == ".." || strings.has_prefix(path, "../") ||
@@ -187,7 +187,7 @@ scene_file_path_portable :: proc(path: string, extension: string) -> bool {
            !strings.contains(cleaned, "/../")
 }
 
-scene_model_extension_supported :: proc(path: string) -> bool {
+scene_model_extension_is_supported :: proc(path: string) -> bool {
     extension := os.ext(path)
     for supported_extension in SUPPORTED_MODEL_EXTENSIONS {
         if strings.equal_fold(extension, supported_extension) {
@@ -197,20 +197,20 @@ scene_model_extension_supported :: proc(path: string) -> bool {
     return false
 }
 
-scene_light_common_valid :: proc(color: rl.Vector3, intensity: f32) -> bool {
-    return scene_color3_valid(color) &&
-           scene_f32_finite(intensity) &&
+scene_light_common_is_valid :: proc(color: rl.Vector3, intensity: f32) -> bool {
+    return scene_color3_is_valid(color) &&
+           scene_f32_is_finite(intensity) &&
            intensity >= 0 && intensity <= SCENE_MAX_LIGHT_INTENSITY
 }
 
 // Validate all CPU-side invariants before GPU resources are created or a save
 // is attempted. IDs share one namespace across every hierarchy kind because UI
 // selection and future references identify an item independently of its array.
-validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
-    if !scene_name_valid(scene.name) {
+scene_validate :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
+    if !scene_name_is_valid(scene.name) {
         return .INVALID_NAME
     }
-    if !scene_file_path_portable(scene.style_path, ".json") ||
+    if !scene_file_path_is_portable(scene.style_path, ".json") ||
        require_files && !os.is_file(scene.style_path) {
         return .INVALID_STYLE_PATH
     }
@@ -220,20 +220,20 @@ validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
         return .INVALID_RENDER
     }
 
-    if !scene_camera_valid(scene.camera) {
+    if !scene_camera_is_valid(scene.camera) {
         return .INVALID_CAMERA
     }
 
     directional := &scene.directional_light
-    if !scene_direction_valid(directional.direction) ||
-       !scene_light_common_valid(directional.color, directional.intensity) ||
-       !scene_f32_finite(directional.shadow_strength) ||
+    if !scene_direction_is_valid(directional.direction) ||
+       !scene_light_common_is_valid(directional.color, directional.intensity) ||
+       !scene_f32_is_finite(directional.shadow_strength) ||
        directional.shadow_strength < SCENE_MIN_SHADOW_STRENGTH ||
        directional.shadow_strength > SCENE_MAX_SHADOW_STRENGTH ||
-       !scene_f32_finite(directional.shadow_bias) ||
+       !scene_f32_is_finite(directional.shadow_bias) ||
        directional.shadow_bias < SCENE_MIN_SHADOW_BIAS ||
        directional.shadow_bias > SCENE_MAX_SHADOW_BIAS ||
-       !scene_f32_finite(directional.shadow_extent) ||
+       !scene_f32_is_finite(directional.shadow_extent) ||
        directional.shadow_extent < SCENE_MIN_SHADOW_EXTENT ||
        directional.shadow_extent > SCENE_MAX_SHADOW_EXTENT {
         return .INVALID_DIRECTIONAL_LIGHT
@@ -253,8 +253,8 @@ validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
     ids := make(map[string]bool)
     defer delete(ids)
     validate_identity :: proc(id, name: string, ids: ^map[string]bool) -> Scene_Error {
-        if !scene_id_valid(id) { return .INVALID_ID }
-        if !scene_name_valid(name) { return .INVALID_NAME }
+        if !scene_id_is_valid(id) { return .INVALID_ID }
+        if !scene_name_is_valid(name) { return .INVALID_NAME }
         if id in ids^ { return .DUPLICATE_ID }
         ids^[id] = true
         return .NONE
@@ -264,11 +264,11 @@ validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
         if error := validate_identity(model.id, model.name, &ids); error != .NONE {
             return error
         }
-        if !scene_transform_valid(model.transform) {
+        if !scene_transform_is_valid(model.transform) {
             return .INVALID_TRANSFORM
         }
-        if !scene_file_path_portable(model.source, os.ext(model.source)) ||
-           !scene_model_extension_supported(model.source) ||
+        if !scene_file_path_is_portable(model.source, os.ext(model.source)) ||
+           !scene_model_extension_is_supported(model.source) ||
            require_files && !os.is_file(model.source) {
             return .INVALID_MODEL
         }
@@ -284,7 +284,7 @@ validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
            error != .NONE {
             return error
         }
-        if !scene_transform_valid(primitive.transform) ||
+        if !scene_transform_is_valid(primitive.transform) ||
            scene_primitive_shape_to_string(primitive.shape) == "" {
             return .INVALID_PRIMITIVE
         }
@@ -295,12 +295,12 @@ validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
            error != .NONE {
             return error
         }
-        if !scene_vector3_finite(light.position) ||
+        if !scene_vector3_is_finite(light.position) ||
            math.abs(light.position.x) > SCENE_MAX_POSITION ||
            math.abs(light.position.y) > SCENE_MAX_POSITION ||
            math.abs(light.position.z) > SCENE_MAX_POSITION ||
-           !scene_light_common_valid(light.color, light.intensity) ||
-           !scene_f32_finite(light.range) ||
+           !scene_light_common_is_valid(light.color, light.intensity) ||
+           !scene_f32_is_finite(light.range) ||
            light.range < SCENE_MIN_LIGHT_RANGE ||
            light.range > SCENE_MAX_LIGHT_RANGE {
             return .INVALID_POINT_LIGHT
@@ -312,17 +312,17 @@ validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
            error != .NONE {
             return error
         }
-        if !scene_vector3_finite(light.position) ||
+        if !scene_vector3_is_finite(light.position) ||
            math.abs(light.position.x) > SCENE_MAX_POSITION ||
            math.abs(light.position.y) > SCENE_MAX_POSITION ||
            math.abs(light.position.z) > SCENE_MAX_POSITION ||
-           !scene_direction_valid(light.direction) ||
-           !scene_light_common_valid(light.color, light.intensity) ||
-           !scene_f32_finite(light.range) ||
+           !scene_direction_is_valid(light.direction) ||
+           !scene_light_common_is_valid(light.color, light.intensity) ||
+           !scene_f32_is_finite(light.range) ||
            light.range < SCENE_MIN_LIGHT_RANGE ||
            light.range > SCENE_MAX_LIGHT_RANGE ||
-           !scene_f32_finite(light.inner_angle_deg) ||
-           !scene_f32_finite(light.outer_angle_deg) ||
+           !scene_f32_is_finite(light.inner_angle_deg) ||
+           !scene_f32_is_finite(light.outer_angle_deg) ||
            light.inner_angle_deg < 0 ||
            light.inner_angle_deg >= light.outer_angle_deg ||
            light.outer_angle_deg > 89 {
@@ -332,9 +332,9 @@ validate_scene :: proc(scene: ^Scene, require_files := true) -> Scene_Error {
     return .NONE
 }
 
-// Both json.unmarshal and scene_to_file create the same ownership shape, so a
+// Both json.unmarshal and scene_to_file_data create the same ownership shape, so a
 // single destructor handles load temporaries, save temporaries, and failures.
-destroy_scene_file :: proc(file: ^Scene_File) {
+scene_file_destroy :: proc(file: ^Scene_File) {
     if len(file.name) > 0 { delete(file.name) }
     if len(file.style) > 0 { delete(file.style) }
     if len(file.render.edge_aa) > 0 { delete(file.render.edge_aa) }
@@ -367,7 +367,7 @@ destroy_scene_file :: proc(file: ^Scene_File) {
 // Build a fully owned runtime value without mutating an active scene. Any
 // conversion or validation failure destroys the partial result before return;
 // callers may commit the returned Scene only on .NONE.
-scene_from_file :: proc(
+scene_from_file_data :: proc(
     file: ^Scene_File,
     require_files := true,
 ) -> (Scene, Scene_Error) {
@@ -394,16 +394,16 @@ scene_from_file :: proc(
         },
         camera = {
             projection = projection,
-            position = scene_vector3_from_file(file.camera.position),
-            target = scene_vector3_from_file(file.camera.target),
-            up = scene_vector3_from_file(file.camera.up),
+            position = scene_vector3_from_file_data(file.camera.position),
+            target = scene_vector3_from_file_data(file.camera.target),
+            up = scene_vector3_from_file_data(file.camera.up),
             vertical_fov_deg = file.camera.vertical_fov_deg,
             ortho_height = file.camera.ortho_height,
         },
         directional_light = {
             enabled = file.directional_light.enabled,
-            direction = scene_vector3_from_file(file.directional_light.direction),
-            color = scene_vector3_from_file(file.directional_light.color),
+            direction = scene_vector3_from_file_data(file.directional_light.direction),
+            color = scene_vector3_from_file_data(file.directional_light.color),
             intensity = file.directional_light.intensity,
             // Shadow members are optional so v1 scenes written before hard
             // shadows remain valid and preserve their original unshadowed look.
@@ -431,7 +431,7 @@ scene_from_file :: proc(
             name = strings.clone(model.name),
             visible = model.visible,
             source = strings.clone(model.source),
-            transform = scene_transform_from_file(
+            transform = scene_transform_from_file_data(
                 model.position,
                 model.rotation_euler_deg,
                 model.scale,
@@ -449,7 +449,7 @@ scene_from_file :: proc(
     for primitive in file.primitives {
         shape, shape_valid := scene_primitive_shape_from_string(primitive.shape)
         if !shape_valid {
-            destroy_scene(&scene)
+            scene_destroy(&scene)
             return {}, .INVALID_PRIMITIVE
         }
         append(&scene.primitives, Scene_Primitive{
@@ -457,7 +457,7 @@ scene_from_file :: proc(
             name = strings.clone(primitive.name),
             visible = primitive.visible,
             shape = shape,
-            transform = scene_transform_from_file(
+            transform = scene_transform_from_file_data(
                 primitive.position,
                 primitive.rotation_euler_deg,
                 primitive.scale,
@@ -473,8 +473,8 @@ scene_from_file :: proc(
             id = strings.clone(light.id),
             name = strings.clone(light.name),
             enabled = light.enabled,
-            position = scene_vector3_from_file(light.position),
-            color = scene_vector3_from_file(light.color),
+            position = scene_vector3_from_file_data(light.position),
+            color = scene_vector3_from_file_data(light.color),
             intensity = light.intensity,
             range = light.range,
         })
@@ -484,9 +484,9 @@ scene_from_file :: proc(
             id = strings.clone(light.id),
             name = strings.clone(light.name),
             enabled = light.enabled,
-            position = scene_vector3_from_file(light.position),
-            direction = scene_vector3_from_file(light.direction),
-            color = scene_vector3_from_file(light.color),
+            position = scene_vector3_from_file_data(light.position),
+            direction = scene_vector3_from_file_data(light.direction),
+            color = scene_vector3_from_file_data(light.color),
             intensity = light.intensity,
             range = light.range,
             inner_angle_deg = light.inner_angle_deg,
@@ -494,18 +494,18 @@ scene_from_file :: proc(
         })
     }
 
-    if scene_direction_valid(scene.directional_light.direction) {
+    if scene_direction_is_valid(scene.directional_light.direction) {
         scene.directional_light.direction =
-            scene_normalize_direction_stable(scene.directional_light.direction)
+            scene_direction_normalize_stable(scene.directional_light.direction)
     }
     for &light in scene.spot_lights {
-        if scene_direction_valid(light.direction) {
-            light.direction = scene_normalize_direction_stable(light.direction)
+        if scene_direction_is_valid(light.direction) {
+            light.direction = scene_direction_normalize_stable(light.direction)
         }
     }
-    if validation_error := validate_scene(&scene, require_files);
+    if validation_error := scene_validate(&scene, require_files);
        validation_error != .NONE {
-        destroy_scene(&scene)
+        scene_destroy(&scene)
         return {}, validation_error
     }
     return scene, .NONE
@@ -514,7 +514,7 @@ scene_from_file :: proc(
 // Produce an independent wire owner in declaration/array order. Euler angles
 // and directions are canonicalized here so repeated save/load/save operations
 // remain byte-stable instead of accumulating representational drift.
-scene_to_file :: proc(scene: ^Scene) -> Scene_File {
+scene_to_file_data :: proc(scene: ^Scene) -> Scene_File {
     file := Scene_File{
         schema_version = SCENE_SCHEMA_VERSION,
         name = strings.clone(scene.name),
@@ -531,18 +531,18 @@ scene_to_file :: proc(scene: ^Scene) -> Scene_File {
         },
         camera = {
             projection = strings.clone(scene_projection_to_string(scene.camera.projection)),
-            position = scene_vector3_to_file(scene.camera.position),
-            target = scene_vector3_to_file(scene.camera.target),
-            up = scene_vector3_to_file(scene.camera.up),
+            position = scene_vector3_to_file_data(scene.camera.position),
+            target = scene_vector3_to_file_data(scene.camera.target),
+            up = scene_vector3_to_file_data(scene.camera.up),
             vertical_fov_deg = scene.camera.vertical_fov_deg,
             ortho_height = scene.camera.ortho_height,
         },
         directional_light = {
             enabled = scene.directional_light.enabled,
-            direction = scene_vector3_to_file(
-                scene_normalize_direction_stable(scene.directional_light.direction),
+            direction = scene_vector3_to_file_data(
+                scene_direction_normalize_stable(scene.directional_light.direction),
             ),
-            color = scene_vector3_to_file(scene.directional_light.color),
+            color = scene_vector3_to_file_data(scene.directional_light.color),
             intensity = scene.directional_light.intensity,
             casts_shadows = scene.directional_light.casts_shadows,
             shadow_strength = scene.directional_light.shadow_strength,
@@ -551,15 +551,15 @@ scene_to_file :: proc(scene: ^Scene) -> Scene_File {
         },
     }
     for model in scene.models {
-        rotation := scene_normalize_euler_degrees(model.transform.rotation_euler_deg)
+        rotation := scene_euler_degrees_normalize(model.transform.rotation_euler_deg)
         file_model := Scene_File_Model{
             id = strings.clone(model.id),
             name = strings.clone(model.name),
             visible = model.visible,
             source = strings.clone(model.source),
-            position = scene_vector3_to_file(model.transform.position),
-            rotation_euler_deg = scene_vector3_to_file(rotation),
-            scale = scene_vector3_to_file(model.transform.scale),
+            position = scene_vector3_to_file_data(model.transform.position),
+            rotation_euler_deg = scene_vector3_to_file_data(rotation),
+            scale = scene_vector3_to_file_data(model.transform.scale),
             tint = {model.tint.r, model.tint.g, model.tint.b, model.tint.a},
         }
         if animation, present := model.animation.?; present {
@@ -571,7 +571,7 @@ scene_to_file :: proc(scene: ^Scene) -> Scene_File {
         append(&file.models, file_model)
     }
     for primitive in scene.primitives {
-        rotation := scene_normalize_euler_degrees(
+        rotation := scene_euler_degrees_normalize(
             primitive.transform.rotation_euler_deg,
         )
         append(&file.primitives, Scene_File_Primitive{
@@ -579,9 +579,9 @@ scene_to_file :: proc(scene: ^Scene) -> Scene_File {
             name = strings.clone(primitive.name),
             visible = primitive.visible,
             shape = strings.clone(scene_primitive_shape_to_string(primitive.shape)),
-            position = scene_vector3_to_file(primitive.transform.position),
-            rotation_euler_deg = scene_vector3_to_file(rotation),
-            scale = scene_vector3_to_file(primitive.transform.scale),
+            position = scene_vector3_to_file_data(primitive.transform.position),
+            rotation_euler_deg = scene_vector3_to_file_data(rotation),
+            scale = scene_vector3_to_file_data(primitive.transform.scale),
             albedo = {
                 primitive.albedo.r, primitive.albedo.g,
                 primitive.albedo.b, primitive.albedo.a,
@@ -593,8 +593,8 @@ scene_to_file :: proc(scene: ^Scene) -> Scene_File {
             id = strings.clone(light.id),
             name = strings.clone(light.name),
             enabled = light.enabled,
-            position = scene_vector3_to_file(light.position),
-            color = scene_vector3_to_file(light.color),
+            position = scene_vector3_to_file_data(light.position),
+            color = scene_vector3_to_file_data(light.color),
             intensity = light.intensity,
             range = light.range,
         })
@@ -604,11 +604,11 @@ scene_to_file :: proc(scene: ^Scene) -> Scene_File {
             id = strings.clone(light.id),
             name = strings.clone(light.name),
             enabled = light.enabled,
-            position = scene_vector3_to_file(light.position),
-            direction = scene_vector3_to_file(
-                scene_normalize_direction_stable(light.direction),
+            position = scene_vector3_to_file_data(light.position),
+            direction = scene_vector3_to_file_data(
+                scene_direction_normalize_stable(light.direction),
             ),
-            color = scene_vector3_to_file(light.color),
+            color = scene_vector3_to_file_data(light.color),
             intensity = light.intensity,
             range = light.range,
             inner_angle_deg = light.inner_angle_deg,
@@ -620,39 +620,39 @@ scene_to_file :: proc(scene: ^Scene) -> Scene_File {
 
 // Parsing is two-stage: the strict token pass rejects syntax accepted by Odin's
 // JSON decoder, then unmarshal and conversion establish ownership and semantics.
-load_scene :: proc(path: string, require_files := true) -> (Scene, Scene_Error) {
+scene_load :: proc(path: string, require_files := true) -> (Scene, Scene_Error) {
     file_data, read_error := os.read_entire_file(path, context.allocator)
     if read_error != nil {
         return {}, .READ_FAILED
     }
     defer delete(file_data)
 
-    if !scene_strict_json_valid(file_data) {
+    if !scene_strict_json_is_valid(file_data) {
         return {}, .PARSE_FAILED
     }
     file: Scene_File
     parse_error := json.unmarshal(file_data, &file, spec = .JSON)
     if parse_error != nil {
-        destroy_scene_file(&file)
+        scene_file_destroy(&file)
         return {}, .PARSE_FAILED
     }
-    defer destroy_scene_file(&file)
-    return scene_from_file(&file, require_files)
+    defer scene_file_destroy(&file)
+    return scene_from_file_data(&file, require_files)
 }
 
 // Save is transactional at the destination path. The canonical JSON is written
 // to a sibling temporary file and renamed only after the entire write succeeds,
 // leaving the previous scene intact on encoding or I/O failure.
-save_scene :: proc(path: string, scene: ^Scene) -> Scene_Error {
-    if validation_error := validate_scene(scene); validation_error != .NONE {
+scene_save :: proc(path: string, scene: ^Scene) -> Scene_Error {
+    if validation_error := scene_validate(scene); validation_error != .NONE {
         return validation_error
     }
     if len(path) == 0 || !strings.equal_fold(os.ext(path), ".json") {
         return .WRITE_FAILED
     }
 
-    file := scene_to_file(scene)
-    defer destroy_scene_file(&file)
+    file := scene_to_file_data(scene)
+    defer scene_file_destroy(&file)
     encoded, marshal_error := json.marshal(
         file,
         {spec = .JSON, pretty = true, use_spaces = true, spaces = 2},

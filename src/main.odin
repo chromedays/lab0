@@ -335,9 +335,9 @@ execute_ui_command :: proc(
         command_context.shortcuts_help_open^ =
             !command_context.shortcuts_help_open^
         if command_context.shortcuts_help_open^ {
-            shared.ui_keyboard_set_focus(command_context.keyboard, .HELP_CLOSE)
+            shared.ui_keyboard_focus_set(command_context.keyboard, .HELP_CLOSE)
         } else {
-            shared.ui_keyboard_clear_focus(command_context.keyboard)
+            shared.ui_keyboard_focus_clear(command_context.keyboard)
         }
     case .QUIT:
         command_context.quit_requested^ = true
@@ -348,7 +348,7 @@ execute_ui_command :: proc(
         command_context.animation.dropdown_open = false
         command_context.background_picker_open^ = false
         command_context.cel_ui.color_target = .NONE
-        shared.ui_keyboard_set_focus(command_context.keyboard, .MODEL_SEARCH)
+        shared.ui_keyboard_focus_set(command_context.keyboard, .MODEL_SEARCH)
         // Prevent the shortcut key from becoming search text.
         for rl.GetCharPressed() != 0 {}
     case .TOGGLE_MODEL_SECTION:
@@ -381,7 +381,7 @@ execute_ui_command :: proc(
             command_context.inspector.scroll_y = inspector_cel_section_offset(
                 command_context.inspector,
             )
-            shared.ui_keyboard_set_focus(command_context.keyboard, .CEL_HEADER)
+            shared.ui_keyboard_focus_set(command_context.keyboard, .CEL_HEADER)
         } else {
             command_context.cel_ui.color_target = .NONE
         }
@@ -471,33 +471,33 @@ execute_ui_command :: proc(
             c.int(MAX_DOWNSCALE_LEVEL),
         )
     case .ANIMATION_PLAY_PAUSE:
-        if shared.has_playable_animations(command_context.animation) {
+        if shared.animation_playback_has_playable_animations(command_context.animation) {
             command_context.animation.is_playing =
                 !command_context.animation.is_playing
         }
     case .ANIMATION_FIRST_FRAME:
-        if shared.has_playable_animations(command_context.animation) {
-            shared.animation_reset_to_first_frame(command_context.animation)
+        if shared.animation_playback_has_playable_animations(command_context.animation) {
+            shared.animation_playback_reset_to_first_frame(command_context.animation)
         }
     case .ANIMATION_PREVIOUS_FRAME:
-        _ = shared.animation_step_frame(command_context.animation, -1)
+        _ = shared.animation_playback_step_frame(command_context.animation, -1)
     case .ANIMATION_NEXT_FRAME:
-        _ = shared.animation_step_frame(command_context.animation, 1)
+        _ = shared.animation_playback_step_frame(command_context.animation, 1)
     case .ANIMATION_PREVIOUS_CLIP:
-        _ = shared.animation_cycle_clip(command_context.animation, -1)
+        _ = shared.animation_playback_cycle_clip(command_context.animation, -1)
     case .ANIMATION_NEXT_CLIP:
-        _ = shared.animation_cycle_clip(command_context.animation, 1)
+        _ = shared.animation_playback_cycle_clip(command_context.animation, 1)
     case .ANIMATION_TOGGLE_LOOP:
-        if shared.has_playable_animations(command_context.animation) {
+        if shared.animation_playback_has_playable_animations(command_context.animation) {
             command_context.animation.loop = !command_context.animation.loop
         }
     case .ANIMATION_TOGGLE_SAMPLED:
-        if animation, found := shared.get_active_animation(command_context.animation);
+        if animation, found := shared.animation_playback_find_active_animation(command_context.animation);
            found {
             command_context.animation.sampled_playback =
                 !command_context.animation.sampled_playback
             if command_context.animation.sampled_playback {
-                command_context.animation.current_frame = shared.get_animation_pose_frame(
+                command_context.animation.current_frame = shared.animation_playback_pose_frame(
                     command_context.animation,
                     animation,
                 )
@@ -538,7 +538,7 @@ execute_ui_command :: proc(
         if command_context.background_picker_open^ {
             command_context.cel_ui.color_target = .NONE
             command_context.animation.dropdown_open = false
-            shared.ui_keyboard_set_focus(command_context.keyboard, .BACKGROUND_PICKER)
+            shared.ui_keyboard_focus_set(command_context.keyboard, .BACKGROUND_PICKER)
         }
     case .RESET_BACKGROUND:
         command_context.background_color^ = rl.BLACK
@@ -551,7 +551,7 @@ execute_ui_command :: proc(
 // and 2 invalid capture configuration or state.
 main :: proc() {
     if scene_editor_mode_requested(os.args[1:]) ||
-       shared.cli_argument_present(os.args[1:], "--scene-help") {
+       shared.cli_argument_is_present(os.args[1:], "--scene-help") {
         scene_editor_exit_code := run_scene_editor_mode(os.args[1:])
         if scene_editor_exit_code != 0 {
             os.exit(scene_editor_exit_code)
@@ -559,15 +559,15 @@ main :: proc() {
         return
     }
     if game_mode_requested(os.args[1:]) ||
-       shared.cli_argument_present(os.args[1:], "--game-help") {
+       shared.cli_argument_is_present(os.args[1:], "--game-help") {
         game_exit_code := run_game_mode(os.args[1:])
         if game_exit_code != 0 {
             os.exit(game_exit_code)
         }
         return
     }
-    if shared.standard_help_requested(os.args[1:]) {
-        shared.print_viewer_usage()
+    if shared.cli_help_is_requested(os.args[1:]) {
+        shared.cli_viewer_usage_print()
         return
     }
 
@@ -578,10 +578,10 @@ main :: proc() {
         defer log.destroy_console_logger(console_logger)
         context.logger = console_logger
 
-        capture_parse_result := shared.parse_capture_options(os.args[1:])
-        defer shared.destroy_capture_options(&capture_parse_result.options)
+        capture_parse_result := shared.capture_options_parse(os.args[1:])
+        defer shared.capture_options_destroy(&capture_parse_result.options)
         if capture_parse_result.options.help_requested {
-            shared.print_capture_usage()
+            shared.cli_capture_usage_print()
             exit_code = 0
             break application_scope
         }
@@ -633,7 +633,7 @@ main :: proc() {
                 capture_error_message,
                 capture_parse_result.error_argument,
             )
-            shared.print_capture_usage()
+            shared.cli_capture_usage_print()
             exit_code = 2
             break application_scope
         }
@@ -645,18 +645,18 @@ main :: proc() {
             log.error(
                 viewer_video_options_error_message(viewer_video_options_error),
             )
-            shared.print_capture_usage()
+            shared.cli_capture_usage_print()
             exit_code = 2
             break application_scope
         }
         viewer_video_enabled := len(capture_options.video_output) > 0
         viewer_video_encoder: shared.Video_Stream_Encoder
-        defer shared.destroy_video_stream_encoder(&viewer_video_encoder)
+        defer shared.video_stream_encoder_destroy(&viewer_video_encoder)
 
-        cel_style := shared.make_classic_cel_style()
-        defer shared.destroy_cel_style(&cel_style)
+        cel_style := shared.cel_style_make_classic()
+        defer shared.cel_style_destroy(&cel_style)
         if capture_options.enabled && len(capture_options.style_path) > 0 {
-            loaded_style, style_error := shared.load_cel_style(capture_options.style_path)
+            loaded_style, style_error := shared.cel_style_load(capture_options.style_path)
             if style_error != .NONE {
                 log.errorf(
                     "Failed to load capture cel style %s: %s",
@@ -666,7 +666,7 @@ main :: proc() {
                 exit_code = 2
                 break application_scope
             }
-            shared.replace_cel_style(&cel_style, loaded_style)
+            shared.cel_style_move_assign(&cel_style, &loaded_style)
         }
 
         // Scan and label model sources inline during the application's only startup.
@@ -744,7 +744,7 @@ main :: proc() {
                 ASSETS_PATH,
             )
         }
-        defer shared.destroy_model_assets(&model_assets)
+        defer shared.model_assets_destroy(&model_assets)
 
         rl.SetTraceLogLevel(.WARNING);
         if capture_options.enabled {
@@ -769,40 +769,40 @@ main :: proc() {
         rl.SetTargetFPS(60);
 
         scene_shader, scene_shader_source, scene_shader_loaded :=
-            shared.load_shader_with_includes(VS_PATH, FS_PATH)
+            shared.shader_program_load_with_includes(VS_PATH, FS_PATH)
         defer rl.UnloadShader(scene_shader)
-        defer shared.destroy_preprocessed_shader_program_source(&scene_shader_source)
+        defer shared.shader_preprocessed_program_source_destroy(&scene_shader_source)
         assert(scene_shader_loaded)
-        scene_cel_bindings := shared.resolve_cel_shader_bindings(scene_shader)
+        scene_cel_bindings := shared.cel_shader_bindings_resolve(scene_shader)
 
         downscale_shader, downscale_shader_source, downscale_shader_loaded :=
-            shared.load_fragment_shader_with_includes(DOWNSCALE_FS_PATH)
+            shared.shader_fragment_load_with_includes(DOWNSCALE_FS_PATH)
         defer rl.UnloadShader(downscale_shader)
-        defer shared.destroy_preprocessed_shader_source(&downscale_shader_source)
+        defer shared.shader_preprocessed_source_destroy(&downscale_shader_source)
         assert(downscale_shader_loaded)
 
-        cel_band_shader, cel_band_shader_source, cel_band_shader_loaded := shared.load_shader_with_includes(
+        cel_band_shader, cel_band_shader_source, cel_band_shader_loaded := shared.shader_program_load_with_includes(
             VS_PATH,
             CEL_BAND_FS_PATH,
         )
-        defer shared.destroy_preprocessed_shader_program_source(&cel_band_shader_source)
+        defer shared.shader_preprocessed_program_source_destroy(&cel_band_shader_source)
         assert(cel_band_shader_loaded)
-        cel_band_bindings := shared.resolve_cel_shader_bindings(cel_band_shader)
+        cel_band_bindings := shared.cel_shader_bindings_resolve(cel_band_shader)
 
         mask_downscale_shader, mask_downscale_shader_source, mask_downscale_shader_loaded :=
-            shared.load_fragment_shader_with_includes(MASK_DOWNSCALE_FS_PATH)
+            shared.shader_fragment_load_with_includes(MASK_DOWNSCALE_FS_PATH)
         defer rl.UnloadShader(mask_downscale_shader)
-        defer shared.destroy_preprocessed_shader_source(&mask_downscale_shader_source)
+        defer shared.shader_preprocessed_source_destroy(&mask_downscale_shader_source)
         assert(mask_downscale_shader_loaded)
 
         outline_shader, outline_shader_source, outline_shader_loaded :=
-            shared.load_fragment_shader_with_includes(OUTLINE_FS_PATH)
+            shared.shader_fragment_load_with_includes(OUTLINE_FS_PATH)
         defer rl.UnloadShader(outline_shader)
-        defer shared.destroy_preprocessed_shader_source(&outline_shader_source)
+        defer shared.shader_preprocessed_source_destroy(&outline_shader_source)
         assert(outline_shader_loaded)
 
         // Build the ramp texture inline at its only creation site.
-        cel_ramp_pixels := shared.build_cel_ramp_pixels(&cel_style)
+        cel_ramp_pixels := shared.cel_ramp_pixels_build(&cel_style)
         cel_ramp_image := rl.Image{
             data = raw_data(cel_ramp_pixels[:]),
             width = shared.CEL_RAMP_WIDTH,
@@ -822,8 +822,8 @@ main :: proc() {
         active_model: rl.Model
         animation_playback: shared.Animation_Playback
         defer {
-            shared.destroy_animation_playback(&animation_playback)
-            if shared.is_model_loaded(active_model) {
+            shared.animation_playback_destroy(&animation_playback)
+            if shared.model_is_loaded(active_model) {
                 rl.UnloadModel(active_model)
             }
         }
@@ -844,14 +844,14 @@ main :: proc() {
             active_index = -1,
             focus_index = -1,
         }
-        defer shared.destroy_model_browser_state(&model_browser)
-        shared.rebuild_model_search_results(&model_assets, &model_browser)
+        defer shared.model_browser_state_destroy(&model_browser)
+        shared.model_search_results_rebuild(&model_assets, &model_browser)
 
         if len(model_assets.paths) > 0 {
             initial_model_index := 0
             if capture_options.enabled && len(capture_options.model_source) > 0 {
                 requested_model_index, requested_model_found :=
-                    shared.find_capture_model_source(
+                    shared.capture_find_model_source(
                         &model_assets,
                         capture_options.model_source,
                     )
@@ -874,10 +874,10 @@ main :: proc() {
                 }
             }
 
-            initial_model := shared.load_model_source(&model_assets, initial_model_index)
-            if shared.is_model_loaded(initial_model) {
+            initial_model := shared.model_source_load(&model_assets, initial_model_index)
+            if shared.model_is_loaded(initial_model) {
                 active_model = initial_model
-                animation_playback = shared.load_animation_playback(
+                animation_playback = shared.animation_playback_load(
                     active_model,
                     model_assets.paths[initial_model_index],
                     model_assets.kinds[initial_model_index],
@@ -885,7 +885,7 @@ main :: proc() {
                 model_center = get_model_center(active_model)
                 loaded_model_index = c.int(initial_model_index)
                 model_active_index = loaded_model_index
-                shared.set_model_browser_active_source(
+                shared.model_browser_active_source_set(
                     &model_browser,
                     loaded_model_index,
                 )
@@ -935,7 +935,7 @@ main :: proc() {
                     if capture_options.animation_frame_set ||
                        capture_options.frame_range_set {
                         capture_animation, capture_animation_found :=
-                            shared.get_active_animation(&animation_playback)
+                            shared.animation_playback_find_active_animation(&animation_playback)
                         if !capture_animation_found {
                             if capture_options.frame_range_set {
                                 log.errorf(
@@ -978,7 +978,7 @@ main :: proc() {
                         }
                         animation_playback.current_frame = requested_first_frame
                         animation_playback.pose_dirty = true
-                        shared.update_animation_playback(
+                        shared.animation_playback_update(
                             &animation_playback,
                             active_model,
                             0,
@@ -1018,8 +1018,8 @@ main :: proc() {
 
         downscale_level := c.int(DEFAULT_DOWNSCALE_LEVEL)
         applied_downscale_level := downscale_level
-        downsample_width := shared.get_downsample_dimension(screen_width, downscale_level)
-        downsample_height := shared.get_downsample_dimension(screen_height, downscale_level)
+        downsample_width := shared.render_downsample_dimension(screen_width, downscale_level)
+        downsample_height := shared.render_downsample_dimension(screen_height, downscale_level)
         downsample_render_target := rl.LoadRenderTexture(
             downsample_width,
             downsample_height,
@@ -1044,7 +1044,7 @@ main :: proc() {
         defer rl.UnloadRenderTexture(composite_render_target)
         rl.SetTextureFilter(composite_render_target.texture, .POINT)
         if viewer_video_enabled {
-            video_start_error := shared.start_video_stream_encoder(
+            video_start_error := shared.video_stream_encoder_start(
                 &viewer_video_encoder,
                 capture_options.video_output,
                 VIEWER_VIDEO_WIDTH,
@@ -1184,11 +1184,11 @@ main :: proc() {
                     c.int(MIN_DOWNSCALE_LEVEL),
                     c.int(MAX_DOWNSCALE_LEVEL),
                 )
-                requested_width := shared.get_downsample_dimension(
+                requested_width := shared.render_downsample_dimension(
                     screen_width,
                     requested_downscale_level,
                 )
-                requested_height := shared.get_downsample_dimension(
+                requested_height := shared.render_downsample_dimension(
                     screen_height,
                     requested_downscale_level,
                 )
@@ -1274,19 +1274,19 @@ main :: proc() {
                 active_modal,
             )
             if shortcuts_help_open {
-                shared.ui_keyboard_set_focus(&ui_keyboard, .HELP_CLOSE)
+                shared.ui_keyboard_focus_set(&ui_keyboard, .HELP_CLOSE)
             } else if model_browser.search_editing {
-                shared.ui_keyboard_set_focus(&ui_keyboard, .MODEL_SEARCH)
+                shared.ui_keyboard_focus_set(&ui_keyboard, .MODEL_SEARCH)
             } else if animation_playback.dropdown_open {
-                shared.ui_keyboard_set_focus(&ui_keyboard, .ANIMATION_CLIP)
+                shared.ui_keyboard_focus_set(&ui_keyboard, .ANIMATION_CLIP)
             } else if background_picker_open {
-                shared.ui_keyboard_set_focus(&ui_keyboard, .BACKGROUND_PICKER)
+                shared.ui_keyboard_focus_set(&ui_keyboard, .BACKGROUND_PICKER)
             } else {
                 switch cel_style_ui.color_target {
-                case .BAND_TINT: shared.ui_keyboard_set_focus(&ui_keyboard, .CEL_BAND_TINT_PICKER)
-                case .RIM:       shared.ui_keyboard_set_focus(&ui_keyboard, .CEL_RIM_PICKER)
-                case .HIGHLIGHT: shared.ui_keyboard_set_focus(&ui_keyboard, .CEL_HIGHLIGHT_PICKER)
-                case .OUTLINE:   shared.ui_keyboard_set_focus(&ui_keyboard, .CEL_OUTLINE_PICKER)
+                case .BAND_TINT: shared.ui_keyboard_focus_set(&ui_keyboard, .CEL_BAND_TINT_PICKER)
+                case .RIM:       shared.ui_keyboard_focus_set(&ui_keyboard, .CEL_RIM_PICKER)
+                case .HIGHLIGHT: shared.ui_keyboard_focus_set(&ui_keyboard, .CEL_HIGHLIGHT_PICKER)
+                case .OUTLINE:   shared.ui_keyboard_focus_set(&ui_keyboard, .CEL_OUTLINE_PICKER)
                 case .NONE:
                 }
             }
@@ -1294,17 +1294,17 @@ main :: proc() {
             if window_focused && rl.IsKeyPressed(.ESCAPE) {
                 if shortcuts_help_open {
                     shortcuts_help_open = false
-                    shared.ui_keyboard_clear_focus(&ui_keyboard)
+                    shared.ui_keyboard_focus_clear(&ui_keyboard)
                 } else if animation_playback.dropdown_open {
                     animation_playback.dropdown_open = false
-                    shared.ui_keyboard_set_focus(&ui_keyboard, .ANIMATION_CLIP)
+                    shared.ui_keyboard_focus_set(&ui_keyboard, .ANIMATION_CLIP)
                 } else if background_picker_open {
                     background_picker_open = false
-                    shared.ui_keyboard_set_focus(&ui_keyboard, .BACKGROUND_PICKER_TOGGLE)
+                    shared.ui_keyboard_focus_set(&ui_keyboard, .BACKGROUND_PICKER_TOGGLE)
                 } else if cel_style_ui.color_target != .NONE {
                     cel_style_ui.color_target = .NONE
                 } else if !model_browser.search_editing {
-                    shared.ui_keyboard_clear_focus(&ui_keyboard)
+                    shared.ui_keyboard_focus_clear(&ui_keyboard)
                 }
             }
 
@@ -1313,7 +1313,7 @@ main :: proc() {
             if window_focused {
                 shortcut_modifiers := shared.ui_modifier_mask()
                 for binding in shared.UI_SHORTCUT_BINDINGS {
-                    if !shared.ui_shortcut_matches(binding, shortcut_modifiers, false) ||
+                    if !shared.ui_shortcut_modifiers_match(binding, shortcut_modifiers, false) ||
                        !rl.IsKeyPressed(binding.key) {
                         continue
                     }
@@ -1392,7 +1392,7 @@ main :: proc() {
             )
             mouse_over_background_picker := background_picker_open &&
                 rl.CheckCollisionPointRec(ui_mouse_position, background_picker_bounds)
-            mouse_over_animation_controls := shared.has_playable_animations(
+            mouse_over_animation_controls := shared.animation_playback_has_playable_animations(
                 &animation_playback,
             ) && rl.CheckCollisionPointRec(
                 ui_mouse_position,
@@ -1453,7 +1453,7 @@ main :: proc() {
             if !mouse_over_ui &&
                (rl.IsMouseButtonPressed(.LEFT) ||
                 rl.IsMouseButtonPressed(.MIDDLE)) {
-                shared.ui_keyboard_clear_focus(&ui_keyboard)
+                shared.ui_keyboard_focus_clear(&ui_keyboard)
             }
             if camera_input.keyboard || camera_input.mouse {
                 // Apply keyboard, orbit, pan, and zoom input inline at the sole update site.
@@ -1657,36 +1657,36 @@ main :: proc() {
                 render_camera.target += snap_correction
             }
 
-            shared.update_animation_playback(
+            shared.animation_playback_update(
                 &animation_playback,
                 active_model,
                 frame_delta_seconds,
             )
 
             if !capture_options.enabled {
-                if shared.reload_shader_with_includes(
+                if shared.shader_program_reload_with_includes(
                     VS_PATH,
                     FS_PATH,
                     &scene_shader,
                     &scene_shader_source,
-                ) {
-                    scene_cel_bindings = shared.resolve_cel_shader_bindings(scene_shader)
+                ) == .RELOADED {
+                    scene_cel_bindings = shared.cel_shader_bindings_resolve(scene_shader)
                 }
 
-                if shared.reload_shader_with_includes(
+                if shared.shader_program_reload_with_includes(
                     VS_PATH,
                     CEL_BAND_FS_PATH,
                     &cel_band_shader,
                     &cel_band_shader_source,
-                ) {
-                    cel_band_bindings = shared.resolve_cel_shader_bindings(cel_band_shader)
+                ) == .RELOADED {
+                    cel_band_bindings = shared.cel_shader_bindings_resolve(cel_band_shader)
                 }
 
-                if shared.reload_fragment_shader_with_includes(
+                if shared.shader_fragment_reload_with_includes(
                     DOWNSCALE_FS_PATH,
                     &downscale_shader,
                     &downscale_shader_source,
-                ) {
+                ) == .RELOADED {
                     downscale_source_resolution_location = rl.GetShaderLocation(
                         downscale_shader,
                         "u_source_resolution",
@@ -1717,11 +1717,11 @@ main :: proc() {
                     )
                 }
 
-                if shared.reload_fragment_shader_with_includes(
+                if shared.shader_fragment_reload_with_includes(
                     MASK_DOWNSCALE_FS_PATH,
                     &mask_downscale_shader,
                     &mask_downscale_shader_source,
-                ) {
+                ) == .RELOADED {
                     mask_downscale_source_resolution_location = rl.GetShaderLocation(
                         mask_downscale_shader,
                         "u_source_resolution",
@@ -1732,11 +1732,11 @@ main :: proc() {
                     )
                 }
 
-                if shared.reload_fragment_shader_with_includes(
+                if shared.shader_fragment_reload_with_includes(
                     OUTLINE_FS_PATH,
                     &outline_shader,
                     &outline_shader_source,
-                ) {
+                ) == .RELOADED {
                     outline_target_resolution_location = rl.GetShaderLocation(
                         outline_shader,
                         "u_target_resolution",
@@ -1766,7 +1766,7 @@ main :: proc() {
 
             if cel_style.revision != applied_cel_ramp_revision {
                 // Upload revised ramp pixels inline at the sole update point.
-                revised_cel_ramp_pixels := shared.build_cel_ramp_pixels(&cel_style)
+                revised_cel_ramp_pixels := shared.cel_ramp_pixels_build(&cel_style)
                 rl.UpdateTexture(
                     cel_ramp_texture,
                     raw_data(revised_cel_ramp_pixels[:]),
@@ -1866,7 +1866,7 @@ main :: proc() {
             )
 
             rl.BeginTextureMode(scene_render_target)
-                shared.apply_cel_style_to_shader(
+                shared.cel_style_apply_to_shader(
                     scene_shader,
                     &scene_cel_bindings,
                     &cel_style,
@@ -1881,7 +1881,7 @@ main :: proc() {
                     rl.ClearBackground(rl.BLANK)
 
                     rl.BeginMode3D(camera)
-                        if shared.is_model_loaded(model) {
+                        if shared.model_is_loaded(model) {
                             // Keep each mesh's textures and material tint, but replace its
                             // shader for this draw only. The model still owns its materials.
                             for mesh_index := 0; mesh_index < int(model.meshCount); mesh_index += 1 {
@@ -1906,7 +1906,7 @@ main :: proc() {
             rl.EndTextureMode()
 
             rl.BeginTextureMode(cel_band_render_target)
-                shared.apply_cel_style_to_shader(
+                shared.cel_style_apply_to_shader(
                     cel_band_shader,
                     &cel_band_bindings,
                     &cel_style,
@@ -1919,7 +1919,7 @@ main :: proc() {
                     camera := render_camera
                     rl.ClearBackground(rl.BLANK)
                     rl.BeginMode3D(camera)
-                        if shared.is_model_loaded(model) {
+                        if shared.model_is_loaded(model) {
                             for mesh_index := 0; mesh_index < int(model.meshCount); mesh_index += 1 {
                                 material_index := int(model.meshMaterial[mesh_index])
                                 if material_index < 0 || material_index >= int(model.materialCount) {
@@ -2126,7 +2126,7 @@ main :: proc() {
                     rl.BeginMode3D(camera)
                         // Seed only the final framebuffer's depth buffer so the overlay remains
                         // spatially legible around the model without re-drawing its color.
-                        if shared.is_model_loaded(model) {
+                        if shared.model_is_loaded(model) {
                             rl.DrawModel(model, {}, 1.0, rl.BLANK)
                         }
 
@@ -2350,7 +2350,7 @@ main :: proc() {
                 for {
                     bounds := animation_controls_bounds
                     playback := &animation_playback
-                    animation, animation_found := shared.get_active_animation(playback)
+                    animation, animation_found := shared.animation_playback_find_active_animation(playback)
                     if !animation_found {
                         break
                     }
@@ -2384,7 +2384,7 @@ main :: proc() {
                         {content_x, transport_y, reset_width, 24},
                         "|<",
                     ) {
-                        shared.animation_reset_to_first_frame(playback)
+                        shared.animation_playback_reset_to_first_frame(playback)
                     }
                     previous_button_x := content_x + reset_width + button_gap
                     if shared.ui_gui_button(
@@ -2393,7 +2393,7 @@ main :: proc() {
                         {previous_button_x, transport_y, step_width, 24},
                         "<",
                     ) {
-                        _ = shared.animation_step_frame(playback, -1)
+                        _ = shared.animation_playback_step_frame(playback, -1)
                     }
 
                     play_button_x := previous_button_x + step_width + button_gap
@@ -2418,11 +2418,11 @@ main :: proc() {
                         {next_button_x, transport_y, step_width, 24},
                         ">",
                     ) {
-                        _ = shared.animation_step_frame(playback, 1)
+                        _ = shared.animation_playback_step_frame(playback, 1)
                     }
 
                     timeline_label_y := bounds.y + 88
-                    display_frame := shared.get_animation_pose_frame(playback, animation)
+                    display_frame := shared.animation_playback_pose_frame(playback, animation)
                     rl.GuiLabel(
                         {content_x, timeline_label_y, content_width, 18},
                         rl.TextFormat(
@@ -2446,7 +2446,7 @@ main :: proc() {
                     )
                     if playback.current_frame != previous_frame {
                         if playback.sampled_playback {
-                            playback.current_frame = shared.get_animation_pose_frame(
+                            playback.current_frame = shared.animation_playback_pose_frame(
                                 playback,
                                 animation,
                             )
@@ -2501,7 +2501,7 @@ main :: proc() {
                         nil,
                         &playback.sample_count,
                         1,
-                        shared.get_max_sample_count(animation),
+                        shared.animation_sample_count_max(animation),
                         1,
                         4,
                         false,
@@ -2511,10 +2511,10 @@ main :: proc() {
                         playback.sample_count = clamp(
                             playback.sample_count,
                             1,
-                            shared.get_max_sample_count(animation),
+                            shared.animation_sample_count_max(animation),
                         )
                         if playback.sampled_playback {
-                            playback.current_frame = shared.get_animation_pose_frame(
+                            playback.current_frame = shared.animation_playback_pose_frame(
                                 playback,
                                 animation,
                             )
@@ -2531,7 +2531,7 @@ main :: proc() {
                     } else {
                         previous_active_index := playback.active_index
                         // Run the focus-aware dropdown inline in its sole clip selector.
-                        clip_focused := shared.ui_register_control(
+                        clip_focused := shared.ui_control_register(
                             &ui_keyboard,
                             .ANIMATION_CLIP,
                             clip_bounds,
@@ -2543,9 +2543,9 @@ main :: proc() {
                             playback.dropdown_open,
                         )
                         if clip_focused && playback.dropdown_open &&
-                           !shared.ui_primary_modifier_down() &&
+                           !shared.ui_primary_modifier_is_down() &&
                            !(rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)) {
-                            _ = shared.ui_adjust_int(
+                            _ = shared.ui_int_adjust(
                                 &playback.active_index,
                                 0,
                                 max(c.int(len(playback.valid_indices)) - 1, 0),
@@ -2553,14 +2553,14 @@ main :: proc() {
                                 1,
                             )
                         }
-                        if clip_focused && shared.ui_activation_pressed() {
+                        if clip_focused && shared.ui_activation_is_pressed() {
                             clip_toggled = true
                         }
-                        shared.ui_draw_focus(clip_bounds, clip_focused)
+                        shared.ui_focus_draw(clip_bounds, clip_focused)
                         if clip_toggled {
                             playback.dropdown_open = !playback.dropdown_open
                             if playback.dropdown_open {
-                                shared.ui_keyboard_set_focus(&ui_keyboard, .ANIMATION_CLIP)
+                                shared.ui_keyboard_focus_set(&ui_keyboard, .ANIMATION_CLIP)
                             }
                         }
                         if playback.active_index != previous_active_index {
@@ -2625,7 +2625,7 @@ main :: proc() {
                     c.int(view.height),
                 )
                     // Limit keyboard focus registration to the visible inspector viewport.
-                    shared.ui_keyboard_set_clip(&ui_keyboard, view)
+                    shared.ui_keyboard_clip_set(&ui_keyboard, view)
                     model_height := inspector_section_height(state.model_open, 310)
                     // Render the model browser inline in its only inspector location.
                     for {
@@ -2664,7 +2664,7 @@ main :: proc() {
                         }
                         search_was_editing := browser.search_editing
                         // Run the focus-aware text box inline in its sole search field.
-                        search_focused := shared.ui_register_control(
+                        search_focused := shared.ui_control_register(
                             &ui_keyboard,
                             .MODEL_SEARCH,
                             search_bounds,
@@ -2688,7 +2688,7 @@ main :: proc() {
                            (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.KP_ENTER)) {
                             search_toggled = true
                         }
-                        shared.ui_draw_focus(search_bounds, search_focused || browser.search_editing)
+                        shared.ui_focus_draw(search_bounds, search_focused || browser.search_editing)
                         if search_toggled {
                             browser.search_editing = !browser.search_editing
                         }
@@ -2730,7 +2730,7 @@ main :: proc() {
                             }
                         }
                         if browser.search_text != browser.previous_search_text {
-                            shared.rebuild_model_search_results(&model_assets, browser)
+                            shared.model_search_results_rebuild(&model_assets, browser)
                         }
 
                         if (search_keyboard_active || list_has_keyboard_focus) &&
@@ -2778,7 +2778,7 @@ main :: proc() {
                             bounds.height - 92,
                         }
                         if len(browser.result_labels) > 0 {
-                            list_focused := shared.ui_register_control(
+                            list_focused := shared.ui_control_register(
                                 &ui_keyboard,
                                 .MODEL_LIST,
                                 list_bounds,
@@ -2791,7 +2791,7 @@ main :: proc() {
                                 &browser.active_index,
                                 &browser.focus_index,
                             )
-                            shared.ui_draw_focus(list_bounds, list_focused)
+                            shared.ui_focus_draw(list_bounds, list_focused)
                             result_clicked := !rl.GuiIsLocked() && rl.CheckCollisionPointRec(
                                 rl.GetMousePosition(),
                                 list_bounds,
@@ -3635,7 +3635,7 @@ main :: proc() {
                         ) {
                             picker_open^ = !picker_open^
                             if picker_open^ {
-                                shared.ui_keyboard_set_focus(&ui_keyboard, .BACKGROUND_PICKER)
+                                shared.ui_keyboard_focus_set(&ui_keyboard, .BACKGROUND_PICKER)
                             }
                         }
                         if shared.ui_gui_button(
@@ -3660,7 +3660,7 @@ main :: proc() {
                         break
                     }
                     // End the inspector's sole focus-clipping region.
-                    shared.ui_keyboard_clear_clip(&ui_keyboard)
+                    shared.ui_keyboard_clip_clear(&ui_keyboard)
                 rl.EndScissorMode()
                 if content_locked_here {
                     rl.GuiUnlock()
@@ -3688,17 +3688,17 @@ main :: proc() {
                     }
                     thumb := rl.Rectangle{track.x + 2, thumb_y, track.width - 4, thumb_height}
                     mouse_position := rl.GetMousePosition()
-                    scrollbar_focused := shared.ui_register_control(
+                    scrollbar_focused := shared.ui_control_register(
                         &ui_keyboard,
                         .INSPECTOR_SCROLLBAR,
                         track,
                     )
 
                     if scrollbar_focused {
-                        if shared.ui_key_pressed_or_repeat(.UP) {
+                        if shared.ui_key_is_pressed_or_repeating(.UP) {
                             state.scroll_y = max(state.scroll_y - 42, f32(0))
                         }
-                        if shared.ui_key_pressed_or_repeat(.DOWN) {
+                        if shared.ui_key_is_pressed_or_repeating(.DOWN) {
                             state.scroll_y = min(state.scroll_y + 42, max_scroll)
                         }
                         if rl.IsKeyPressed(.PAGE_UP) {
@@ -3747,7 +3747,7 @@ main :: proc() {
                         thumb_color = rl.Color{180, 180, 180, 255}
                     }
                     rl.DrawRectangleRec(thumb, thumb_color)
-                    shared.ui_draw_focus(track, scrollbar_focused)
+                    shared.ui_focus_draw(track, scrollbar_focused)
                     break
                 }
                 // Render the floating background picker inline at its only draw point.
@@ -3798,7 +3798,7 @@ main :: proc() {
                             "X",
                         ) {
                             open^ = false
-                            shared.ui_keyboard_clear_focus(&ui_keyboard)
+                            shared.ui_keyboard_focus_clear(&ui_keyboard)
                             break
                         }
 
@@ -4044,7 +4044,7 @@ main :: proc() {
                 rendered_capture_frames += 1
                 if rendered_capture_frames >= capture_options.warmup_frames {
                     if viewer_video_enabled {
-                        frame_streamed := shared.video_stream_write_render_texture(
+                        frame_streamed := shared.video_stream_encoder_write_render_texture(
                             &viewer_video_encoder,
                             composite_render_target.texture,
                         )
@@ -4065,7 +4065,7 @@ main :: proc() {
                             if u64(captured_sequence_frames) >=
                                expected_video_frames {
                                 capture_complete = true
-                                capture_succeeded = shared.finish_video_stream_encoder(
+                                capture_succeeded = shared.video_stream_encoder_finish(
                                     &viewer_video_encoder,
                                     capture_options.video_output,
                                     expected_video_frames,
@@ -4095,7 +4095,7 @@ main :: proc() {
                         capture_output_path := capture_options.output_path
                         capture_output_path_owned := false
                         if capture_options.frame_range_set {
-                            capture_output_path = shared.format_capture_sequence_output_path(
+                            capture_output_path = shared.capture_sequence_output_path_format(
                                 capture_options.output_path,
                                 capture_options.output_template,
                                 capture_sequence_frame,
@@ -4106,28 +4106,28 @@ main :: proc() {
                         lens_crop_bounds := lens_bounds
                         switch capture_options.target {
                         case .COMPOSITE:
-                            capture_succeeded = shared.export_render_texture_png(
+                            capture_succeeded = shared.capture_render_texture_export_png(
                                 composite_render_target.texture,
                                 capture_output_path,
                             )
                         case .LENS:
-                            capture_succeeded = shared.export_render_texture_png(
+                            capture_succeeded = shared.capture_render_texture_export_png(
                                 composite_render_target.texture,
                                 capture_output_path,
                                 &lens_crop_bounds,
                             )
                         case .SCENE:
-                            capture_succeeded = shared.export_render_texture_png(
+                            capture_succeeded = shared.capture_render_texture_export_png(
                                 scene_render_target.texture,
                                 capture_output_path,
                             )
                         case .DOWNSAMPLE:
-                            capture_succeeded = shared.export_render_texture_png(
+                            capture_succeeded = shared.capture_render_texture_export_png(
                                 outlined_render_target.texture,
                                 capture_output_path,
                             )
                         case .COVERAGE_MASK:
-                            capture_succeeded = shared.export_render_texture_png(
+                            capture_succeeded = shared.capture_render_texture_export_png(
                                 coverage_mask_render_target.texture,
                                 capture_output_path,
                             )
@@ -4186,25 +4186,25 @@ main :: proc() {
                 int(model_active_index) < len(model_assets.paths) {
                 requested_model_index := int(model_active_index)
                 requested_model_label := model_assets.labels[requested_model_index]
-                requested_model := shared.load_model_source(
+                requested_model := shared.model_source_load(
                     &model_assets,
                     requested_model_index,
                 )
-                if shared.is_model_loaded(requested_model) {
-                    requested_animation_playback := shared.load_animation_playback(
+                if shared.model_is_loaded(requested_model) {
+                    requested_animation_playback := shared.animation_playback_load(
                         requested_model,
                         model_assets.paths[requested_model_index],
                         model_assets.kinds[requested_model_index],
                     )
-                    shared.destroy_animation_playback(&animation_playback)
-                    if shared.is_model_loaded(active_model) {
+                    shared.animation_playback_destroy(&animation_playback)
+                    if shared.model_is_loaded(active_model) {
                         rl.UnloadModel(active_model)
                     }
                     active_model = requested_model
                     animation_playback = requested_animation_playback
                     model_center = get_model_center(active_model)
                     loaded_model_index = model_active_index
-                    shared.set_model_browser_active_source(
+                    shared.model_browser_active_source_set(
                         &model_browser,
                         loaded_model_index,
                     )
@@ -4219,7 +4219,7 @@ main :: proc() {
                 } else {
                     rl.UnloadModel(requested_model)
                     model_active_index = loaded_model_index
-                    shared.set_model_browser_active_source(
+                    shared.model_browser_active_source_set(
                         &model_browser,
                         loaded_model_index,
                     )

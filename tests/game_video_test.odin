@@ -34,7 +34,7 @@ game_video_options_accept_replay_composite_capture :: proc(t: ^testing.T) {
     }
     testing.expect_value(
         t,
-        validate_game_video_options(&run_options, &capture),
+        game_video_options_validate(&run_options, &capture),
         Game_Video_Options_Error.NONE,
     )
 }
@@ -50,14 +50,14 @@ game_video_options_reject_invalid_and_conflicting_requests :: proc(t: ^testing.T
     }
     testing.expect_value(
         t,
-        validate_game_video_options(&run_options, &capture),
+        game_video_options_validate(&run_options, &capture),
         Game_Video_Options_Error.INVALID_OUTPUT,
     )
 
     run_options.video_output = "artifacts/report/game-test.mp4"
     testing.expect_value(
         t,
-        validate_game_video_options(&run_options, &capture),
+        game_video_options_validate(&run_options, &capture),
         Game_Video_Options_Error.MISSING_REPLAY,
     )
 
@@ -65,7 +65,7 @@ game_video_options_reject_invalid_and_conflicting_requests :: proc(t: ^testing.T
     capture.enabled = false
     testing.expect_value(
         t,
-        validate_game_video_options(&run_options, &capture),
+        game_video_options_validate(&run_options, &capture),
         Game_Video_Options_Error.MISSING_CAPTURE,
     )
 
@@ -73,7 +73,7 @@ game_video_options_reject_invalid_and_conflicting_requests :: proc(t: ^testing.T
     capture.target = .SCENE
     testing.expect_value(
         t,
-        validate_game_video_options(&run_options, &capture),
+        game_video_options_validate(&run_options, &capture),
         Game_Video_Options_Error.INVALID_TARGET,
     )
 
@@ -81,7 +81,7 @@ game_video_options_reject_invalid_and_conflicting_requests :: proc(t: ^testing.T
     run_options.record_directory = "artifacts/report/frames"
     testing.expect_value(
         t,
-        validate_game_video_options(&run_options, &capture),
+        game_video_options_validate(&run_options, &capture),
         Game_Video_Options_Error.CONFLICTING_RECORD_DIRECTORY,
     )
 
@@ -89,7 +89,7 @@ game_video_options_reject_invalid_and_conflicting_requests :: proc(t: ^testing.T
     run_options.capture_tick_set = true
     testing.expect_value(
         t,
-        validate_game_video_options(&run_options, &capture),
+        game_video_options_validate(&run_options, &capture),
         Game_Video_Options_Error.CONFLICTING_CAPTURE_TICK,
     )
 
@@ -97,7 +97,7 @@ game_video_options_reject_invalid_and_conflicting_requests :: proc(t: ^testing.T
     capture.output_path_explicit = true
     testing.expect_value(
         t,
-        validate_game_video_options(&run_options, &capture),
+        game_video_options_validate(&run_options, &capture),
         Game_Video_Options_Error.CONFLICTING_CAPTURE_OUTPUT,
     )
 }
@@ -126,7 +126,7 @@ video_stream_frame_and_ffmpeg_contract_are_stable :: proc(t: ^testing.T) {
         "artifacts/report/game-test.partial-42.mp4",
     )
 
-    command := video_stream_ffmpeg_command(temporary_path, "1280x720", "60")
+    command := video_stream_ffmpeg_command_build(temporary_path, "1280x720", "60")
     testing.expect_value(t, command[0], "ffmpeg")
     testing.expect_value(t, command[5], "rawvideo")
     testing.expect_value(t, command[7], "rgba")
@@ -139,11 +139,11 @@ video_stream_frame_and_ffmpeg_contract_are_stable :: proc(t: ^testing.T) {
 
 @(test)
 capture_parser_marks_explicit_output_for_video_conflict_checks :: proc(t: ^testing.T) {
-    result := parse_capture_options([]string{
+    result := capture_options_parse([]string{
         "--capture-case", "video-report",
         "--capture-output", "artifacts/report/frame.png",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
     testing.expect_value(t, result.error, Capture_Parse_Error.NONE)
     testing.expect(t, result.options.output_path_explicit)
 }

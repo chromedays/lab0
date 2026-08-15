@@ -16,7 +16,7 @@ pure_uniform_scale_matrix_detection_is_conservative :: proc(t: ^testing.T) {
         0, 0, 1, 0,
         0, 0, 0, 1,
     }
-    scale, valid := get_pure_uniform_scale_from_matrix(identity)
+    scale, valid := matrix_find_pure_uniform_scale(identity)
     testing.expect(t, valid)
     testing.expect(t, math.abs(scale - 1) <= GLTF_SKIN_SCALE_EPSILON)
 
@@ -24,7 +24,7 @@ pure_uniform_scale_matrix_detection_is_conservative :: proc(t: ^testing.T) {
     uniform_scale[0] = 0.4262215
     uniform_scale[5] = 0.4262215
     uniform_scale[10] = 0.4262215
-    scale, valid = get_pure_uniform_scale_from_matrix(uniform_scale)
+    scale, valid = matrix_find_pure_uniform_scale(uniform_scale)
     testing.expect(t, valid)
     testing.expect(
         t,
@@ -33,24 +33,24 @@ pure_uniform_scale_matrix_detection_is_conservative :: proc(t: ^testing.T) {
 
     translated := uniform_scale
     translated[12] = 0.25
-    _, valid = get_pure_uniform_scale_from_matrix(translated)
+    _, valid = matrix_find_pure_uniform_scale(translated)
     testing.expect(t, !valid)
 
     non_uniform := uniform_scale
     non_uniform[5] = 0.5
-    _, valid = get_pure_uniform_scale_from_matrix(non_uniform)
+    _, valid = matrix_find_pure_uniform_scale(non_uniform)
     testing.expect(t, !valid)
 
     rotated := uniform_scale
     rotated[1] = 0.1
-    _, valid = get_pure_uniform_scale_from_matrix(rotated)
+    _, valid = matrix_find_pure_uniform_scale(rotated)
     testing.expect(t, !valid)
 }
 
 // The bundled GodotMan hierarchy must expose the known model-wide skinned-mesh scale.
 @test
 godotman_skinned_mesh_uniform_scale_is_detected :: proc(t: ^testing.T) {
-    scale, found := get_gltf_skinned_mesh_uniform_scale("assets/godotman.glb")
+    scale, found := gltf_find_skinned_mesh_uniform_scale("assets/godotman.glb")
     if !testing.expectf(t, found, "expected godotman skin scale metadata") {
         return
     }

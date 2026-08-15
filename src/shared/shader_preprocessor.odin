@@ -30,9 +30,9 @@ Preprocessed_Shader_Program_Source :: struct {
 	fragment: Preprocessed_Shader_Source,
 }
 
-// destroy_preprocessed_shader_source releases expanded code, cloned paths, and
+// shader_preprocessed_source_destroy releases expanded code, cloned paths, and
 // dynamic storage, then clears the value to make repeated destruction harmless.
-destroy_preprocessed_shader_source :: proc(
+shader_preprocessed_source_destroy :: proc(
 	preprocessed_source: ^Preprocessed_Shader_Source,
 ) {
 	delete(preprocessed_source.code)
@@ -43,17 +43,17 @@ destroy_preprocessed_shader_source :: proc(
 	preprocessed_source^ = {}
 }
 
-// destroy_preprocessed_shader_program_source destroys both program stages.
-destroy_preprocessed_shader_program_source :: proc(
+// shader_preprocessed_program_source_destroy destroys both program stages.
+shader_preprocessed_program_source_destroy :: proc(
 	preprocessed_program: ^Preprocessed_Shader_Program_Source,
 ) {
-	destroy_preprocessed_shader_source(&preprocessed_program.vertex)
-	destroy_preprocessed_shader_source(&preprocessed_program.fragment)
+	shader_preprocessed_source_destroy(&preprocessed_program.vertex)
+	shader_preprocessed_source_destroy(&preprocessed_program.fragment)
 }
 
-// shader_source_dependencies_changed compares current file metadata with the
+// shader_source_has_dependency_changes compares current file metadata with the
 // load snapshot. Either an existence transition or mtime change requests reload.
-shader_source_dependencies_changed :: proc(
+shader_source_has_dependency_changes :: proc(
 	preprocessed_source: ^Preprocessed_Shader_Source,
 ) -> bool {
 	for dependency in preprocessed_source.dependencies {
@@ -73,11 +73,11 @@ shader_source_dependencies_changed :: proc(
 	return false
 }
 
-// preprocess_shader_file_recursive appends one expanded file to output_builder.
+// shader_file_preprocess_recursive appends one expanded file to output_builder.
 // include_stack detects cycles, while dependencies deduplicates files reached by
 // multiple branches. All file buffers and temporary normalized paths are owned
 // within the recursion level that created them.
-preprocess_shader_file_recursive :: proc(
+shader_file_preprocess_recursive :: proc(
 	path: string,
 	output_builder: ^strings.Builder,
 	dependencies: ^[dynamic]Shader_Source_Dependency,
@@ -204,7 +204,7 @@ preprocess_shader_file_recursive :: proc(
 			return false
 		}
 
-		include_preprocessing_succeeded := preprocess_shader_file_recursive(
+		include_preprocessing_succeeded := shader_file_preprocess_recursive(
 			resolved_path,
 			output_builder,
 			dependencies,
@@ -218,10 +218,10 @@ preprocess_shader_file_recursive :: proc(
 	return true
 }
 
-// preprocess_shader_file normalizes the root path, initializes recursion state,
+// shader_file_preprocess normalizes the root path, initializes recursion state,
 // and returns owned expanded source even when dependency data accompanies a
 // preprocessing failure for later cleanup.
-preprocess_shader_file :: proc(path: string) -> (
+shader_file_preprocess :: proc(path: string) -> (
 	preprocessed_source: Preprocessed_Shader_Source,
 	preprocessing_succeeded: bool,
 ) {
@@ -241,7 +241,7 @@ preprocess_shader_file :: proc(path: string) -> (
 	include_stack: [dynamic]string
 	defer delete(include_stack)
 
-	preprocessing_succeeded = preprocess_shader_file_recursive(
+	preprocessing_succeeded = shader_file_preprocess_recursive(
 		normalized_path,
 		&output_builder,
 		&preprocessed_source.dependencies,

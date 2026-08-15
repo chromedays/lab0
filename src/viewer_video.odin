@@ -28,7 +28,7 @@ validate_viewer_video_options :: proc(
         }
         return .NONE
     }
-    if !shared.video_stream_output_path_valid(capture.video_output) {
+    if !shared.video_stream_output_path_is_valid(capture.video_output) {
         return .INVALID_OUTPUT
     }
     if !capture.frame_range_set {

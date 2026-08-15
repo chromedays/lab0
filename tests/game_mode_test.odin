@@ -55,7 +55,7 @@ game_player_animation_quantizes_pose_frames :: proc(t: ^testing.T) {
     game_configure_player_animation(&playback)
     animation := rl.ModelAnimation{keyframeCount = 121}
 
-    pose_frame := get_animation_pose_frame(&playback, animation)
+    pose_frame := animation_playback_pose_frame(&playback, animation)
 
     testing.expect_value(t, pose_frame, f32(15))
 }
@@ -211,9 +211,9 @@ game_run_options_parse_record_directory :: proc(t: ^testing.T) {
 @(test)
 game_default_cel_style_is_valid_and_keeps_neon_accents :: proc(t: ^testing.T) {
     style := make_game_cel_style()
-    defer destroy_cel_style(&style)
+    defer cel_style_destroy(&style)
 
-    testing.expect_value(t, validate_cel_style(&style), Cel_Style_Error.NONE)
+    testing.expect_value(t, cel_style_validate(&style), Cel_Style_Error.NONE)
     testing.expect(t, style.rim.enabled, "the game style should preserve cyan rim light")
     testing.expect(t, style.highlight.enabled, "the game style should preserve warm highlights")
     testing.expect_value(t, style.outline.width, 1)

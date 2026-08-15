@@ -54,6 +54,6 @@ game_room_from_string :: proc(value: string) -> (Game_Room_ID, bool) {
     return .R00_START_FOREST, false
 }
 
-game_vector_length :: proc(value: rl.Vector2) -> f32 {
+game_vector2_length :: proc(value: rl.Vector2) -> f32 {
     return math.sqrt(value.x * value.x + value.y * value.y)
 }

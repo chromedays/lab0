@@ -138,7 +138,7 @@ load_selected_cel_style_preset :: proc(
     style: ^shared.Cel_Style,
 ) -> bool {
     preset_index := clamp(int(state.preset_index), 0, len(CEL_STYLE_PRESET_PATHS) - 1)
-    replacement, load_error := shared.load_cel_style(CEL_STYLE_PRESET_PATHS[preset_index])
+    replacement, load_error := shared.cel_style_load(CEL_STYLE_PRESET_PATHS[preset_index])
     if load_error != .NONE {
         log.errorf(
             "Failed to load cel style preset %s: %s",
@@ -148,7 +148,7 @@ load_selected_cel_style_preset :: proc(
         set_cel_style_ui_status(state, .LOAD_FAILED)
         return false
     }
-    shared.replace_cel_style(style, replacement)
+    shared.cel_style_move_assign(style, &replacement)
     state.selected_band = 0
     state.dirty = false
     sync_cel_style_light_angles(state, style)
@@ -163,7 +163,7 @@ save_selected_cel_style_preset :: proc(
     style: ^shared.Cel_Style,
 ) -> bool {
     preset_index := clamp(int(state.preset_index), 0, len(CEL_STYLE_PRESET_PATHS) - 1)
-    save_error := shared.save_cel_style(CEL_STYLE_PRESET_PATHS[preset_index], style)
+    save_error := shared.cel_style_save(CEL_STYLE_PRESET_PATHS[preset_index], style)
     if save_error != .NONE {
         log.errorf(
             "Failed to save cel style preset %s: %s",
@@ -184,8 +184,8 @@ reset_cel_style_to_classic :: proc(
     state: ^Cel_Style_UI_State,
     style: ^shared.Cel_Style,
 ) {
-    replacement := shared.make_classic_cel_style()
-    shared.replace_cel_style(style, replacement)
+    replacement := shared.cel_style_make_classic()
+    shared.cel_style_move_assign(style, &replacement)
     state.preset_index = 0
     state.selected_band = 0
     state.dirty = true
@@ -324,10 +324,10 @@ draw_cel_color_swatch :: proc(
         } else {
             state.color_target = target
             switch target {
-            case .BAND_TINT: shared.ui_keyboard_set_focus(keyboard, .CEL_BAND_TINT_PICKER)
-            case .RIM:       shared.ui_keyboard_set_focus(keyboard, .CEL_RIM_PICKER)
-            case .HIGHLIGHT: shared.ui_keyboard_set_focus(keyboard, .CEL_HIGHLIGHT_PICKER)
-            case .OUTLINE:   shared.ui_keyboard_set_focus(keyboard, .CEL_OUTLINE_PICKER)
+            case .BAND_TINT: shared.ui_keyboard_focus_set(keyboard, .CEL_BAND_TINT_PICKER)
+            case .RIM:       shared.ui_keyboard_focus_set(keyboard, .CEL_RIM_PICKER)
+            case .HIGHLIGHT: shared.ui_keyboard_focus_set(keyboard, .CEL_HIGHLIGHT_PICKER)
+            case .OUTLINE:   shared.ui_keyboard_focus_set(keyboard, .CEL_OUTLINE_PICKER)
             case .NONE:
             }
         }

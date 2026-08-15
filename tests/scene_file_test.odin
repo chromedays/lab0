@@ -43,9 +43,9 @@ scene_test_temp_path :: proc(t: ^testing.T, filename: string) -> (
 
 @test
 scene_default_is_valid_and_uses_strict_json_conventions :: proc(t: ^testing.T) {
-    scene := make_default_scene()
-    defer destroy_scene(&scene)
-    testing.expect_value(t, validate_scene(&scene), Scene_Error.NONE)
+    scene := scene_make_default()
+    defer scene_destroy(&scene)
+    testing.expect_value(t, scene_validate(&scene), Scene_Error.NONE)
     testing.expect_value(t, scene.style_path, "styles/classic.json")
     testing.expect_value(t, scene.render.downscale_level, DEFAULT_DOWNSCALE_LEVEL)
     testing.expect_value(t, scene.camera.projection, Scene_Projection.PERSPECTIVE)
@@ -61,17 +61,17 @@ scene_default_is_valid_and_uses_strict_json_conventions :: proc(t: ^testing.T) {
 scene_legacy_v1_without_shadow_members_preserves_unshadowed_output :: proc(
     t: ^testing.T,
 ) {
-    source := make_default_scene()
-    defer destroy_scene(&source)
-    file := scene_to_file(&source)
-    defer destroy_scene_file(&file)
+    source := scene_make_default()
+    defer scene_destroy(&source)
+    file := scene_to_file_data(&source)
+    defer scene_file_destroy(&file)
     file.directional_light.casts_shadows = {}
     file.directional_light.shadow_strength = {}
     file.directional_light.shadow_bias = {}
     file.directional_light.shadow_extent = {}
 
-    loaded, load_error := scene_from_file(&file, false)
-    defer destroy_scene(&loaded)
+    loaded, load_error := scene_from_file_data(&file, false)
+    defer scene_destroy(&loaded)
     if !testing.expect_value(t, load_error, Scene_Error.NONE) { return }
     testing.expect(t, !loaded.directional_light.casts_shadows)
     testing.expect_value(
@@ -104,8 +104,8 @@ scene_loader_rejects_json5_trailing_commas :: proc(t: ^testing.T) {
     if !testing.expectf(t, write_error == nil, "write failed: %v", write_error) {
         return
     }
-    scene, load_error := load_scene(path, false)
-    defer destroy_scene(&scene)
+    scene, load_error := scene_load(path, false)
+    defer scene_destroy(&scene)
     testing.expect_value(t, load_error, Scene_Error.PARSE_FAILED)
 }
 
@@ -122,8 +122,8 @@ scene_loader_rejects_json_comments :: proc(t: ^testing.T) {
     if !testing.expectf(t, write_error == nil, "write failed: %v", write_error) {
         return
     }
-    scene, load_error := load_scene(path, false)
-    defer destroy_scene(&scene)
+    scene, load_error := scene_load(path, false)
+    defer scene_destroy(&scene)
     testing.expect_value(t, load_error, Scene_Error.PARSE_FAILED)
 }
 
@@ -135,8 +135,8 @@ scene_json_round_trip_preserves_fixed_pose_and_lights :: proc(t: ^testing.T) {
     defer delete(directory)
     defer os.remove_all(directory)
 
-    scene := make_default_scene()
-    defer destroy_scene(&scene)
+    scene := scene_make_default()
+    defer scene_destroy(&scene)
     append(&scene.models, Scene_Model{
         id = strings.clone("model_001"),
         name = strings.clone("Runner"),
@@ -179,10 +179,10 @@ scene_json_round_trip_preserves_fixed_pose_and_lights :: proc(t: ^testing.T) {
         outer_angle_deg = 30,
     })
 
-    save_error := save_scene(path, &scene)
+    save_error := scene_save(path, &scene)
     if !testing.expect_value(t, save_error, Scene_Error.NONE) { return }
-    loaded, load_error := load_scene(path)
-    defer destroy_scene(&loaded)
+    loaded, load_error := scene_load(path)
+    defer scene_destroy(&loaded)
     if !testing.expect_value(t, load_error, Scene_Error.NONE) { return }
 
     testing.expect_value(t, len(loaded.models), 1)
@@ -213,7 +213,7 @@ scene_json_round_trip_preserves_fixed_pose_and_lights :: proc(t: ^testing.T) {
         return
     }
     defer delete(first_bytes)
-    second_save_error := save_scene(path, &loaded)
+    second_save_error := scene_save(path, &loaded)
     if !testing.expect_value(t, second_save_error, Scene_Error.NONE) { return }
     second_bytes, second_read_error := os.read_entire_file(path, context.allocator)
     if !testing.expectf(t, second_read_error == nil, "read failed: %v", second_read_error) {
@@ -231,8 +231,8 @@ scene_save_omits_absent_animation_member :: proc(t: ^testing.T) {
     defer delete(directory)
     defer os.remove_all(directory)
 
-    scene := make_default_scene()
-    defer destroy_scene(&scene)
+    scene := scene_make_default()
+    defer scene_destroy(&scene)
     append(&scene.primitives, Scene_Primitive{
         id = strings.clone("primitive_001"),
         name = strings.clone("Cube"),
@@ -241,7 +241,7 @@ scene_save_omits_absent_animation_member :: proc(t: ^testing.T) {
         transform = {scale = {1, 1, 1}},
         albedo = rl.WHITE,
     })
-    if !testing.expect_value(t, save_scene(path, &scene), Scene_Error.NONE) {
+    if !testing.expect_value(t, scene_save(path, &scene), Scene_Error.NONE) {
         return
     }
     bytes, read_error := os.read_entire_file(path, context.allocator)
@@ -254,8 +254,8 @@ scene_save_omits_absent_animation_member :: proc(t: ^testing.T) {
 
 @test
 scene_validation_rejects_ids_shared_between_item_types :: proc(t: ^testing.T) {
-    scene := make_default_scene()
-    defer destroy_scene(&scene)
+    scene := scene_make_default()
+    defer scene_destroy(&scene)
     append(&scene.primitives, Scene_Primitive{
         id = strings.clone("shared_001"),
         name = strings.clone("Cube"),
@@ -272,23 +272,23 @@ scene_validation_rejects_ids_shared_between_item_types :: proc(t: ^testing.T) {
         intensity = 1,
         range = 4,
     })
-    testing.expect_value(t, validate_scene(&scene), Scene_Error.DUPLICATE_ID)
+    testing.expect_value(t, scene_validate(&scene), Scene_Error.DUPLICATE_ID)
 }
 
 @test
 scene_validation_rejects_invalid_camera_and_light_limits :: proc(t: ^testing.T) {
-    scene := make_default_scene()
-    defer destroy_scene(&scene)
+    scene := scene_make_default()
+    defer scene_destroy(&scene)
 
     valid_camera := scene.camera
     scene.camera.projection = Scene_Projection(99)
-    testing.expect_value(t, validate_scene(&scene), Scene_Error.INVALID_CAMERA)
+    testing.expect_value(t, scene_validate(&scene), Scene_Error.INVALID_CAMERA)
     scene.camera = valid_camera
 
     scene.directional_light.intensity = SCENE_MAX_LIGHT_INTENSITY + 1
     testing.expect_value(
         t,
-        validate_scene(&scene),
+        scene_validate(&scene),
         Scene_Error.INVALID_DIRECTIONAL_LIGHT,
     )
     scene.directional_light.intensity = 1
@@ -296,7 +296,7 @@ scene_validation_rejects_invalid_camera_and_light_limits :: proc(t: ^testing.T) 
     scene.directional_light.shadow_bias = SCENE_MAX_SHADOW_BIAS + 0.01
     testing.expect_value(
         t,
-        validate_scene(&scene),
+        scene_validate(&scene),
         Scene_Error.INVALID_DIRECTIONAL_LIGHT,
     )
     scene.directional_light.shadow_bias = SCENE_DEFAULT_SHADOW_BIAS
@@ -306,17 +306,17 @@ scene_validation_rejects_invalid_camera_and_light_limits :: proc(t: ^testing.T) 
     }
     testing.expect_value(
         t,
-        validate_scene(&scene),
+        scene_validate(&scene),
         Scene_Error.TOO_MANY_POINT_LIGHTS,
     )
 }
 
 @test
 scene_shadow_projection_snaps_to_whole_light_texels :: proc(t: ^testing.T) {
-    scene := make_default_scene()
-    defer destroy_scene(&scene)
+    scene := scene_make_default()
+    defer scene_destroy(&scene)
     scene.camera.target = {0.137, 1.271, -0.083}
-    frame := scene_make_shadow_frame(&scene)
+    frame := scene_shadow_frame_make(&scene)
     if !testing.expect(t, frame.enabled) { return }
 
     forward := rl.Vector3Normalize(frame.camera.target - frame.camera.position)
@@ -345,11 +345,11 @@ scene_shadow_projection_snaps_to_whole_light_texels :: proc(t: ^testing.T) {
 
 @test
 scene_paths_reject_absolute_parent_and_windows_forms :: proc(t: ^testing.T) {
-    testing.expect(t, scene_file_path_portable("styles/classic.json", ".json"))
-    testing.expect(t, !scene_file_path_portable("/tmp/classic.json", ".json"))
-    testing.expect(t, !scene_file_path_portable("../styles/classic.json", ".json"))
-    testing.expect(t, !scene_file_path_portable("styles/../classic.json", ".json"))
-    testing.expect(t, !scene_file_path_portable("styles\\classic.json", ".json"))
+    testing.expect(t, scene_file_path_is_portable("styles/classic.json", ".json"))
+    testing.expect(t, !scene_file_path_is_portable("/tmp/classic.json", ".json"))
+    testing.expect(t, !scene_file_path_is_portable("../styles/classic.json", ".json"))
+    testing.expect(t, !scene_file_path_is_portable("styles/../classic.json", ".json"))
+    testing.expect(t, !scene_file_path_is_portable("styles\\classic.json", ".json"))
 }
 
 @test

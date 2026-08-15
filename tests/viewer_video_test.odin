@@ -82,14 +82,14 @@ viewer_video_options_reject_invalid_and_conflicting_requests :: proc(t: ^testing
 
 @(test)
 capture_parser_accepts_viewer_video_output :: proc(t: ^testing.T) {
-    result := parse_capture_options([]string{
+    result := capture_options_parse([]string{
         "--capture-case", "viewer-video",
         "--capture-model", "assets/CesiumMan.glb",
         "--capture-frame-range", "0:119",
         "--viewer-video-output", "artifacts/report/viewer-test.mp4",
         "--viewer-video-duration", "5",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.NONE)
     testing.expect_value(
@@ -107,12 +107,12 @@ capture_parser_accepts_viewer_video_output :: proc(t: ^testing.T) {
 
 @(test)
 capture_parser_rejects_non_mp4_viewer_video_output :: proc(t: ^testing.T) {
-    result := parse_capture_options([]string{
+    result := capture_options_parse([]string{
         "--capture-case", "viewer-video",
         "--capture-frame-range", "0:45",
         "--viewer-video-output", "artifacts/report/viewer-test.mov",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(
         t,
@@ -125,13 +125,13 @@ capture_parser_rejects_non_mp4_viewer_video_output :: proc(t: ^testing.T) {
 capture_parser_rejects_viewer_duration_between_60_fps_frames :: proc(
     t: ^testing.T,
 ) {
-    result := parse_capture_options([]string{
+    result := capture_options_parse([]string{
         "--capture-case", "viewer-video",
         "--capture-frame-range", "0:45",
         "--viewer-video-output", "artifacts/report/viewer-test.mp4",
         "--viewer-video-duration", "1.001",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(
         t,

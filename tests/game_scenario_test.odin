@@ -39,7 +39,7 @@ game_test_drive_to :: proc(
             driver.state.player.position.x,
             driver.state.player.position.z,
         }
-        if game_vector_length(delta) < 0.04 {
+        if game_vector2_length(delta) < 0.04 {
             return true
         }
         game_test_driver_step(driver, {move = game_normalize_input(delta)})

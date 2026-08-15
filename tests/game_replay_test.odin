@@ -91,7 +91,7 @@ game_movement_tuning_replay_shows_stop_reverse_chain_and_failed_landing :: proc(
         } else if state.tick == 32 {
             testing.expectf(
                 t,
-                game_vector_length(state.player.velocity) < 0.0001,
+                game_vector2_length(state.player.velocity) < 0.0001,
                 "deceleration segment should stop within eight ticks",
             )
         } else if state.tick == 45 {
@@ -409,9 +409,9 @@ game_r02_single_zombie_replay_disengages_and_returns_home :: proc(
     }
     testing.expectf(
         t,
-        game_vector_length(anchor_delta) <= GAME_ZOMBIE_RETURN_RADIUS + 0.001,
+        game_vector2_length(anchor_delta) <= GAME_ZOMBIE_RETURN_RADIUS + 0.001,
         "the R02 fixture should finish with the zombie back on patrol, delta %.3f",
-        game_vector_length(anchor_delta),
+        game_vector2_length(anchor_delta),
     )
 }
 
@@ -471,7 +471,7 @@ game_zombie_gauntlet_replay_runs_thirty_seconds_of_active_evasion :: proc(
         maximum_chasers = max(maximum_chasers, chasers)
         for zombie_index in 1 ..= 6 {
             for other_index in zombie_index + 1 ..= 6 {
-                spacing := game_vector_length(rl.Vector2{
+                spacing := game_vector2_length(rl.Vector2{
                     state.zombies[zombie_index].position.x -
                         state.zombies[other_index].position.x,
                     state.zombies[zombie_index].position.z -

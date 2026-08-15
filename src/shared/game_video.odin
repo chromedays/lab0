@@ -48,18 +48,18 @@ Video_Stream_Encoder :: struct {
     started:        bool,
 }
 
-video_stream_output_path_valid :: proc(path: string) -> bool {
+video_stream_output_path_is_valid :: proc(path: string) -> bool {
     return len(path) > len(".mp4") && strings.equal_fold(os.ext(path), ".mp4")
 }
 
-validate_game_video_options :: proc(
+game_video_options_validate :: proc(
     run_options: ^Game_Run_Options,
     capture: ^Capture_Options,
 ) -> Game_Video_Options_Error {
     if len(run_options.video_output) == 0 {
         return .NONE
     }
-    if !video_stream_output_path_valid(run_options.video_output) {
+    if !video_stream_output_path_is_valid(run_options.video_output) {
         return .INVALID_OUTPUT
     }
     if len(run_options.replay_path) == 0 {
@@ -119,7 +119,7 @@ video_stream_temporary_output_path :: proc(output_path: string, run_id: int) -> 
     return fmt.aprintf("%s.partial-%d.mp4", base, run_id)
 }
 
-video_stream_ffmpeg_command :: proc(
+video_stream_ffmpeg_command_build :: proc(
     temporary_path, video_size, frame_rate: string,
 ) -> [VIDEO_STREAM_FFMPEG_COMMAND_COUNT]string {
     return {
@@ -143,7 +143,7 @@ video_stream_ffmpeg_command :: proc(
     }
 }
 
-video_stream_remove_temporary_output :: proc(encoder: ^Video_Stream_Encoder) {
+video_stream_temporary_output_remove :: proc(encoder: ^Video_Stream_Encoder) {
     if len(encoder.temporary_path) > 0 && os.exists(encoder.temporary_path) {
         if remove_error := os.remove(encoder.temporary_path); remove_error != nil {
             log.warnf(
@@ -157,7 +157,7 @@ video_stream_remove_temporary_output :: proc(encoder: ^Video_Stream_Encoder) {
 
 // Ignore SIGPIPE on POSIX so an early FFmpeg exit becomes an ordinary write
 // error that can run cleanup instead of terminating Lab0 asynchronously.
-video_stream_prepare_pipe_writes :: proc() -> bool {
+video_stream_pipe_writes_prepare :: proc() -> bool {
     when ODIN_OS == .Windows {
         return true
     } else {
@@ -172,7 +172,7 @@ video_stream_prepare_pipe_writes :: proc() -> bool {
 // Start FFmpeg without a shell and retain only the parent's write end. Frames
 // are published to a sibling temporary MP4 until finish validates the process,
 // frame count, and non-empty output.
-start_video_stream_encoder :: proc(
+video_stream_encoder_start :: proc(
     encoder: ^Video_Stream_Encoder,
     output_path: string,
     width, height, frames_per_second: int,
@@ -181,10 +181,10 @@ start_video_stream_encoder :: proc(
         log.error("Video dimensions and frame rate must be positive")
         return .OUTPUT_SETUP_FAILED
     }
-    if !video_stream_prepare_pipe_writes() {
+    if !video_stream_pipe_writes_prepare() {
         return .PIPE_FAILED
     }
-    if !ensure_capture_output_directory(output_path) {
+    if !capture_output_directory_ensure(output_path) {
         return .OUTPUT_SETUP_FAILED
     }
 
@@ -192,7 +192,7 @@ start_video_stream_encoder :: proc(
         output_path,
         os.get_pid(),
     )
-    video_stream_remove_temporary_output(encoder)
+    video_stream_temporary_output_remove(encoder)
 
     read_end, write_end, pipe_error := os.pipe()
     if pipe_error != nil {
@@ -202,7 +202,7 @@ start_video_stream_encoder :: proc(
 
     video_size := fmt.tprintf("%dx%d", width, height)
     frame_rate := fmt.tprintf("%d", frames_per_second)
-    command := video_stream_ffmpeg_command(
+    command := video_stream_ffmpeg_command_build(
         encoder.temporary_path,
         video_size,
         frame_rate,
@@ -234,7 +234,7 @@ start_video_stream_encoder :: proc(
 
 // Pipe writes may be short even without an error. Keep writing the remaining
 // suffix; accepting zero bytes would otherwise spin forever on a broken sink.
-video_stream_write_all :: proc(file: ^os.File, data: []byte) -> bool {
+video_stream_pipe_write_all :: proc(file: ^os.File, data: []byte) -> bool {
     bytes_written := 0
     for bytes_written < len(data) {
         count, write_error := os.write(file, data[bytes_written:])
@@ -263,7 +263,7 @@ video_stream_write_all :: proc(file: ^os.File, data: []byte) -> bool {
 
 // Read one texture and release its CPU image before returning. No frame queue
 // is retained, so memory use is constant with respect to replay duration.
-video_stream_write_render_texture :: proc(
+video_stream_encoder_write_render_texture :: proc(
     encoder: ^Video_Stream_Encoder,
     texture: rl.Texture2D,
 ) -> bool {
@@ -300,7 +300,7 @@ video_stream_write_render_texture :: proc(
         int(texture_readback.height),
     )
     pixels := ([^]byte)(texture_readback.data)[:frame_bytes]
-    if !video_stream_write_all(encoder.stdin, pixels) {
+    if !video_stream_pipe_write_all(encoder.stdin, pixels) {
         return false
     }
     encoder.frames_written += 1
@@ -322,12 +322,12 @@ video_stream_encoder_abort :: proc(encoder: ^Video_Stream_Encoder) {
         }
         encoder.started = false
     }
-    video_stream_remove_temporary_output(encoder)
+    video_stream_temporary_output_remove(encoder)
 }
 
 // Closing stdin is the end-of-stream signal that lets FFmpeg flush its muxer.
 // Rename is deliberately last, making the final path a success-only commit.
-finish_video_stream_encoder :: proc(
+video_stream_encoder_finish :: proc(
     encoder: ^Video_Stream_Encoder,
     output_path: string,
     expected_frames: u64,
@@ -394,7 +394,7 @@ finish_video_stream_encoder :: proc(
     return true
 }
 
-destroy_video_stream_encoder :: proc(encoder: ^Video_Stream_Encoder) {
+video_stream_encoder_destroy :: proc(encoder: ^Video_Stream_Encoder) {
     video_stream_encoder_abort(encoder)
     if len(encoder.temporary_path) > 0 {
         delete(encoder.temporary_path)

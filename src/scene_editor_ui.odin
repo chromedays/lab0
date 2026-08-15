@@ -228,7 +228,7 @@ scene_set_selection_name :: proc(
     scene: ^shared.Scene,
     name: string,
 ) -> bool {
-    if !scene_selection_valid(selection, scene) || !shared.scene_name_valid(name) {
+    if !scene_selection_valid(selection, scene) || !shared.scene_name_is_valid(name) {
         return false
     }
     target: ^string
@@ -315,7 +315,7 @@ scene_add_primitive :: proc(
     name := strings.clone(shared.scene_primitive_shape_to_string(shape))
     if len(name) > 0 {
         mutable := transmute([]u8)name
-        mutable[0] = shared.ascii_search_lower(mutable[0]) - ('a' - 'A')
+        mutable[0] = shared.ascii_byte_to_lower(mutable[0]) - ('a' - 'A')
     }
     append(&scene.primitives, shared.Scene_Primitive{
         id = id,
@@ -361,7 +361,7 @@ scene_add_spot_light :: proc(scene: ^shared.Scene) -> int {
         name = strings.clone("Spot Light"),
         enabled = true,
         position = scene.camera.position,
-        direction = shared.scene_normalize_direction_stable(direction),
+        direction = shared.scene_direction_normalize_stable(direction),
         color = {0.65, 0.78, 1},
         intensity = 1,
         range = 10,
@@ -382,8 +382,8 @@ scene_editor_add_model :: proc(
 ) -> bool {
     if scene_item_count(scene) >= shared.SCENE_MAX_ITEMS ||
        len(scene.models) >= shared.SCENE_MAX_MODELS ||
-       !shared.scene_file_path_portable(source, os.ext(source)) ||
-       !shared.scene_model_extension_supported(source) ||
+       !shared.scene_file_path_is_portable(source, os.ext(source)) ||
+       !shared.scene_model_extension_is_supported(source) ||
        !os.is_file(source) {
         return false
     }
@@ -399,7 +399,7 @@ scene_editor_add_model :: proc(
         },
         tint = rl.WHITE,
     }
-    resource, resource_error := shared.scene_load_model_resource(&model)
+    resource, resource_error := shared.scene_model_resource_load(&model)
     if resource_error != .NONE {
         delete(model.id)
         delete(model.name)
@@ -436,7 +436,7 @@ scene_editor_duplicate_selection :: proc(
         duplicate.id = scene_next_item_id(scene, "model")
         duplicate.name = strings.clone(source.name)
         duplicate.source = strings.clone(source.source)
-        resource, resource_error := shared.scene_load_model_resource(&duplicate)
+        resource, resource_error := shared.scene_model_resource_load(&duplicate)
         if resource_error != .NONE {
             delete(duplicate.id)
             delete(duplicate.name)
@@ -522,11 +522,11 @@ scene_editor_open_path :: proc(
     renderer: ^shared.Scene_Renderer,
     resources: ^shared.Scene_Resources,
 ) -> bool {
-    replacement_scene, scene_error := shared.load_scene(path)
+    replacement_scene, scene_error := shared.scene_load(path)
     if scene_error != .NONE { return false }
-    replacement_style, style_error := shared.load_cel_style(replacement_scene.style_path)
+    replacement_style, style_error := shared.cel_style_load(replacement_scene.style_path)
     if style_error != .NONE {
-        shared.destroy_scene(&replacement_scene)
+        shared.scene_destroy(&replacement_scene)
         return false
     }
     replacement_renderer: shared.Scene_Renderer
@@ -536,23 +536,23 @@ scene_editor_open_path :: proc(
         replacement_scene.render.downscale_level,
     ) {
         shared.scene_renderer_destroy(&replacement_renderer)
-        shared.destroy_cel_style(&replacement_style)
-        shared.destroy_scene(&replacement_scene)
+        shared.cel_style_destroy(&replacement_style)
+        shared.scene_destroy(&replacement_scene)
         return false
     }
-    replacement_resources, resource_error := shared.scene_load_resources(&replacement_scene)
+    replacement_resources, resource_error := shared.scene_resources_load(&replacement_scene)
     if resource_error != .NONE {
         shared.scene_resources_destroy(&replacement_resources)
         shared.scene_renderer_destroy(&replacement_renderer)
-        shared.destroy_cel_style(&replacement_style)
-        shared.destroy_scene(&replacement_scene)
+        shared.cel_style_destroy(&replacement_style)
+        shared.scene_destroy(&replacement_scene)
         return false
     }
 
     shared.scene_resources_destroy(resources)
     shared.scene_renderer_destroy(renderer)
-    shared.destroy_cel_style(style)
-    shared.destroy_scene(scene)
+    shared.cel_style_destroy(style)
+    shared.scene_destroy(scene)
     scene^ = replacement_scene
     style^ = replacement_style
     renderer^ = replacement_renderer
@@ -568,11 +568,11 @@ scene_editor_new_default :: proc(
     renderer: ^shared.Scene_Renderer,
     resources: ^shared.Scene_Resources,
 ) -> bool {
-    replacement_scene := shared.make_default_scene()
+    replacement_scene := shared.scene_make_default()
     replacement_scene.dirty = true
-    replacement_style, style_error := shared.load_cel_style(replacement_scene.style_path)
+    replacement_style, style_error := shared.cel_style_load(replacement_scene.style_path)
     if style_error != .NONE {
-        shared.destroy_scene(&replacement_scene)
+        shared.scene_destroy(&replacement_scene)
         return false
     }
     replacement_renderer: shared.Scene_Renderer
@@ -582,23 +582,23 @@ scene_editor_new_default :: proc(
         replacement_scene.render.downscale_level,
     ) {
         shared.scene_renderer_destroy(&replacement_renderer)
-        shared.destroy_cel_style(&replacement_style)
-        shared.destroy_scene(&replacement_scene)
+        shared.cel_style_destroy(&replacement_style)
+        shared.scene_destroy(&replacement_scene)
         return false
     }
-    replacement_resources, resource_error := shared.scene_load_resources(&replacement_scene)
+    replacement_resources, resource_error := shared.scene_resources_load(&replacement_scene)
     if resource_error != .NONE {
         shared.scene_resources_destroy(&replacement_resources)
         shared.scene_renderer_destroy(&replacement_renderer)
-        shared.destroy_cel_style(&replacement_style)
-        shared.destroy_scene(&replacement_scene)
+        shared.cel_style_destroy(&replacement_style)
+        shared.scene_destroy(&replacement_scene)
         return false
     }
 
     shared.scene_resources_destroy(resources)
     shared.scene_renderer_destroy(renderer)
-    shared.destroy_cel_style(style)
-    shared.destroy_scene(scene)
+    shared.cel_style_destroy(style)
+    shared.scene_destroy(scene)
     scene^ = replacement_scene
     style^ = replacement_style
     renderer^ = replacement_renderer
@@ -621,7 +621,7 @@ scene_editor_pick :: proc(
     }
     ray := rl.GetScreenToWorldRayEx(
         internal_position,
-        shared.scene_camera_to_raylib(scene.camera),
+        shared.scene_camera_to_raylib_camera(scene.camera),
         shared.SCENE_SCREEN_WIDTH,
         shared.SCENE_SCREEN_HEIGHT,
     )
@@ -756,7 +756,7 @@ scene_editor_try_begin_gizmo :: proc(
     if !valid || !scene_editor_gizmo_mode_supported(state.selection, state.gizmo_mode) {
         return false
     }
-    camera := shared.scene_camera_to_raylib(scene.camera)
+    camera := shared.scene_camera_to_raylib_camera(scene.camera)
     screen_origin := scene_editor_world_to_viewport(origin, camera, viewport)
     world_length := scene_editor_gizmo_world_length(scene, origin)
     closest_axis := -1
@@ -797,7 +797,7 @@ scene_editor_apply_gizmo_drag :: proc(
     origin, valid := scene_editor_selection_position(state.selection, scene)
     if !valid { return }
     axis := SCENE_GIZMO_AXES[state.gizmo_axis]
-    camera := shared.scene_camera_to_raylib(scene.camera)
+    camera := shared.scene_camera_to_raylib_camera(scene.camera)
     world_length := scene_editor_gizmo_world_length(scene, origin)
     screen_origin := scene_editor_world_to_viewport(origin, camera, viewport)
     screen_end := scene_editor_world_to_viewport(
@@ -837,7 +837,7 @@ scene_editor_apply_gizmo_drag :: proc(
             rotation[state.gizmo_axis] += angle_degrees
         case .SPOT_LIGHT:
             light := &scene.spot_lights[selection.index]
-            light.direction = shared.scene_normalize_direction_stable(
+            light.direction = shared.scene_direction_normalize_stable(
                 rl.Vector3RotateByAxisAngle(
                     light.direction,
                     axis,
@@ -875,7 +875,7 @@ scene_editor_frame_selection :: proc(
     origin, valid := scene_editor_selection_position(state.selection, scene)
     if !valid { return }
     view_offset := scene.camera.position - scene.camera.target
-    if !shared.scene_direction_valid(view_offset) { view_offset = {1, 0.6, 1} }
+    if !shared.scene_direction_is_valid(view_offset) { view_offset = {1, 0.6, 1} }
     distance: f32 = 4
     switch state.selection.kind {
     case .NONE, .POINT_LIGHT, .SPOT_LIGHT:
@@ -1194,7 +1194,7 @@ scene_editor_draw_camera :: proc(scene: ^shared.Scene, x: f32, y: ^f32, width: f
     y^ += 18
     previous_camera := scene.camera
     if scene_gui_vector3(x, y^, width, &scene.camera.position, -10000, 10000, 100) {
-        if shared.scene_camera_valid(scene.camera) {
+        if shared.scene_camera_is_valid(scene.camera) {
             scene.dirty = true
         } else {
             scene.camera = previous_camera
@@ -1205,7 +1205,7 @@ scene_editor_draw_camera :: proc(scene: ^shared.Scene, x: f32, y: ^f32, width: f
     y^ += 18
     previous_camera = scene.camera
     if scene_gui_vector3(x, y^, width, &scene.camera.target, -10000, 10000, 100) {
-        if shared.scene_camera_valid(scene.camera) {
+        if shared.scene_camera_is_valid(scene.camera) {
             scene.dirty = true
         } else {
             scene.camera = previous_camera
@@ -1216,7 +1216,7 @@ scene_editor_draw_camera :: proc(scene: ^shared.Scene, x: f32, y: ^f32, width: f
     y^ += 18
     previous_camera = scene.camera
     if scene_gui_vector3(x, y^, width, &scene.camera.up, -1, 1, 100) {
-        if shared.scene_camera_valid(scene.camera) {
+        if shared.scene_camera_is_valid(scene.camera) {
             scene.dirty = true
         } else {
             scene.camera = previous_camera
@@ -1359,8 +1359,8 @@ scene_editor_draw_selection_inspector :: proc(
         } else if selection.index < len(resources.models) &&
                   rl.GuiButton({x, y^, width, 22}, "Enable Fixed Animation Pose") {
             resource := &resources.models[selection.index]
-            shared.destroy_animation_playback(&resource.playback)
-            resource.playback = shared.load_animation_playback(
+            shared.animation_playback_destroy(&resource.playback)
+            resource.playback = shared.animation_playback_load(
                 resource.model,
                 item.source,
                 .ASSET,
@@ -1418,8 +1418,8 @@ scene_editor_draw_selection_inspector :: proc(
         y^ += 18
         previous_direction := item.direction
         if scene_gui_vector3(x, y^, width, &item.direction, -1, 1, 100) {
-            if shared.scene_direction_valid(item.direction) {
-                item.direction = shared.scene_normalize_direction_stable(item.direction)
+            if shared.scene_direction_is_valid(item.direction) {
+                item.direction = shared.scene_direction_normalize_stable(item.direction)
                 scene.dirty = true
             } else {
                 item.direction = previous_direction
@@ -1453,7 +1453,7 @@ scene_editor_draw_directional_light :: proc(scene: ^shared.Scene, bounds: rl.Rec
     if previous_enabled != light.enabled { scene.dirty = true }
     y += 25
 
-    direction := shared.scene_normalize_direction_stable(light.direction)
+    direction := shared.scene_direction_normalize_stable(light.direction)
     radians_to_degrees :: f32(180 / math.PI)
     degrees_to_radians :: f32(math.PI / 180)
     azimuth := math.atan2(direction.z, direction.x) * radians_to_degrees
@@ -1522,7 +1522,7 @@ scene_editor_draw_directional_light :: proc(scene: ^shared.Scene, bounds: rl.Rec
     }
     y += 29
     if rl.GuiButton({x, y, width, 22}, "Reset Direction") {
-        light.direction = shared.scene_normalize_direction_stable({0.35, 0.8, 0.55})
+        light.direction = shared.scene_direction_normalize_stable({0.35, 0.8, 0.55})
         scene.dirty = true
     }
 }
@@ -1552,7 +1552,7 @@ scene_editor_draw_overlays :: proc(
     scene: ^shared.Scene,
     viewport: rl.Rectangle,
 ) {
-    camera := shared.scene_camera_to_raylib(scene.camera)
+    camera := shared.scene_camera_to_raylib_camera(scene.camera)
     for light in scene.point_lights {
         position := scene_editor_world_to_viewport(light.position, camera, viewport)
         rl.DrawCircleV(position, 6, {255, 211, 88, 230})
@@ -1651,7 +1651,7 @@ scene_editor_draw_ui :: proc(
         }
     }
     if rl.GuiButton({664, 8, 52, 24}, "Save") {
-        save_error := shared.save_scene(scene_ui_buffer_string(state.scene_path[:]), scene)
+        save_error := shared.scene_save(scene_ui_buffer_string(state.scene_path[:]), scene)
         if save_error == .NONE {
             scene.dirty = false
             state.status = .SAVED
@@ -1697,7 +1697,7 @@ scene_editor_draw_ui :: proc(
         )
         if result == 1 {
             path := scene_ui_buffer_string(state.save_as_path[:])
-            save_error := shared.save_scene(path, scene)
+            save_error := shared.scene_save(path, scene)
             if save_error == .NONE {
                 scene_ui_buffer_set(state.scene_path[:], path)
                 scene.dirty = false
@@ -1730,7 +1730,7 @@ scene_editor_draw_ui :: proc(
             "Save;Discard;Cancel",
         )
         if result == 1 {
-            save_error := shared.save_scene(
+            save_error := shared.scene_save(
                 scene_ui_buffer_string(state.scene_path[:]),
                 scene,
             )

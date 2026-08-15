@@ -12,8 +12,8 @@ import "core:testing"
 // Ordinary application arguments leave capture mode disabled and defaults intact.
 @test
 capture_options_are_disabled_without_capture_arguments :: proc(t: ^testing.T) {
-    result := parse_capture_options({})
-    defer destroy_capture_options(&result.options)
+    result := capture_options_parse({})
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.NONE)
     testing.expect(t, !result.options.enabled)
@@ -22,17 +22,17 @@ capture_options_are_disabled_without_capture_arguments :: proc(t: ^testing.T) {
 // Conventional help aliases are recognized independently of the active mode.
 @test
 standard_help_aliases_are_recognized :: proc(t: ^testing.T) {
-    testing.expect(t, standard_help_requested({"--help"}))
-    testing.expect(t, standard_help_requested({"--mode", "game", "-h"}))
-    testing.expect(t, !standard_help_requested({"--capture-help"}))
-    testing.expect(t, cli_argument_present({"--game-help"}, "--game-help"))
+    testing.expect(t, cli_help_is_requested({"--help"}))
+    testing.expect(t, cli_help_is_requested({"--mode", "game", "-h"}))
+    testing.expect(t, !cli_help_is_requested({"--capture-help"}))
+    testing.expect(t, cli_argument_is_present({"--game-help"}, "--game-help"))
 }
 
 // A case without an explicit output receives a stable single-frame PNG path.
 @test
 capture_options_build_a_deterministic_default_output :: proc(t: ^testing.T) {
-    result := parse_capture_options({"--capture-case", "smoke"})
-    defer destroy_capture_options(&result.options)
+    result := capture_options_parse({"--capture-case", "smoke"})
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.NONE)
     testing.expect(t, result.options.enabled)
@@ -49,7 +49,7 @@ capture_options_build_a_deterministic_default_output :: proc(t: ^testing.T) {
 // Every explicit model/style/view/mode/target/frame/warmup option maps to runtime state.
 @test
 capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
-    result := parse_capture_options({
+    result := capture_options_parse({
         "--capture-case", "cesium-walk",
         "--capture-output", "artifacts/cesium-walk.png",
         "--capture-model", "assets/CesiumMan.glb",
@@ -62,7 +62,7 @@ capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
         "--capture-warmup", "4",
         "--capture-show-window",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.NONE)
     testing.expect_value(t, result.options.output_path, "artifacts/cesium-walk.png")
@@ -79,11 +79,11 @@ capture_options_parse_explicit_render_state :: proc(t: ^testing.T) {
 // Edge AA accepts only the two viewer resolve modes.
 @test
 capture_options_reject_an_invalid_edge_aa_mode :: proc(t: ^testing.T) {
-    result := parse_capture_options({
+    result := capture_options_parse({
         "--capture-case", "smoke",
         "--capture-edge-aa", "fxaa",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.INVALID_EDGE_AA)
     testing.expect(t, !result.options.enabled)
@@ -92,11 +92,11 @@ capture_options_reject_an_invalid_edge_aa_mode :: proc(t: ^testing.T) {
 // Style inputs must be non-empty JSON paths before any file access occurs.
 @test
 capture_options_reject_an_invalid_style_path :: proc(t: ^testing.T) {
-    result := parse_capture_options({
+    result := capture_options_parse({
         "--capture-case", "smoke",
         "--capture-style", "styles/anime.txt",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.INVALID_STYLE)
     testing.expect(t, !result.options.enabled)
@@ -105,11 +105,11 @@ capture_options_reject_an_invalid_style_path :: proc(t: ^testing.T) {
 // Model-source flags reject empty values rather than falling back silently.
 @test
 capture_options_reject_an_empty_model_source :: proc(t: ^testing.T) {
-    result := parse_capture_options({
+    result := capture_options_parse({
         "--capture-case", "smoke",
         "--capture-model", "",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.INVALID_MODEL)
     testing.expect(t, !result.options.enabled)
@@ -118,8 +118,8 @@ capture_options_reject_an_empty_model_source :: proc(t: ^testing.T) {
 // Any capture-specific flag requires an explicit case name for deterministic reporting.
 @test
 capture_options_reject_capture_flags_without_a_case :: proc(t: ^testing.T) {
-    result := parse_capture_options({"--capture-mode", "blended"})
-    defer destroy_capture_options(&result.options)
+    result := capture_options_parse({"--capture-mode", "blended"})
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.MISSING_CASE)
     testing.expect(t, !result.options.enabled)
@@ -128,8 +128,8 @@ capture_options_reject_capture_flags_without_a_case :: proc(t: ^testing.T) {
 // Unknown capture-prefixed flags fail fast instead of being ignored as app arguments.
 @test
 capture_options_reject_unknown_capture_arguments :: proc(t: ^testing.T) {
-    result := parse_capture_options({"--capture-case", "smoke", "--capture-magic", "yes"})
-    defer destroy_capture_options(&result.options)
+    result := capture_options_parse({"--capture-case", "smoke", "--capture-magic", "yes"})
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.UNKNOWN_ARGUMENT)
     testing.expect_value(t, result.error_argument, "--capture-magic")
@@ -138,11 +138,11 @@ capture_options_reject_unknown_capture_arguments :: proc(t: ^testing.T) {
 // NaN and infinity are rejected even though they are parseable floating-point values.
 @test
 capture_options_reject_non_finite_animation_frames :: proc(t: ^testing.T) {
-    result := parse_capture_options({
+    result := capture_options_parse({
         "--capture-case", "smoke",
         "--capture-frame", "NaN",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.INVALID_FRAME)
 }
@@ -150,12 +150,12 @@ capture_options_reject_non_finite_animation_frames :: proc(t: ^testing.T) {
 // Inclusive start/end/step ranges populate sequence state and output-token metadata.
 @test
 capture_options_parse_frame_sequence :: proc(t: ^testing.T) {
-    result := parse_capture_options({
+    result := capture_options_parse({
         "--capture-case", "running",
         "--capture-frame-range", "0:12:3",
         "--capture-output", "captures/running/frame-%04d.png",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.NONE)
     testing.expect(t, result.options.enabled)
@@ -164,7 +164,7 @@ capture_options_parse_frame_sequence :: proc(t: ^testing.T) {
     testing.expect_value(t, result.options.frame_range_end, 12)
     testing.expect_value(t, result.options.frame_range_step, 3)
 
-    frame_path := format_capture_sequence_output_path(
+    frame_path := capture_sequence_output_path_format(
         result.options.output_path,
         result.options.output_template,
         12,
@@ -176,16 +176,16 @@ capture_options_parse_frame_sequence :: proc(t: ^testing.T) {
 // Sequence mode synthesizes a zero-padded frame token when output is omitted.
 @test
 capture_options_build_a_default_sequence_template :: proc(t: ^testing.T) {
-    result := parse_capture_options({
+    result := capture_options_parse({
         "--capture-case", "running",
         "--capture-frame-range", "4:8",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(t, result.error, Capture_Parse_Error.NONE)
     testing.expect_value(t, result.options.output_path, "captures/running-%04d.png")
 
-    frame_path := format_capture_sequence_output_path(
+    frame_path := capture_sequence_output_path_format(
         result.options.output_path,
         result.options.output_template,
         4,
@@ -208,7 +208,7 @@ capture_options_reject_invalid_frame_ranges :: proc(t: ^testing.T) {
         "0:999999999:1",
     }
     for invalid_range in invalid_ranges {
-        result := parse_capture_options({
+        result := capture_options_parse({
             "--capture-case", "running",
             "--capture-frame-range", invalid_range,
         })
@@ -217,19 +217,19 @@ capture_options_reject_invalid_frame_ranges :: proc(t: ^testing.T) {
             result.error,
             Capture_Parse_Error.INVALID_FRAME_RANGE,
         )
-        destroy_capture_options(&result.options)
+        capture_options_destroy(&result.options)
     }
 }
 
 // A single-frame pose and a frame range cannot be requested simultaneously.
 @test
 capture_options_reject_conflicting_frame_modes :: proc(t: ^testing.T) {
-    result := parse_capture_options({
+    result := capture_options_parse({
         "--capture-case", "running",
         "--capture-frame", "2",
         "--capture-frame-range", "0:4:2",
     })
-    defer destroy_capture_options(&result.options)
+    defer capture_options_destroy(&result.options)
 
     testing.expect_value(
         t,
@@ -247,7 +247,7 @@ capture_options_require_a_sequence_output_token :: proc(t: ^testing.T) {
         "captures/running/frame-%00d.png",
     }
     for invalid_template in invalid_templates {
-        result := parse_capture_options({
+        result := capture_options_parse({
             "--capture-case", "running",
             "--capture-frame-range", "0:4:2",
             "--capture-output", invalid_template,
@@ -257,7 +257,7 @@ capture_options_require_a_sequence_output_token :: proc(t: ^testing.T) {
             result.error,
             Capture_Parse_Error.INVALID_OUTPUT_TEMPLATE,
         )
-        destroy_capture_options(&result.options)
+        capture_options_destroy(&result.options)
     }
 }
 
@@ -280,7 +280,7 @@ capture_model_source_accepts_a_relative_asset_path :: proc(t: ^testing.T) {
     append(&model_assets.paths, absolute_model_path)
     defer delete(model_assets.paths)
 
-    source_index, source_found := find_capture_model_source(
+    source_index, source_found := capture_find_model_source(
         &model_assets,
         relative_model_path,
     )
@@ -370,6 +370,6 @@ capture_output_directory_can_be_reused :: proc(t: ^testing.T) {
     }
     defer delete(output_path)
 
-    testing.expect(t, ensure_capture_output_directory(output_path))
-    testing.expect(t, ensure_capture_output_directory(output_path))
+    testing.expect(t, capture_output_directory_ensure(output_path))
+    testing.expect(t, capture_output_directory_ensure(output_path))
 }

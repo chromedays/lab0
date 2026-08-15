@@ -186,7 +186,7 @@ game_particles_track_steps :: proc(
     from, to: rl.Vector3,
 ) {
     displacement := rl.Vector2{to.x - from.x, to.z - from.z}
-    distance := shared.game_vector_length(displacement)
+    distance := shared.game_vector2_length(displacement)
     if distance <= 0.0001 {
         return
     }

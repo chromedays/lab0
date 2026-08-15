@@ -146,7 +146,7 @@ validate_scene_capture_options :: proc(
        len(capture.style_path) > 0 ||
        len(capture.video_output) > 0 ||
        capture.video_frame_count > 0 ||
-        shared.cli_argument_present(arguments, "--capture-edge-aa") {
+        shared.cli_argument_is_present(arguments, "--capture-edge-aa") {
         return false
     }
     return true
@@ -160,8 +160,8 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     defer log.destroy_console_logger(console_logger)
     context.logger = console_logger
 
-    if shared.standard_help_requested(arguments) ||
-       shared.cli_argument_present(arguments, "--scene-help") {
+    if shared.cli_help_is_requested(arguments) ||
+       shared.cli_argument_is_present(arguments, "--scene-help") {
         print_scene_editor_usage()
         return 0
     }
@@ -174,13 +174,13 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
         return 2
     }
 
-    capture_result := shared.parse_capture_options(arguments)
-    defer shared.destroy_capture_options(&capture_result.options)
+    capture_result := shared.capture_options_parse(arguments)
+    defer shared.capture_options_destroy(&capture_result.options)
     if run_options.help_requested || capture_result.options.help_requested {
         print_scene_editor_usage()
         if capture_result.options.help_requested {
             fmt.println("")
-            shared.print_capture_usage()
+            shared.cli_capture_usage_print()
         }
         return 0
     }
@@ -204,11 +204,11 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     scene: shared.Scene
     scene_error: shared.Scene_Error
     if run_options.scene_path_set {
-        scene, scene_error = shared.load_scene(run_options.scene_path)
+        scene, scene_error = shared.scene_load(run_options.scene_path)
     } else {
-        scene = shared.make_default_scene()
+        scene = shared.scene_make_default()
     }
-    defer shared.destroy_scene(&scene)
+    defer shared.scene_destroy(&scene)
     if scene_error != .NONE {
         log.errorf(
             "Failed to load scene %s: %s",
@@ -218,8 +218,8 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
         return 2
     }
 
-    style, style_error := shared.load_cel_style(scene.style_path)
-    defer shared.destroy_cel_style(&style)
+    style, style_error := shared.cel_style_load(scene.style_path)
+    defer shared.cel_style_destroy(&style)
     if style_error != .NONE {
         log.errorf(
             "Failed to load scene cel style %s: %s",
@@ -254,7 +254,7 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     }
     defer shared.scene_renderer_destroy(&renderer)
 
-    resources, resource_error := shared.scene_load_resources(&scene)
+    resources, resource_error := shared.scene_resources_load(&scene)
     defer shared.scene_resources_destroy(&resources)
     if resource_error != .NONE {
         log.errorf("Failed to load scene resources: %s", shared.scene_error_message(resource_error))
@@ -267,8 +267,8 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
     if capture.enabled {
         if video_enabled {
             video_encoder: shared.Video_Stream_Encoder
-            defer shared.destroy_video_stream_encoder(&video_encoder)
-            video_start_error := shared.start_video_stream_encoder(
+            defer shared.video_stream_encoder_destroy(&video_encoder)
+            video_start_error := shared.video_stream_encoder_start(
                 &video_encoder,
                 run_options.video_output,
                 SCENE_VIDEO_WIDTH,
@@ -298,7 +298,7 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
                 if !shared.scene_renderer_render(&renderer, &resources, &scene, &style) {
                     return 1
                 }
-                if !shared.video_stream_write_render_texture(
+                if !shared.video_stream_encoder_write_render_texture(
                     &video_encoder,
                     renderer.composite_target.texture,
                 ) {
@@ -310,7 +310,7 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
                     return 1
                 }
             }
-            if !shared.finish_video_stream_encoder(
+            if !shared.video_stream_encoder_finish(
                 &video_encoder,
                 run_options.video_output,
                 run_options.video_frame_count,
@@ -334,11 +334,11 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
                 return 1
             }
         }
-        texture := shared.scene_capture_texture(&renderer, capture.target)
+        texture := shared.scene_renderer_capture_texture(&renderer, capture.target)
         if !rl.IsTextureValid(texture) {
             return 1
         }
-        if !shared.export_render_texture_png(texture, capture.output_path) {
+        if !shared.capture_render_texture_export_png(texture, capture.output_path) {
             log.errorf(
                 "Failed to capture shared.Scene Editor case %s to %s",
                 capture.case_name,
@@ -414,7 +414,7 @@ run_scene_editor_mode :: proc(arguments: []string) -> int {
             if shift_down {
                 scene_editor_request_save_as(&editor_ui)
             } else {
-                save_error := shared.save_scene(
+                save_error := shared.scene_save(
                     scene_ui_buffer_string(editor_ui.scene_path[:]),
                     &scene,
                 )

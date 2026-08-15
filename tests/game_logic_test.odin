@@ -68,9 +68,9 @@ game_diagonal_input_is_normalized :: proc(t: ^testing.T) {
     normalized := game_normalize_input({1, 1})
     testing.expectf(
         t,
-        math.abs(game_vector_length(normalized) - 1) < 0.0001,
+        math.abs(game_vector2_length(normalized) - 1) < 0.0001,
         "diagonal input should have unit length, got %.6f",
-        game_vector_length(normalized),
+        game_vector2_length(normalized),
     )
     testing.expectf(
         t,
@@ -306,7 +306,7 @@ game_zombie_crowd_queues_through_a_tight_lane_without_overlap :: proc(
                 }
                 testing.expectf(
                     t,
-                    game_vector_length(delta) + 0.0001 >= GAME_ZOMBIE_SEPARATION,
+                    game_vector2_length(delta) + 0.0001 >= GAME_ZOMBIE_SEPARATION,
                     "zombies %d and %d overlapped in the tight lane",
                     zombie_index,
                     other_index,
@@ -369,7 +369,7 @@ game_zombie_disengages_and_returns_to_its_patrol_lane :: proc(t: ^testing.T) {
     }
     testing.expectf(
         t,
-        game_vector_length(anchor_delta) <= GAME_ZOMBIE_RETURN_RADIUS + 0.001,
+        game_vector2_length(anchor_delta) <= GAME_ZOMBIE_RETURN_RADIUS + 0.001,
         "returned zombie should be on its patrol segment",
     )
 }

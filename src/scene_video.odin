@@ -58,7 +58,7 @@ validate_scene_video_options :: proc(
         }
         return .NONE
     }
-    if !shared.video_stream_output_path_valid(run_options.video_output) {
+    if !shared.video_stream_output_path_is_valid(run_options.video_output) {
         return .INVALID_OUTPUT
     }
     if !run_options.scene_path_set {
@@ -114,7 +114,7 @@ scene_video_orbit_camera :: proc(
 ) -> shared.Scene_Camera {
     result := authored_camera
     if frame_count == 0 { return result }
-    axis := shared.scene_normalize_direction_stable(authored_camera.up)
+    axis := shared.scene_direction_normalize_stable(authored_camera.up)
     offset := authored_camera.position - authored_camera.target
     angle_radians := scene_video_orbit_degrees(
         output_frame_index,

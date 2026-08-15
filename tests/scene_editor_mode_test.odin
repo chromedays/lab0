@@ -46,8 +46,8 @@ scene_mode_parser_accepts_video_report_options :: proc(t: ^testing.T) {
     testing.expect(t, options.video_duration_set)
     testing.expect_value(t, options.video_frame_count, u64(300))
 
-    capture_result := parse_capture_options(arguments)
-    defer destroy_capture_options(&capture_result.options)
+    capture_result := capture_options_parse(arguments)
+    defer capture_options_destroy(&capture_result.options)
     testing.expect_value(t, capture_result.error, Capture_Parse_Error.NONE)
     testing.expect(
         t,
@@ -74,8 +74,8 @@ scene_capture_accepts_only_scene_owned_render_state :: proc(t: ^testing.T) {
     }
     options, valid, _ := parse_scene_run_options(arguments)
     testing.expect(t, valid)
-    capture_result := parse_capture_options(arguments)
-    defer destroy_capture_options(&capture_result.options)
+    capture_result := capture_options_parse(arguments)
+    defer capture_options_destroy(&capture_result.options)
     testing.expect_value(t, capture_result.error, Capture_Parse_Error.NONE)
     testing.expect(
         t,
@@ -88,8 +88,8 @@ scene_capture_accepts_only_scene_owned_render_state :: proc(t: ^testing.T) {
         "--capture-case", "scene-grid",
         "--capture-edge-aa", "hard",
     }
-    invalid_capture := parse_capture_options(invalid_arguments)
-    defer destroy_capture_options(&invalid_capture.options)
+    invalid_capture := capture_options_parse(invalid_arguments)
+    defer capture_options_destroy(&invalid_capture.options)
     testing.expect(
         t,
         !validate_scene_capture_options(
@@ -102,8 +102,8 @@ scene_capture_accepts_only_scene_owned_render_state :: proc(t: ^testing.T) {
 
 @test
 bundled_scene_fixture_loads_with_fixed_pose_metadata :: proc(t: ^testing.T) {
-    scene, load_error := load_scene("scenes/primitive-light-grid.json")
-    defer destroy_scene(&scene)
+    scene, load_error := scene_load("scenes/primitive-light-grid.json")
+    defer scene_destroy(&scene)
     if !testing.expect_value(t, load_error, Scene_Error.NONE) { return }
     testing.expect_value(t, len(scene.models), 1)
     testing.expect_value(t, len(scene.primitives), 7)
@@ -117,8 +117,8 @@ bundled_scene_fixture_loads_with_fixed_pose_metadata :: proc(t: ^testing.T) {
 
 @test
 bundled_animated_pose_fixture_loads :: proc(t: ^testing.T) {
-    scene, load_error := load_scene("scenes/animated-model-pose.json")
-    defer destroy_scene(&scene)
+    scene, load_error := scene_load("scenes/animated-model-pose.json")
+    defer scene_destroy(&scene)
     if !testing.expect_value(t, load_error, Scene_Error.NONE) { return }
     testing.expect_value(t, len(scene.models), 1)
     pose, pose_present := scene.models[0].animation.?
@@ -129,8 +129,8 @@ bundled_animated_pose_fixture_loads :: proc(t: ^testing.T) {
 
 @test
 bundled_shadow_alignment_fixture_is_directional_only :: proc(t: ^testing.T) {
-    scene, load_error := load_scene("scenes/shadow-alignment.json")
-    defer destroy_scene(&scene)
+    scene, load_error := scene_load("scenes/shadow-alignment.json")
+    defer scene_destroy(&scene)
     if !testing.expect_value(t, load_error, Scene_Error.NONE) { return }
     testing.expect_value(t, len(scene.models), 0)
     testing.expect_value(t, len(scene.primitives), 2)
@@ -142,8 +142,8 @@ bundled_shadow_alignment_fixture_is_directional_only :: proc(t: ^testing.T) {
 
 @test
 scene_editor_primitive_mutations_update_dirty_state :: proc(t: ^testing.T) {
-    scene := make_default_scene()
-    defer destroy_scene(&scene)
+    scene := scene_make_default()
+    defer scene_destroy(&scene)
     resources: Scene_Resources
     state: Scene_Editor_UI_State
     scene_editor_ui_init(&state, "")

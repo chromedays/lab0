@@ -68,7 +68,7 @@ Capture_Output_Template :: struct {
 
 // Capture_Options is the fully validated render request consumed by main.
 // output_path_owned records whether parsing allocated the path and therefore
-// whether destroy_capture_options must release it.
+// whether capture_options_destroy must release it.
 Capture_Options :: struct {
     enabled:             bool,
     help_requested:      bool,
@@ -103,18 +103,18 @@ Capture_Parse_Result :: struct {
     error_argument: string,
 }
 
-// destroy_capture_options releases parser-owned strings and clears the struct.
+// capture_options_destroy releases parser-owned strings and clears the struct.
 // Clearing prevents stale ownership flags from causing a later double free.
-destroy_capture_options :: proc(options: ^Capture_Options) {
+capture_options_destroy :: proc(options: ^Capture_Options) {
     if options.output_path_owned && len(options.output_path) > 0 {
         delete(options.output_path)
     }
     options^ = {}
 }
 
-// format_capture_sequence_output_path substitutes one validated frame token.
+// capture_sequence_output_path_format substitutes one validated frame token.
 // The returned string is allocator-owned and must be deleted by the caller.
-format_capture_sequence_output_path :: proc(
+capture_sequence_output_path_format :: proc(
     output_path: string,
     output_template: Capture_Output_Template,
     animation_frame: int,
@@ -133,10 +133,10 @@ format_capture_sequence_output_path :: proc(
     return fmt.aprintf("%s%d%s", prefix, animation_frame, suffix)
 }
 
-// parse_capture_options scans capture-specific CLI flags while ignoring normal
+// capture_options_parse scans capture-specific CLI flags while ignoring normal
 // application arguments. It applies defaults, validates cross-flag invariants,
 // and allocates a deterministic default output path when none is supplied.
-parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
+capture_options_parse :: proc(arguments: []string) -> Capture_Parse_Result {
     result: Capture_Parse_Result
     result.options.lens_mode = .PIXELATED
     result.options.view = .DEFAULT
@@ -224,7 +224,7 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
             result.options.style_path = value
 
         case "--viewer-video-output":
-            if !video_stream_output_path_valid(value) {
+            if !video_stream_output_path_is_valid(value) {
                 result.error = .INVALID_VIDEO_OUTPUT
                 result.error_argument = value
                 return result
@@ -464,24 +464,24 @@ parse_capture_options :: proc(arguments: []string) -> Capture_Parse_Result {
     return result
 }
 
-// cli_argument_present supports early, allocation-free checks for flags that
+// cli_argument_is_present supports early, allocation-free checks for flags that
 // must take effect before a mode parser or raylib initialization.
-cli_argument_present :: proc(arguments: []string, requested: string) -> bool {
+cli_argument_is_present :: proc(arguments: []string, requested: string) -> bool {
     for argument in arguments {
         if argument == requested { return true }
     }
     return false
 }
 
-// standard_help_requested recognizes the conventional process-wide aliases.
-standard_help_requested :: proc(arguments: []string) -> bool {
-    return cli_argument_present(arguments, "--help") ||
-           cli_argument_present(arguments, "-h")
+// cli_help_is_requested recognizes the conventional process-wide aliases.
+cli_help_is_requested :: proc(arguments: []string) -> bool {
+    return cli_argument_is_present(arguments, "--help") ||
+           cli_argument_is_present(arguments, "-h")
 }
 
-// print_viewer_usage is the top-level help shown for the default Viewer mode.
+// cli_viewer_usage_print is the top-level help shown for the default Viewer mode.
 // It advertises the alternate modes before appending the complete capture CLI.
-print_viewer_usage :: proc() {
+cli_viewer_usage_print :: proc() {
     fmt.println("Lab0 model viewer")
     fmt.println("")
     fmt.println("Usage:")
@@ -496,12 +496,12 @@ print_viewer_usage :: proc() {
     fmt.println("  --scene-help                      Print Scene Editor help")
     fmt.println("  --game-help                       Print traversal prototype help")
     fmt.println("")
-    print_capture_usage()
+    cli_capture_usage_print()
 }
 
-// print_capture_usage writes the capture-only help text without initializing
+// cli_capture_usage_print writes the capture-only help text without initializing
 // raylib, which keeps --capture-help usable in non-graphical environments.
-print_capture_usage :: proc() {
+cli_capture_usage_print :: proc() {
     fmt.println("Non-interactive capture mode")
     fmt.println("")
     fmt.println("  --capture-case <name>          Enable capture mode and name the case")
@@ -521,9 +521,9 @@ print_capture_usage :: proc() {
     fmt.println("  --capture-help                 Print this help without opening a window")
 }
 
-// find_capture_model_source resolves built-ins, repository-relative assets, and
+// capture_find_model_source resolves built-ins, repository-relative assets, and
 // absolute paths to the canonical source index used by the model browser.
-find_capture_model_source :: proc(
+capture_find_model_source :: proc(
     model_assets: ^Model_Assets,
     requested_source: string,
 ) -> (source_index: int, source_found: bool) {
@@ -545,9 +545,9 @@ find_capture_model_source :: proc(
     return -1, false
 }
 
-// ensure_capture_output_directory creates all parent directories for a PNG.
+// capture_output_directory_ensure creates all parent directories for a PNG.
 // Existing directories are accepted to support concurrent capture workers.
-ensure_capture_output_directory :: proc(output_path: string) -> bool {
+capture_output_directory_ensure :: proc(output_path: string) -> bool {
     output_directory := filepath.dir(output_path)
     if output_directory == "" || output_directory == "." {
         return true
@@ -570,15 +570,15 @@ ensure_capture_output_directory :: proc(output_path: string) -> bool {
     return true
 }
 
-// export_render_texture_png reads an RGBA texture from the GPU, fixes the
+// capture_render_texture_export_png reads an RGBA texture from the GPU, fixes the
 // RenderTexture Y orientation, optionally crops it, and writes a PNG. The
 // temporary raylib Image is always unloaded before the procedure returns.
-export_render_texture_png :: proc(
+capture_render_texture_export_png :: proc(
     texture: rl.Texture2D,
     output_path: string,
     crop_bounds: ^rl.Rectangle = nil,
 ) -> bool {
-    if !ensure_capture_output_directory(output_path) {
+    if !capture_output_directory_ensure(output_path) {
         return false
     }
 

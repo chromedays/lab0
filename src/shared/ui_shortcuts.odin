@@ -202,9 +202,9 @@ UI_Keyboard_State :: struct {
     clip_bounds:    rl.Rectangle,
 }
 
-// ui_primary_modifier_down treats Control and Command/Super as one portable
+// ui_primary_modifier_is_down treats Control and Command/Super as one portable
 // primary modifier so shortcuts behave naturally on macOS and other platforms.
-ui_primary_modifier_down :: proc() -> bool {
+ui_primary_modifier_is_down :: proc() -> bool {
     return rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL) ||
            rl.IsKeyDown(.LEFT_SUPER) || rl.IsKeyDown(.RIGHT_SUPER)
 }
@@ -218,7 +218,7 @@ ui_modifier_mask :: proc() -> u8 {
     if rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT) {
         modifiers |= UI_MOD_ALT
     }
-    if ui_primary_modifier_down() {
+    if ui_primary_modifier_is_down() {
         modifiers |= UI_MOD_PRIMARY
     }
     return modifiers
@@ -344,8 +344,8 @@ ui_keyboard_end_frame :: proc(keyboard: ^UI_Keyboard_State) {
     }
 }
 
-// ui_keyboard_set_clip limits focus registration to one visible UI region.
-ui_keyboard_set_clip :: proc(
+// ui_keyboard_clip_set limits focus registration to one visible UI region.
+ui_keyboard_clip_set :: proc(
     keyboard: ^UI_Keyboard_State,
     bounds: rl.Rectangle,
 ) {
@@ -353,18 +353,18 @@ ui_keyboard_set_clip :: proc(
     keyboard.clip_bounds = bounds
 }
 
-// ui_keyboard_clear_clip restores focus registration for the full UI.
-ui_keyboard_clear_clip :: proc(keyboard: ^UI_Keyboard_State) {
+// ui_keyboard_clip_clear restores focus registration for the full UI.
+ui_keyboard_clip_clear :: proc(keyboard: ^UI_Keyboard_State) {
     keyboard.clip_active = false
 }
 
-// ui_keyboard_clear_focus relinquishes keyboard ownership without altering order.
-ui_keyboard_clear_focus :: proc(keyboard: ^UI_Keyboard_State) {
+// ui_keyboard_focus_clear relinquishes keyboard ownership without altering order.
+ui_keyboard_focus_clear :: proc(keyboard: ^UI_Keyboard_State) {
     keyboard.focused = .NONE
 }
 
-// ui_keyboard_set_focus transfers keyboard ownership to a known control ID.
-ui_keyboard_set_focus :: proc(
+// ui_keyboard_focus_set transfers keyboard ownership to a known control ID.
+ui_keyboard_focus_set :: proc(
     keyboard: ^UI_Keyboard_State,
     focused: UI_Focus_ID,
 ) {
@@ -381,9 +381,9 @@ ui_keyboard_has_focus :: proc(keyboard: ^UI_Keyboard_State) -> bool {
     return keyboard.enabled && keyboard.focused != .NONE
 }
 
-// ui_register_control appends a visible widget to this frame's traversal order,
+// ui_control_register appends a visible widget to this frame's traversal order,
 // updates focus on a mouse press, and returns whether the widget owns focus.
-ui_register_control :: proc(
+ui_control_register :: proc(
     keyboard: ^UI_Keyboard_State,
     id: UI_Focus_ID,
     bounds: rl.Rectangle,
@@ -406,8 +406,8 @@ ui_register_control :: proc(
     return keyboard.focused == id
 }
 
-// ui_draw_focus paints the shared high-contrast focus ring outside widget bounds.
-ui_draw_focus :: proc(bounds: rl.Rectangle, focused: bool) {
+// ui_focus_draw paints the shared high-contrast focus ring outside widget bounds.
+ui_focus_draw :: proc(bounds: rl.Rectangle, focused: bool) {
     if focused {
         rl.DrawRectangleLinesEx(
             {bounds.x - 2, bounds.y - 2, bounds.width + 4, bounds.height + 4},
@@ -417,13 +417,13 @@ ui_draw_focus :: proc(bounds: rl.Rectangle, focused: bool) {
     }
 }
 
-// ui_key_pressed_or_repeat unifies the initial key edge with raylib repeat events.
-ui_key_pressed_or_repeat :: proc(key: rl.KeyboardKey) -> bool {
+// ui_key_is_pressed_or_repeating unifies the initial key edge with raylib repeat events.
+ui_key_is_pressed_or_repeating :: proc(key: rl.KeyboardKey) -> bool {
     return rl.IsKeyPressed(key) || rl.IsKeyPressedRepeat(key)
 }
 
-// ui_activation_pressed recognizes unmodified Enter, keypad Enter, or Space.
-ui_activation_pressed :: proc() -> bool {
+// ui_activation_is_pressed recognizes unmodified Enter, keypad Enter, or Space.
+ui_activation_is_pressed :: proc() -> bool {
     return ui_modifier_mask() == 0 &&
            (rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.KP_ENTER) ||
             rl.IsKeyPressed(.SPACE))
@@ -436,10 +436,10 @@ ui_gui_button :: proc(
     bounds: rl.Rectangle,
     text: cstring,
 ) -> bool {
-    focused := ui_register_control(keyboard, id, bounds)
+    focused := ui_control_register(keyboard, id, bounds)
     activated := rl.GuiButton(bounds, text) ||
-                 (focused && ui_activation_pressed())
-    ui_draw_focus(bounds, focused)
+                 (focused && ui_activation_is_pressed())
+    ui_focus_draw(bounds, focused)
     return activated
 }
 
@@ -452,13 +452,13 @@ ui_gui_check_box :: proc(
     text: cstring,
     checked: ^bool,
 ) -> bool {
-    focused := ui_register_control(keyboard, id, bounds)
+    focused := ui_control_register(keyboard, id, bounds)
     previous := checked^
     rl.GuiCheckBox(bounds, text, checked)
     if focused && ui_modifier_mask() == 0 && rl.IsKeyPressed(.SPACE) {
         checked^ = !checked^
     }
-    ui_draw_focus(bounds, focused)
+    ui_focus_draw(bounds, focused)
     return checked^ != previous
 }
 
@@ -472,20 +472,20 @@ ui_gui_slider_bar :: proc(
     value: ^f32,
     minimum, maximum, step, coarse_step: f32,
 ) -> bool {
-    focused := ui_register_control(keyboard, id, bounds)
+    focused := ui_control_register(keyboard, id, bounds)
     previous := value^
     rl.GuiSliderBar(bounds, left_text, right_text, value, minimum, maximum)
-    if focused && !ui_primary_modifier_down() &&
+    if focused && !ui_primary_modifier_is_down() &&
        !(rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)) {
         // Apply keyboard slider adjustments inline at their only call site.
         adjustment := step
         if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
             adjustment = coarse_step
         }
-        if ui_key_pressed_or_repeat(.LEFT) || ui_key_pressed_or_repeat(.DOWN) {
+        if ui_key_is_pressed_or_repeating(.LEFT) || ui_key_is_pressed_or_repeating(.DOWN) {
             value^ -= adjustment
         }
-        if ui_key_pressed_or_repeat(.RIGHT) || ui_key_pressed_or_repeat(.UP) {
+        if ui_key_is_pressed_or_repeating(.RIGHT) || ui_key_is_pressed_or_repeating(.UP) {
             value^ += adjustment
         }
         if rl.IsKeyPressed(.HOME) {
@@ -496,12 +496,12 @@ ui_gui_slider_bar :: proc(
         }
         value^ = clamp(value^, minimum, maximum)
     }
-    ui_draw_focus(bounds, focused)
+    ui_focus_draw(bounds, focused)
     return value^ != previous
 }
 
-// ui_adjust_int applies bounded integer keyboard edits with normal/coarse steps.
-ui_adjust_int :: proc(
+// ui_int_adjust applies bounded integer keyboard edits with normal/coarse steps.
+ui_int_adjust :: proc(
     value: ^c.int,
     minimum, maximum, step, coarse_step: c.int,
 ) -> bool {
@@ -510,10 +510,10 @@ ui_adjust_int :: proc(
     if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) {
         adjustment = coarse_step
     }
-    if ui_key_pressed_or_repeat(.LEFT) || ui_key_pressed_or_repeat(.DOWN) {
+    if ui_key_is_pressed_or_repeating(.LEFT) || ui_key_is_pressed_or_repeating(.DOWN) {
         value^ -= adjustment
     }
-    if ui_key_pressed_or_repeat(.RIGHT) || ui_key_pressed_or_repeat(.UP) {
+    if ui_key_is_pressed_or_repeating(.RIGHT) || ui_key_is_pressed_or_repeating(.UP) {
         value^ += adjustment
     }
     if rl.IsKeyPressed(.HOME) {
@@ -536,14 +536,14 @@ ui_gui_spinner :: proc(
     minimum, maximum, step, coarse_step: c.int,
     edit_mode: bool,
 ) -> bool {
-    focused := ui_register_control(keyboard, id, bounds)
+    focused := ui_control_register(keyboard, id, bounds)
     previous := value^
     rl.GuiSpinner(bounds, text, value, minimum, maximum, edit_mode)
-    if focused && !ui_primary_modifier_down() &&
+    if focused && !ui_primary_modifier_is_down() &&
        !(rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)) {
-        _ = ui_adjust_int(value, minimum, maximum, step, coarse_step)
+        _ = ui_int_adjust(value, minimum, maximum, step, coarse_step)
     }
-    ui_draw_focus(bounds, focused)
+    ui_focus_draw(bounds, focused)
     return value^ != previous
 }
 
@@ -556,14 +556,14 @@ ui_gui_combo_box :: proc(
     active: ^c.int,
     item_count: c.int,
 ) -> bool {
-    focused := ui_register_control(keyboard, id, bounds)
+    focused := ui_control_register(keyboard, id, bounds)
     previous := active^
     rl.GuiComboBox(bounds, text, active)
-    if focused && !ui_primary_modifier_down() &&
+    if focused && !ui_primary_modifier_is_down() &&
        !(rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)) {
-        _ = ui_adjust_int(active, 0, max(item_count - 1, 0), 1, 1)
+        _ = ui_int_adjust(active, 0, max(item_count - 1, 0), 1, 1)
     }
-    ui_draw_focus(bounds, focused)
+    ui_focus_draw(bounds, focused)
     return active^ != previous
 }
 
@@ -576,7 +576,7 @@ ui_gui_color_picker :: proc(
     color: ^rl.Color,
     include_alpha: bool,
 ) -> bool {
-    focused := ui_register_control(keyboard, id, bounds)
+    focused := ui_control_register(keyboard, id, bounds)
     previous := color^
     rl.GuiColorPicker(bounds, nil, color)
     channel_count: c.int = 3
@@ -588,13 +588,13 @@ ui_gui_color_picker :: proc(
         c.int(0),
         channel_count - 1,
     )
-    if focused && !ui_primary_modifier_down() &&
+    if focused && !ui_primary_modifier_is_down() &&
        !(rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)) {
-        if ui_key_pressed_or_repeat(.UP) {
+        if ui_key_is_pressed_or_repeating(.UP) {
             keyboard.color_channel =
                 (keyboard.color_channel - 1 + channel_count) % channel_count
         }
-        if ui_key_pressed_or_repeat(.DOWN) {
+        if ui_key_is_pressed_or_repeating(.DOWN) {
             keyboard.color_channel =
                 (keyboard.color_channel + 1) % channel_count
         }
@@ -619,10 +619,10 @@ ui_gui_color_picker :: proc(
             channel_name = "A"
         }
         component_value := i32(component^)
-        if ui_key_pressed_or_repeat(.LEFT) {
+        if ui_key_is_pressed_or_repeating(.LEFT) {
             component_value -= adjustment
         }
-        if ui_key_pressed_or_repeat(.RIGHT) {
+        if ui_key_is_pressed_or_repeating(.RIGHT) {
             component_value += adjustment
         }
         component^ = u8(clamp(component_value, i32(0), i32(255)))
@@ -641,13 +641,13 @@ ui_gui_color_picker :: proc(
             rl.RAYWHITE,
         )
     }
-    ui_draw_focus(bounds, focused)
+    ui_focus_draw(bounds, focused)
     return color^ != previous
 }
 
-// ui_shortcut_matches enforces exact modifiers and optionally suppresses plain
+// ui_shortcut_modifiers_match enforces exact modifiers and optionally suppresses plain
 // accelerators while a text-like control owns focus; help remains globally usable.
-ui_shortcut_matches :: proc(
+ui_shortcut_modifiers_match :: proc(
     binding: UI_Shortcut_Binding,
     modifiers: u8,
     suppress_unmodified: bool,

@@ -114,7 +114,7 @@ game_tuning_stop_ticks :: proc(tuning: Game_Movement_Tuning) -> int {
     }
     for tick in 1 ..= 60 {
         game_fixed_update(&state, {}, GAME_FIXED_DT)
-        if game_vector_length(state.player.velocity) <= 0.001 {
+        if game_vector2_length(state.player.velocity) <= 0.001 {
             return tick
         }
     }
@@ -166,7 +166,7 @@ game_tuning_failed_landing_recovers :: proc(
     start := state.player.position
     game_fixed_update(&state, {{1, -0.5}, true}, GAME_FIXED_DT)
     game_tuning_finish_dash(&state)
-    return game_vector_length({
+    return game_vector2_length({
         state.player.position.x - start.x,
         state.player.position.z - start.z,
     }) < 0.0001

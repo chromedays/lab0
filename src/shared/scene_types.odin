@@ -211,34 +211,34 @@ Scene :: struct {
     next_spot_id:      int,
 }
 
-scene_f32_finite :: proc(value: f32) -> bool {
+scene_f32_is_finite :: proc(value: f32) -> bool {
     return !math.is_nan(value) && !math.is_inf(value)
 }
 
-scene_vector3_finite :: proc(value: rl.Vector3) -> bool {
-    return scene_f32_finite(value.x) &&
-           scene_f32_finite(value.y) &&
-           scene_f32_finite(value.z)
+scene_vector3_is_finite :: proc(value: rl.Vector3) -> bool {
+    return scene_f32_is_finite(value.x) &&
+           scene_f32_is_finite(value.y) &&
+           scene_f32_is_finite(value.z)
 }
 
-scene_color3_valid :: proc(value: rl.Vector3) -> bool {
-    return scene_vector3_finite(value) &&
+scene_color3_is_valid :: proc(value: rl.Vector3) -> bool {
+    return scene_vector3_is_finite(value) &&
            value.x >= 0 && value.x <= 1 &&
            value.y >= 0 && value.y <= 1 &&
            value.z >= 0 && value.z <= 1
 }
 
-scene_direction_valid :: proc(value: rl.Vector3) -> bool {
-    return scene_vector3_finite(value) &&
+scene_direction_is_valid :: proc(value: rl.Vector3) -> bool {
+    return scene_vector3_is_finite(value) &&
            rl.Vector3Length(value) > SCENE_DIRECTION_EPSILON
 }
 
 // Avoid repeatedly normalizing an already unit-length serialized vector. A
 // second f32 normalization can change the final bit and break canonical
 // save/load/save bytes even though the direction is visually identical.
-scene_normalize_direction_stable :: proc(value: rl.Vector3) -> rl.Vector3 {
+scene_direction_normalize_stable :: proc(value: rl.Vector3) -> rl.Vector3 {
     length := rl.Vector3Length(value)
-    if !scene_f32_finite(length) || length <= SCENE_DIRECTION_EPSILON {
+    if !scene_f32_is_finite(length) || length <= SCENE_DIRECTION_EPSILON {
         return value
     }
     if math.abs(length - 1) <= SCENE_DIRECTION_EPSILON {
@@ -247,11 +247,11 @@ scene_normalize_direction_stable :: proc(value: rl.Vector3) -> rl.Vector3 {
     return value / length
 }
 
-scene_name_valid :: proc(value: string) -> bool {
+scene_name_is_valid :: proc(value: string) -> bool {
     return len(value) > 0 && len(value) <= SCENE_MAX_NAME_BYTES
 }
 
-scene_id_valid :: proc(value: string) -> bool {
+scene_id_is_valid :: proc(value: string) -> bool {
     if len(value) == 0 || len(value) > SCENE_MAX_ID_BYTES {
         return false
     }
@@ -272,10 +272,10 @@ scene_id_valid :: proc(value: string) -> bool {
     return true
 }
 
-scene_transform_valid :: proc(transform: Scene_Transform) -> bool {
-    if !scene_vector3_finite(transform.position) ||
-       !scene_vector3_finite(transform.rotation_euler_deg) ||
-       !scene_vector3_finite(transform.scale) {
+scene_transform_is_valid :: proc(transform: Scene_Transform) -> bool {
+    if !scene_vector3_is_finite(transform.position) ||
+       !scene_vector3_is_finite(transform.rotation_euler_deg) ||
+       !scene_vector3_is_finite(transform.scale) {
         return false
     }
     if math.abs(transform.position.x) > SCENE_MAX_POSITION ||
@@ -291,25 +291,25 @@ scene_transform_valid :: proc(transform: Scene_Transform) -> bool {
            transform.scale.z <= SCENE_MAX_SCALE
 }
 
-scene_camera_valid :: proc(camera: Scene_Camera) -> bool {
+scene_camera_is_valid :: proc(camera: Scene_Camera) -> bool {
     camera_forward := camera.target - camera.position
     return (camera.projection == .PERSPECTIVE ||
             camera.projection == .ORTHOGRAPHIC) &&
-           scene_vector3_finite(camera.position) &&
-           scene_vector3_finite(camera.target) &&
-           scene_direction_valid(camera_forward) &&
-           scene_direction_valid(camera.up) &&
+           scene_vector3_is_finite(camera.position) &&
+           scene_vector3_is_finite(camera.target) &&
+           scene_direction_is_valid(camera_forward) &&
+           scene_direction_is_valid(camera.up) &&
            rl.Vector3Length(
                rl.Vector3CrossProduct(camera_forward, camera.up),
            ) > SCENE_DIRECTION_EPSILON &&
-           scene_f32_finite(camera.vertical_fov_deg) &&
+           scene_f32_is_finite(camera.vertical_fov_deg) &&
            camera.vertical_fov_deg >= 1 && camera.vertical_fov_deg <= 179 &&
-           scene_f32_finite(camera.ortho_height) &&
+           scene_f32_is_finite(camera.ortho_height) &&
            camera.ortho_height >= SCENE_MIN_SCALE &&
            camera.ortho_height <= SCENE_MAX_POSITION
 }
 
-scene_normalize_angle_degrees :: proc(value: f32) -> f32 {
+scene_angle_degrees_normalize :: proc(value: f32) -> f32 {
     normalized := math.mod(value + 180, 360)
     if normalized < 0 {
         normalized += 360
@@ -317,11 +317,11 @@ scene_normalize_angle_degrees :: proc(value: f32) -> f32 {
     return normalized - 180
 }
 
-scene_normalize_euler_degrees :: proc(value: rl.Vector3) -> rl.Vector3 {
+scene_euler_degrees_normalize :: proc(value: rl.Vector3) -> rl.Vector3 {
     return {
-        scene_normalize_angle_degrees(value.x),
-        scene_normalize_angle_degrees(value.y),
-        scene_normalize_angle_degrees(value.z),
+        scene_angle_degrees_normalize(value.x),
+        scene_angle_degrees_normalize(value.y),
+        scene_angle_degrees_normalize(value.z),
     }
 }
 
@@ -346,7 +346,7 @@ scene_transform_matrix :: proc(transform: Scene_Transform) -> rl.Matrix {
     return translation_matrix * rotation_matrix * scale_matrix
 }
 
-scene_camera_to_raylib :: proc(camera: Scene_Camera) -> rl.Camera3D {
+scene_camera_to_raylib_camera :: proc(camera: Scene_Camera) -> rl.Camera3D {
     projection := rl.CameraProjection.PERSPECTIVE
     fovy := camera.vertical_fov_deg
     if camera.projection == .ORTHOGRAPHIC {
@@ -421,8 +421,8 @@ scene_edge_aa_to_string :: proc(value: Edge_AA_Mode) -> string {
 }
 
 // The default scene follows the same ownership contract as a loaded scene: its
-// static defaults are cloned so destroy_scene is always the matching cleanup.
-make_default_scene :: proc() -> Scene {
+// static defaults are cloned so scene_destroy is always the matching cleanup.
+scene_make_default :: proc() -> Scene {
     return {
         name = strings.clone("Untitled Scene"),
         style_path = strings.clone("styles/classic.json"),
@@ -441,7 +441,7 @@ make_default_scene :: proc() -> Scene {
         },
         directional_light = {
             enabled = true,
-            direction = scene_normalize_direction_stable({0.35, 0.8, 0.55}),
+            direction = scene_direction_normalize_stable({0.35, 0.8, 0.55}),
             color = {1, 1, 1},
             intensity = 0.7,
             casts_shadows = true,
@@ -454,7 +454,7 @@ make_default_scene :: proc() -> Scene {
 
 // Release child strings before their containing arrays, then clear the owner so
 // deferred cleanup remains safe after transactional scene replacement.
-destroy_scene :: proc(scene: ^Scene) {
+scene_destroy :: proc(scene: ^Scene) {
     if len(scene.name) > 0 { delete(scene.name) }
     if len(scene.style_path) > 0 { delete(scene.style_path) }
     for model in scene.models {

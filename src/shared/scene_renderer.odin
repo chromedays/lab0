@@ -115,7 +115,7 @@ Scene_Renderer :: struct {
     outline_edge_aa:             c.int,
 }
 
-scene_resolve_shadow_receiver_bindings :: proc(
+scene_shadow_receiver_bindings_resolve :: proc(
     shader: rl.Shader,
 ) -> Scene_Shadow_Receiver_Bindings {
     bindings := Scene_Shadow_Receiver_Bindings{
@@ -138,7 +138,7 @@ scene_resolve_shadow_receiver_bindings :: proc(
 // The directional shadow camera follows the serialized scene-camera target but
 // snaps its two light-plane coordinates to whole shadow texels. Moving the
 // authored target within one texel therefore cannot make the hard shadow crawl.
-scene_make_shadow_frame :: proc(scene: ^Scene) -> Scene_Shadow_Frame {
+scene_shadow_frame_make :: proc(scene: ^Scene) -> Scene_Shadow_Frame {
     light := &scene.directional_light
     frame := Scene_Shadow_Frame{
         enabled = light.enabled && light.casts_shadows &&
@@ -150,7 +150,7 @@ scene_make_shadow_frame :: proc(scene: ^Scene) -> Scene_Shadow_Frame {
         return frame
     }
 
-    direction := scene_normalize_direction_stable(light.direction)
+    direction := scene_direction_normalize_stable(light.direction)
     forward := -direction
     reference_up := rl.Vector3{0, 1, 0}
     if math.abs(rl.Vector3DotProduct(forward, reference_up)) > 0.98 {
@@ -191,7 +191,7 @@ scene_make_shadow_frame :: proc(scene: ^Scene) -> Scene_Shadow_Frame {
 // LoadRenderTexture creates a depth renderbuffer, which cannot be sampled by
 // the receiver shaders. Directional shadows need a depth-only framebuffer with
 // a texture attachment so the depth pass and comparison use the same GPU value.
-scene_load_shadow_target :: proc(width, height: c.int) -> (rl.RenderTexture2D, bool) {
+scene_shadow_target_load :: proc(width, height: c.int) -> (rl.RenderTexture2D, bool) {
     target: rl.RenderTexture2D
     target.id = rgl.LoadFramebuffer()
     if target.id == 0 { return target, false }
@@ -253,13 +253,13 @@ scene_load_shadow_target :: proc(width, height: c.int) -> (rl.RenderTexture2D, b
     return target, true
 }
 
-scene_unload_shadow_target :: proc(target: ^rl.RenderTexture2D) {
+scene_shadow_target_unload :: proc(target: ^rl.RenderTexture2D) {
     if target.depth.id != 0 { rgl.UnloadTexture(target.depth.id) }
     if target.id != 0 { rgl.UnloadFramebuffer(target.id) }
     target^ = {}
 }
 
-scene_apply_shadow_receiver :: proc(
+scene_shadow_receiver_apply :: proc(
     shader: rl.Shader,
     bindings: ^Scene_Shadow_Receiver_Bindings,
     frame: ^Scene_Shadow_Frame,
@@ -277,7 +277,7 @@ scene_apply_shadow_receiver :: proc(
     )
 }
 
-scene_apply_shadow_depth_style :: proc(
+scene_shadow_depth_style_apply :: proc(
     shader: rl.Shader,
     bindings: ^Scene_Shadow_Depth_Bindings,
     style: ^Cel_Style,
@@ -299,7 +299,7 @@ Scene_Resources :: struct {
     primitives: [7]rl.Model,
 }
 
-scene_resolve_light_bindings :: proc(shader: rl.Shader) -> Scene_Light_Shader_Bindings {
+scene_light_bindings_resolve :: proc(shader: rl.Shader) -> Scene_Light_Shader_Bindings {
     return {
         directional_enabled = rl.GetShaderLocation(shader, "u_directional_enabled"),
         directional_direction = rl.GetShaderLocation(shader, "u_directional_direction"),
@@ -324,14 +324,14 @@ scene_resolve_light_bindings :: proc(shader: rl.Shader) -> Scene_Light_Shader_Bi
 // Pack enabled lights densely into fixed-size arrays matching GLSL uniforms.
 // Disabled serialized entries keep their hierarchy position but do not consume
 // an active shader slot.
-scene_apply_lights :: proc(
+scene_lights_apply :: proc(
     shader: rl.Shader,
     bindings: ^Scene_Light_Shader_Bindings,
     scene: ^Scene,
 ) {
     directional_enabled := c.int(0)
     if scene.directional_light.enabled { directional_enabled = 1 }
-    directional_direction := scene_normalize_direction_stable(
+    directional_direction := scene_direction_normalize_stable(
         scene.directional_light.direction,
     )
     rl.SetShaderValue(shader, bindings.directional_enabled, &directional_enabled, .INT)
@@ -372,7 +372,7 @@ scene_apply_lights :: proc(
         if !light.enabled || spot_count >= SCENE_MAX_SPOT_LIGHTS { continue }
         index := int(spot_count)
         spot_positions[index] = light.position
-        spot_directions[index] = scene_normalize_direction_stable(light.direction)
+        spot_directions[index] = scene_direction_normalize_stable(light.direction)
         spot_colors[index] = light.color
         spot_intensities[index] = light.intensity
         spot_ranges[index] = light.range
@@ -390,7 +390,7 @@ scene_apply_lights :: proc(
     rl.SetShaderValueV(shader, bindings.spot_outer_cos, raw_data(spot_outer_cos[:]), .FLOAT, SCENE_MAX_SPOT_LIGHTS)
 }
 
-scene_renderer_unload_low_targets :: proc(renderer: ^Scene_Renderer) {
+scene_renderer_low_targets_unload :: proc(renderer: ^Scene_Renderer) {
     if rl.IsRenderTextureValid(renderer.outlined_target) {
         rl.UnloadRenderTexture(renderer.outlined_target)
     }
@@ -409,26 +409,26 @@ scene_renderer_unload_low_targets :: proc(renderer: ^Scene_Renderer) {
 
 // Reuse targets when dimensions already match. On resize, discard the complete
 // low-resolution set so no render pass can observe mixed old/new dimensions.
-scene_renderer_ensure_low_targets :: proc(
+scene_renderer_low_targets_ensure :: proc(
     renderer: ^Scene_Renderer,
     downscale_level: int,
 ) -> bool {
-    low_width := get_downsample_dimension(SCENE_SCREEN_WIDTH, c.int(downscale_level))
-    low_height := get_downsample_dimension(SCENE_SCREEN_HEIGHT, c.int(downscale_level))
+    low_width := render_downsample_dimension(SCENE_SCREEN_WIDTH, c.int(downscale_level))
+    low_height := render_downsample_dimension(SCENE_SCREEN_HEIGHT, c.int(downscale_level))
     if renderer.low_width == low_width && renderer.low_height == low_height &&
        rl.IsRenderTextureValid(renderer.downsample_target) &&
        rl.IsRenderTextureValid(renderer.coverage_target) &&
        rl.IsRenderTextureValid(renderer.outlined_target) {
         return true
     }
-    scene_renderer_unload_low_targets(renderer)
+    scene_renderer_low_targets_unload(renderer)
     renderer.downsample_target = rl.LoadRenderTexture(low_width, low_height)
     renderer.coverage_target = rl.LoadRenderTexture(low_width, low_height)
     renderer.outlined_target = rl.LoadRenderTexture(low_width, low_height)
     if !rl.IsRenderTextureValid(renderer.downsample_target) ||
        !rl.IsRenderTextureValid(renderer.coverage_target) ||
        !rl.IsRenderTextureValid(renderer.outlined_target) {
-        scene_renderer_unload_low_targets(renderer)
+        scene_renderer_low_targets_unload(renderer)
         log.error("Failed to create Scene Editor low-resolution render targets")
         return false
     }
@@ -447,33 +447,33 @@ scene_renderer_init :: proc(
 ) -> bool {
     scene_loaded: bool
     renderer.scene_shader, renderer.scene_source, scene_loaded =
-        load_shader_with_includes(SCENE_VERTEX_SHADER_PATH, SCENE_FRAGMENT_SHADER_PATH)
+        shader_program_load_with_includes(SCENE_VERTEX_SHADER_PATH, SCENE_FRAGMENT_SHADER_PATH)
     if !scene_loaded {
         log.error("Failed to load the Scene Editor color shader")
         return false
     }
-    renderer.scene_style = resolve_cel_shader_bindings(renderer.scene_shader)
-    renderer.scene_lights = scene_resolve_light_bindings(renderer.scene_shader)
-    renderer.scene_shadow = scene_resolve_shadow_receiver_bindings(
+    renderer.scene_style = cel_shader_bindings_resolve(renderer.scene_shader)
+    renderer.scene_lights = scene_light_bindings_resolve(renderer.scene_shader)
+    renderer.scene_shadow = scene_shadow_receiver_bindings_resolve(
         renderer.scene_shader,
     )
 
     band_loaded: bool
     renderer.band_shader, renderer.band_source, band_loaded =
-        load_shader_with_includes(SCENE_VERTEX_SHADER_PATH, SCENE_BAND_SHADER_PATH)
+        shader_program_load_with_includes(SCENE_VERTEX_SHADER_PATH, SCENE_BAND_SHADER_PATH)
     if !band_loaded {
         log.error("Failed to load the Scene Editor metadata shader")
         return false
     }
-    renderer.band_style = resolve_cel_shader_bindings(renderer.band_shader)
-    renderer.band_lights = scene_resolve_light_bindings(renderer.band_shader)
-    renderer.band_shadow = scene_resolve_shadow_receiver_bindings(
+    renderer.band_style = cel_shader_bindings_resolve(renderer.band_shader)
+    renderer.band_lights = scene_light_bindings_resolve(renderer.band_shader)
+    renderer.band_shadow = scene_shadow_receiver_bindings_resolve(
         renderer.band_shader,
     )
 
     shadow_loaded: bool
     renderer.shadow_shader, renderer.shadow_source, shadow_loaded =
-        load_shader_with_includes(
+        shader_program_load_with_includes(
             SCENE_SHADOW_VERTEX_SHADER_PATH,
             SCENE_SHADOW_FRAGMENT_SHADER_PATH,
         )
@@ -488,18 +488,18 @@ scene_renderer_init :: proc(
 
     downscale_loaded: bool
     renderer.downscale_shader, renderer.downscale_source, downscale_loaded =
-        load_fragment_shader_with_includes(DOWNSCALE_FS_PATH)
+        shader_fragment_load_with_includes(DOWNSCALE_FS_PATH)
     if !downscale_loaded { return false }
     mask_loaded: bool
     renderer.mask_shader, renderer.mask_source, mask_loaded =
-        load_fragment_shader_with_includes(MASK_DOWNSCALE_FS_PATH)
+        shader_fragment_load_with_includes(MASK_DOWNSCALE_FS_PATH)
     if !mask_loaded { return false }
     outline_loaded: bool
     renderer.outline_shader, renderer.outline_source, outline_loaded =
-        load_fragment_shader_with_includes(OUTLINE_FS_PATH)
+        shader_fragment_load_with_includes(OUTLINE_FS_PATH)
     if !outline_loaded { return false }
 
-    ramp_pixels := build_cel_ramp_pixels(style)
+    ramp_pixels := cel_ramp_pixels_build(style)
     ramp_image := rl.Image{
         data = raw_data(ramp_pixels[:]),
         width = CEL_RAMP_WIDTH,
@@ -516,7 +516,7 @@ scene_renderer_init :: proc(
     renderer.band_target = rl.LoadRenderTexture(SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT)
     renderer.composite_target = rl.LoadRenderTexture(SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT)
     shadow_target_loaded: bool
-    renderer.shadow_target, shadow_target_loaded = scene_load_shadow_target(
+    renderer.shadow_target, shadow_target_loaded = scene_shadow_target_load(
         SCENE_SHADOW_MAP_SIZE,
         SCENE_SHADOW_MAP_SIZE,
     )
@@ -524,7 +524,7 @@ scene_renderer_init :: proc(
        !rl.IsRenderTextureValid(renderer.band_target) ||
        !rl.IsRenderTextureValid(renderer.composite_target) ||
        !shadow_target_loaded ||
-       !scene_renderer_ensure_low_targets(renderer, downscale_level) {
+       !scene_renderer_low_targets_ensure(renderer, downscale_level) {
         log.error("Failed to create Scene Editor render targets")
         return false
     }
@@ -551,11 +551,11 @@ scene_renderer_init :: proc(
 }
 
 scene_renderer_destroy :: proc(renderer: ^Scene_Renderer) {
-    scene_unload_shadow_target(&renderer.shadow_target)
+    scene_shadow_target_unload(&renderer.shadow_target)
     if rl.IsRenderTextureValid(renderer.composite_target) {
         rl.UnloadRenderTexture(renderer.composite_target)
     }
-    scene_renderer_unload_low_targets(renderer)
+    scene_renderer_low_targets_unload(renderer)
     if rl.IsRenderTextureValid(renderer.band_target) {
         rl.UnloadRenderTexture(renderer.band_target)
     }
@@ -571,16 +571,16 @@ scene_renderer_destroy :: proc(renderer: ^Scene_Renderer) {
     if rl.IsShaderValid(renderer.shadow_shader) { rl.UnloadShader(renderer.shadow_shader) }
     if rl.IsShaderValid(renderer.band_shader) { rl.UnloadShader(renderer.band_shader) }
     if rl.IsShaderValid(renderer.scene_shader) { rl.UnloadShader(renderer.scene_shader) }
-    destroy_preprocessed_shader_source(&renderer.outline_source)
-    destroy_preprocessed_shader_source(&renderer.mask_source)
-    destroy_preprocessed_shader_source(&renderer.downscale_source)
-    destroy_preprocessed_shader_program_source(&renderer.shadow_source)
-    destroy_preprocessed_shader_program_source(&renderer.band_source)
-    destroy_preprocessed_shader_program_source(&renderer.scene_source)
+    shader_preprocessed_source_destroy(&renderer.outline_source)
+    shader_preprocessed_source_destroy(&renderer.mask_source)
+    shader_preprocessed_source_destroy(&renderer.downscale_source)
+    shader_preprocessed_program_source_destroy(&renderer.shadow_source)
+    shader_preprocessed_program_source_destroy(&renderer.band_source)
+    shader_preprocessed_program_source_destroy(&renderer.scene_source)
     renderer^ = {}
 }
 
-scene_make_primitive_model :: proc(shape: Scene_Primitive_Shape) -> rl.Model {
+scene_primitive_model_make :: proc(shape: Scene_Primitive_Shape) -> rl.Model {
     mesh: rl.Mesh
     switch shape {
     case .CUBE:     mesh = rl.GenMeshCube(1, 1, 1)
@@ -597,19 +597,19 @@ scene_make_primitive_model :: proc(shape: Scene_Primitive_Shape) -> rl.Model {
 // Primitive models are shared immutable shape resources; imported models are
 // appended in Scene.models order. The caller destroys a partial result on any
 // error, preserving one cleanup path for staged editor loads.
-scene_load_resources :: proc(scene: ^Scene) -> (Scene_Resources, Scene_Error) {
+scene_resources_load :: proc(scene: ^Scene) -> (Scene_Resources, Scene_Error) {
     resources: Scene_Resources
     for shape_index := 0; shape_index < len(resources.primitives); shape_index += 1 {
-        resources.primitives[shape_index] = scene_make_primitive_model(
+        resources.primitives[shape_index] = scene_primitive_model_make(
             Scene_Primitive_Shape(shape_index),
         )
-        if !is_model_loaded(resources.primitives[shape_index]) {
+        if !model_is_loaded(resources.primitives[shape_index]) {
             return resources, .INVALID_PRIMITIVE
         }
     }
 
     for &model_data in scene.models {
-        resource, resource_error := scene_load_model_resource(&model_data)
+        resource, resource_error := scene_model_resource_load(&model_data)
         if resource_error != .NONE {
             return resources, resource_error
         }
@@ -618,19 +618,19 @@ scene_load_resources :: proc(scene: ^Scene) -> (Scene_Resources, Scene_Error) {
     return resources, .NONE
 }
 
-scene_load_model_resource :: proc(
+scene_model_resource_load :: proc(
     model_data: ^Scene_Model,
 ) -> (Scene_Model_Resource, Scene_Error) {
         model_path := strings.clone_to_cstring(model_data.source, context.temp_allocator)
         resource := Scene_Model_Resource{model = rl.LoadModel(model_path)}
-        if !is_model_loaded(resource.model) {
+        if !model_is_loaded(resource.model) {
             if resource.model.meshCount > 0 || resource.model.materialCount > 0 {
                 rl.UnloadModel(resource.model)
             }
             return {}, .INVALID_MODEL
         }
         if pose, pose_present := model_data.animation.?; pose_present {
-            resource.playback = load_animation_playback(
+            resource.playback = animation_playback_load(
                 resource.model,
                 model_data.source,
                 .ASSET,
@@ -644,13 +644,13 @@ scene_load_model_resource :: proc(
             }
             if !raw_clip_valid ||
                pose.clip_index >= int(resource.playback.animation_count) {
-                destroy_animation_playback(&resource.playback)
+                animation_playback_destroy(&resource.playback)
                 rl.UnloadModel(resource.model)
                 return {}, .INVALID_ANIMATION
             }
             animation := resource.playback.animations[pose.clip_index]
             if pose.frame >= int(animation.keyframeCount) {
-                destroy_animation_playback(&resource.playback)
+                animation_playback_destroy(&resource.playback)
                 rl.UnloadModel(resource.model)
                 return {}, .INVALID_ANIMATION
             }
@@ -660,8 +660,8 @@ scene_load_model_resource :: proc(
 }
 
 scene_model_resource_destroy :: proc(resource: ^Scene_Model_Resource) {
-    destroy_animation_playback(&resource.playback)
-    if is_model_loaded(resource.model) {
+    animation_playback_destroy(&resource.playback)
+    if model_is_loaded(resource.model) {
         rl.UnloadModel(resource.model)
     }
     resource^ = {}
@@ -673,7 +673,7 @@ scene_resources_destroy :: proc(resources: ^Scene_Resources) {
     }
     delete(resources.models)
     for &model in resources.primitives {
-        if is_model_loaded(model) {
+        if model_is_loaded(model) {
             rl.UnloadModel(model)
         }
     }
@@ -692,7 +692,7 @@ scene_color_multiply :: proc(left, right: rl.Color) -> rl.Color {
     }
 }
 
-scene_draw_model_meshes :: proc(
+scene_model_meshes_draw :: proc(
     model: ^rl.Model,
     transform: rl.Matrix,
     tint: rl.Color,
@@ -736,7 +736,7 @@ scene_primitive_local_transform :: proc(shape: Scene_Primitive_Shape) -> rl.Matr
 // Geometry order is a serialized render contract: imported models first in file
 // order, then primitives in file order. Color, metadata, and shadow passes all
 // call this procedure to keep transforms and alpha-tested draw order identical.
-scene_draw_geometry :: proc(
+scene_geometry_draw :: proc(
     scene: ^Scene,
     resources: ^Scene_Resources,
     shader: rl.Shader,
@@ -747,7 +747,7 @@ scene_draw_geometry :: proc(
         if !model_data.visible || model_index >= len(resources.models) { continue }
         resource := &resources.models[model_index]
         transform := scene_transform_matrix(model_data.transform) * resource.model.transform
-        scene_draw_model_meshes(
+        scene_model_meshes_draw(
             &resource.model,
             transform,
             model_data.tint,
@@ -762,7 +762,7 @@ scene_draw_geometry :: proc(
         transform := scene_transform_matrix(primitive.transform) *
                      scene_primitive_local_transform(primitive.shape) *
                      model.transform
-        scene_draw_model_meshes(
+        scene_model_meshes_draw(
             model,
             transform,
             primitive.albedo,
@@ -782,11 +782,11 @@ scene_renderer_render :: proc(
     scene: ^Scene,
     style: ^Cel_Style,
 ) -> bool {
-    if !scene_renderer_ensure_low_targets(renderer, scene.render.downscale_level) {
+    if !scene_renderer_low_targets_ensure(renderer, scene.render.downscale_level) {
         return false
     }
-    camera := scene_camera_to_raylib(scene.camera)
-    shadow_frame := scene_make_shadow_frame(scene)
+    camera := scene_camera_to_raylib_camera(scene.camera)
+    shadow_frame := scene_shadow_frame_make(scene)
     source_resolution := [2]f32{SCENE_SCREEN_WIDTH, SCENE_SCREEN_HEIGHT}
     target_resolution := [2]f32{f32(renderer.low_width), f32(renderer.low_height)}
     cluster_threshold := f32(DEFAULT_COLOR_CLUSTER_THRESHOLD)
@@ -827,7 +827,7 @@ scene_renderer_render :: proc(
             rl.ClearBackground(rl.WHITE)
             rgl.DisableColorBlend()
             rgl.DisableBackfaceCulling()
-            scene_apply_shadow_depth_style(
+            scene_shadow_depth_style_apply(
                 renderer.shadow_shader,
                 &renderer.shadow_depth,
                 style,
@@ -838,7 +838,7 @@ scene_renderer_render :: proc(
                 // storage order. The visible passes consume this same matrix.
                 shadow_frame.light_view_projection =
                     rgl.GetMatrixProjection() * rgl.GetMatrixModelview()
-                scene_draw_geometry(
+                scene_geometry_draw(
                     scene,
                     resources,
                     renderer.shadow_shader,
@@ -856,16 +856,16 @@ scene_renderer_render :: proc(
 
     rl.BeginTextureMode(renderer.scene_target)
         rl.ClearBackground(rl.BLANK)
-        apply_cel_style_to_shader(renderer.scene_shader, &renderer.scene_style, style, camera, rl.Matrix(1))
-        scene_apply_lights(renderer.scene_shader, &renderer.scene_lights, scene)
-        scene_apply_shadow_receiver(
+        cel_style_apply_to_shader(renderer.scene_shader, &renderer.scene_style, style, camera, rl.Matrix(1))
+        scene_lights_apply(renderer.scene_shader, &renderer.scene_lights, scene)
+        scene_shadow_receiver_apply(
             renderer.scene_shader,
             &renderer.scene_shadow,
             &shadow_frame,
             &scene.directional_light,
         )
         rl.BeginMode3D(camera)
-            scene_draw_geometry(
+            scene_geometry_draw(
                 scene,
                 resources,
                 renderer.scene_shader,
@@ -877,16 +877,16 @@ scene_renderer_render :: proc(
 
     rl.BeginTextureMode(renderer.band_target)
         rl.ClearBackground(rl.BLANK)
-        apply_cel_style_to_shader(renderer.band_shader, &renderer.band_style, style, camera, rl.Matrix(1))
-        scene_apply_lights(renderer.band_shader, &renderer.band_lights, scene)
-        scene_apply_shadow_receiver(
+        cel_style_apply_to_shader(renderer.band_shader, &renderer.band_style, style, camera, rl.Matrix(1))
+        scene_lights_apply(renderer.band_shader, &renderer.band_lights, scene)
+        scene_shadow_receiver_apply(
             renderer.band_shader,
             &renderer.band_shadow,
             &shadow_frame,
             &scene.directional_light,
         )
         rl.BeginMode3D(camera)
-            scene_draw_geometry(
+            scene_geometry_draw(
                 scene,
                 resources,
                 renderer.band_shader,
@@ -936,7 +936,7 @@ scene_renderer_render :: proc(
 
 // Map public capture targets to the authoritative pass outputs. LENS belongs to
 // Viewer mode and deliberately returns an invalid texture here.
-scene_capture_texture :: proc(
+scene_renderer_capture_texture :: proc(
     renderer: ^Scene_Renderer,
     target: Capture_Target,
 ) -> rl.Texture2D {

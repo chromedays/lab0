@@ -87,8 +87,8 @@ scene_video_options_reject_invalid_and_conflicting_requests :: proc(
 scene_video_orbit_preserves_radius_and_omits_duplicate_endpoint :: proc(
     t: ^testing.T,
 ) {
-    scene := make_default_scene()
-    defer destroy_scene(&scene)
+    scene := scene_make_default()
+    defer scene_destroy(&scene)
     camera := scene.camera
     start_radius := rl.Vector3Distance(camera.position, camera.target)
     first := scene_video_orbit_camera(camera, 0, 300)

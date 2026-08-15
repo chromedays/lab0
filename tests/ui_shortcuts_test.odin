@@ -15,17 +15,17 @@ shortcut_binding_requires_exact_modifiers :: proc(t: ^testing.T) {
 
     testing.expect(
         t,
-        ui_shortcut_matches(save_binding, UI_MOD_PRIMARY, false),
+        ui_shortcut_modifiers_match(save_binding, UI_MOD_PRIMARY, false),
         "primary+S should match save",
     )
     testing.expect(
         t,
-        !ui_shortcut_matches(save_binding, 0, false),
+        !ui_shortcut_modifiers_match(save_binding, 0, false),
         "bare S must not match save",
     )
     testing.expect(
         t,
-        !ui_shortcut_matches(
+        !ui_shortcut_modifiers_match(
             save_binding,
             UI_MOD_PRIMARY | UI_MOD_SHIFT,
             false,
@@ -43,17 +43,17 @@ focused_control_only_suppresses_unmodified_accelerators :: proc(t: ^testing.T) {
 
     testing.expect(
         t,
-        !ui_shortcut_matches(lens_binding, 0, true),
+        !ui_shortcut_modifiers_match(lens_binding, 0, true),
         "focused controls should own bare keys",
     )
     testing.expect(
         t,
-        ui_shortcut_matches(save_binding, UI_MOD_PRIMARY, true),
+        ui_shortcut_modifiers_match(save_binding, UI_MOD_PRIMARY, true),
         "modified accelerators should remain available",
     )
     testing.expect(
         t,
-        ui_shortcut_matches(help_binding, 0, true),
+        ui_shortcut_modifiers_match(help_binding, 0, true),
         "help remains globally reachable",
     )
 }

@@ -23,8 +23,8 @@ scene_wrapped_lambert :: proc(
     normal, surface_to_light: rl.Vector3,
     wrap_lighting: f32,
 ) -> f32 {
-    if !shared.scene_direction_valid(normal) ||
-       !shared.scene_direction_valid(surface_to_light) {
+    if !shared.scene_direction_is_valid(normal) ||
+       !shared.scene_direction_is_valid(surface_to_light) {
         return 0
     }
     unit_normal := rl.Vector3Normalize(normal)
@@ -39,7 +39,7 @@ scene_wrapped_lambert :: proc(
 }
 
 scene_distance_attenuation :: proc(distance, light_range: f32) -> f32 {
-    if !shared.scene_f32_finite(distance) || !shared.scene_f32_finite(light_range) ||
+    if !shared.scene_f32_is_finite(distance) || !shared.scene_f32_is_finite(light_range) ||
        distance < 0 || light_range < shared.SCENE_MIN_LIGHT_RANGE {
         return 0
     }
@@ -51,9 +51,9 @@ scene_distance_attenuation :: proc(distance, light_range: f32) -> f32 {
 scene_spot_attenuation :: proc(
     theta, inner_angle_deg, outer_angle_deg: f32,
 ) -> f32 {
-    if !shared.scene_f32_finite(theta) ||
-       !shared.scene_f32_finite(inner_angle_deg) ||
-       !shared.scene_f32_finite(outer_angle_deg) ||
+    if !shared.scene_f32_is_finite(theta) ||
+       !shared.scene_f32_is_finite(inner_angle_deg) ||
+       !shared.scene_f32_is_finite(outer_angle_deg) ||
        inner_angle_deg < 0 || inner_angle_deg >= outer_angle_deg ||
        outer_angle_deg > 89 {
         return 0
@@ -70,7 +70,7 @@ scene_spot_attenuation :: proc(
 }
 
 scene_light_band_input :: proc(energy: rl.Vector3) -> f32 {
-    if !shared.scene_vector3_finite(energy) {
+    if !shared.scene_vector3_is_finite(energy) {
         return 0
     }
     return clamp(max(energy.x, max(energy.y, energy.z)), f32(0), f32(1))

@@ -386,7 +386,7 @@ game_reset_current_room :: proc(state: ^Game_State) {
         facing = facing,
         mode = .GROUNDED,
     }
-    if shared.game_vector_length(state.player.facing) < 0.001 {
+    if shared.game_vector2_length(state.player.facing) < 0.001 {
         state.player.facing = {1, 0}
     }
     state.last_safe_position = room.spawn
@@ -395,7 +395,7 @@ game_reset_current_room :: proc(state: ^Game_State) {
 }
 
 game_normalize_input :: proc(value: rl.Vector2) -> rl.Vector2 {
-    length := shared.game_vector_length(value)
+    length := shared.game_vector2_length(value)
     if length <= 0.00001 {
         return {}
     }
@@ -407,7 +407,7 @@ game_normalize_input :: proc(value: rl.Vector2) -> rl.Vector2 {
 
 game_move_towards :: proc(current, target: rl.Vector2, max_delta: f32) -> rl.Vector2 {
     difference := target - current
-    distance := shared.game_vector_length(difference)
+    distance := shared.game_vector2_length(difference)
     if distance <= max_delta || distance <= 0.00001 {
         return target
     }
@@ -498,7 +498,7 @@ game_reset_zombie :: proc(state: ^Game_State, zombie_index: int) {
         spawn.patrol_end.z - spawn.position.z,
     }
     patrol_direction = game_normalize_input(patrol_direction)
-    if shared.game_vector_length(patrol_direction) <= 0.001 {
+    if shared.game_vector2_length(patrol_direction) <= 0.001 {
         patrol_direction = {1, 0}
     }
     state.zombies[zombie_index] = {
@@ -617,7 +617,7 @@ game_line_of_sight_clear :: proc(
     start, finish: rl.Vector3,
 ) -> bool {
     delta := rl.Vector2{finish.x - start.x, finish.z - start.z}
-    distance := shared.game_vector_length(delta)
+    distance := shared.game_vector2_length(delta)
     sample_count := max(int(math.ceil(distance / 0.20)), 1)
     for sample_index in 1 ..< sample_count {
         t := f32(sample_index) / f32(sample_count)
@@ -641,7 +641,7 @@ game_zombie_can_see_player :: proc(
         state.player.position.x - zombie.position.x,
         state.player.position.z - zombie.position.z,
     }
-    distance := shared.game_vector_length(to_player)
+    distance := shared.game_vector2_length(to_player)
     if distance > GAME_ZOMBIE_SIGHT_RADIUS {
         return false
     }
@@ -702,7 +702,7 @@ game_zombie_walk_towards :: proc(
         target.x - zombie.position.x,
         target.z - zombie.position.z,
     }
-    distance := shared.game_vector_length(direction)
+    distance := shared.game_vector2_length(direction)
     if distance <= 0.0001 {
         return false
     }
@@ -720,14 +720,14 @@ game_zombie_walk_towards :: proc(
             zombie.position.x - other.position.x,
             zombie.position.z - other.position.z,
         }
-        peer_distance := shared.game_vector_length(away)
+        peer_distance := shared.game_vector2_length(away)
         if peer_distance > 0.0001 && peer_distance < GAME_ZOMBIE_COMFORT_RADIUS {
             separation += away / peer_distance *
                           ((GAME_ZOMBIE_COMFORT_RADIUS - peer_distance) /
                            GAME_ZOMBIE_COMFORT_RADIUS)
         }
     }
-    if shared.game_vector_length(separation) > 0.0001 {
+    if shared.game_vector2_length(separation) > 0.0001 {
         direction = game_normalize_input(direction + separation * 0.85)
     }
     step := min(speed * dt, distance)
@@ -751,7 +751,7 @@ game_zombie_walk_towards :: proc(
             target.x - blocker.position.x,
             target.z - blocker.position.z,
         }
-        if shared.game_vector_length(blocker_delta) + 0.02 < distance {
+        if shared.game_vector2_length(blocker_delta) + 0.02 < distance {
             zombie.blocked_time += dt
             return false
         }
@@ -843,7 +843,7 @@ game_update_zombie :: proc(
             patrol_target.x - zombie.position.x,
             patrol_target.z - zombie.position.z,
         }
-        if shared.game_vector_length(patrol_delta) <= 0.0001 {
+        if shared.game_vector2_length(patrol_delta) <= 0.0001 {
             zombie.patrol_to_end = !zombie.patrol_to_end
         } else {
             game_zombie_walk_towards(
@@ -860,7 +860,7 @@ game_update_zombie :: proc(
         state.player.position.x - zombie.position.x,
         state.player.position.z - zombie.position.z,
     }
-    player_distance := shared.game_vector_length(to_player)
+    player_distance := shared.game_vector2_length(to_player)
     sees_player := game_zombie_can_see_player(state, zombie)
     hears_player := dash_noise && player_distance <= GAME_ZOMBIE_HEARING_RADIUS
     if sees_player || hears_player {
@@ -874,7 +874,7 @@ game_update_zombie :: proc(
         zombie.position.x - patrol_anchor.x,
         zombie.position.z - patrol_anchor.z,
     }
-    beyond_leash := shared.game_vector_length(leash_delta) > GAME_ZOMBIE_LEASH_RADIUS
+    beyond_leash := shared.game_vector2_length(leash_delta) > GAME_ZOMBIE_LEASH_RADIUS
     player_patrol_anchor := game_zombie_patrol_anchor(
         zombie_index,
         state.player.position,
@@ -883,7 +883,7 @@ game_update_zombie :: proc(
         state.player.position.x - player_patrol_anchor.x,
         state.player.position.z - player_patrol_anchor.z,
     }
-    player_patrol_distance := shared.game_vector_length(player_patrol_delta)
+    player_patrol_distance := shared.game_vector2_length(player_patrol_delta)
 
     switch zombie.mode {
     case .SHAMBLING:
@@ -899,7 +899,7 @@ game_update_zombie :: proc(
             patrol_target.x - zombie.position.x,
             patrol_target.z - zombie.position.z,
         }
-        if shared.game_vector_length(patrol_delta) <= 0.10 {
+        if shared.game_vector2_length(patrol_delta) <= 0.10 {
             zombie.patrol_to_end = !zombie.patrol_to_end
         } else {
             game_zombie_walk_towards(
@@ -918,7 +918,7 @@ game_update_zombie :: proc(
         }
         if sees_player && player_distance <= GAME_ZOMBIE_ATTACK_RANGE {
             attack_direction := game_normalize_input(to_player)
-            if shared.game_vector_length(attack_direction) <= 0.001 {
+            if shared.game_vector2_length(attack_direction) <= 0.001 {
                 attack_direction = zombie.facing
             }
             zombie.attack_direction = attack_direction
@@ -950,7 +950,7 @@ game_update_zombie :: proc(
             zombie.return_target.x - zombie.position.x,
             zombie.return_target.z - zombie.position.z,
         }
-        if shared.game_vector_length(return_delta) <= GAME_ZOMBIE_RETURN_RADIUS {
+        if shared.game_vector2_length(return_delta) <= GAME_ZOMBIE_RETURN_RADIUS {
             if game_zombie_position_available(
                 state,
                 zombie_index,
@@ -1303,17 +1303,17 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
     }
 
     move_input := game_normalize_input(raw_input.move)
-    if shared.game_vector_length(move_input) > 0.001 {
+    if shared.game_vector2_length(move_input) > 0.001 {
         state.player.facing = move_input
     }
 
     if state.player.dash_buffer > 0 && state.player.dash_cooldown <= 0 {
         dash_direction := move_input
-        if shared.game_vector_length(dash_direction) <= 0.001 {
+        if shared.game_vector2_length(dash_direction) <= 0.001 {
             dash_direction = state.player.facing
         }
         dash_direction = game_normalize_input(dash_direction)
-        if shared.game_vector_length(dash_direction) > 0.001 {
+        if shared.game_vector2_length(dash_direction) > 0.001 {
             dash_from := state.player.position
             state.player.mode = .DASHING
             state.player.dash_direction = dash_direction
@@ -1344,7 +1344,7 @@ game_fixed_update :: proc(state: ^Game_State, raw_input: Game_Input, dt: f32) {
 
     target_velocity := move_input * GAME_MOVE_SPEED
     acceleration := state.movement_tuning.acceleration
-    if shared.game_vector_length(move_input) <= 0.001 {
+    if shared.game_vector2_length(move_input) <= 0.001 {
         acceleration = state.movement_tuning.deceleration
     }
     state.player.velocity = game_move_towards(

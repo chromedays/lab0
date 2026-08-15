@@ -71,9 +71,9 @@ BUILTIN_MODEL_SOURCES :: [?]Builtin_Model_Source{
     {.TRIANGLE, "builtin:triangle", "Built-in / Triangle"},
 }
 
-// get_downsample_dimension performs integer downscaling while guaranteeing a
+// render_downsample_dimension performs integer downscaling while guaranteeing a
 // valid RenderTexture dimension. Non-positive levels preserve the source size.
-get_downsample_dimension :: proc(
+render_downsample_dimension :: proc(
     source_dimension, downscale_level: c.int,
 ) -> c.int {
     if source_dimension <= 0 {
@@ -86,7 +86,7 @@ get_downsample_dimension :: proc(
 }
 
 // Model_Assets stores parallel arrays indexed by one canonical source index.
-// paths and labels are owned strings released by destroy_model_assets.
+// paths and labels are owned strings released by model_assets_destroy.
 Model_Assets :: struct {
     paths:  [dynamic]string,
     labels: [dynamic]cstring,
@@ -134,15 +134,15 @@ Animation_Playback :: struct {
     pose_dirty:      bool,
 }
 
-// load_fragment_shader_with_includes preprocesses one fragment stage, compiles
+// shader_fragment_load_with_includes preprocesses one fragment stage, compiles
 // it from memory, and returns dependency state even when compilation fails.
-load_fragment_shader_with_includes :: proc(fragment_path: string) -> (
+shader_fragment_load_with_includes :: proc(fragment_path: string) -> (
     shader: rl.Shader,
     preprocessed_source: Preprocessed_Shader_Source,
     loaded: bool,
 ) {
     preprocess_succeeded: bool
-    preprocessed_source, preprocess_succeeded = preprocess_shader_file(fragment_path)
+    preprocessed_source, preprocess_succeeded = shader_file_preprocess(fragment_path)
     if !preprocess_succeeded {
         return {}, preprocessed_source, false
     }
@@ -155,9 +155,9 @@ load_fragment_shader_with_includes :: proc(fragment_path: string) -> (
     return shader, preprocessed_source, rl.IsShaderValid(shader)
 }
 
-// load_shader_with_includes preprocesses both program stages and compiles them
+// shader_program_load_with_includes preprocesses both program stages and compiles them
 // together. The caller owns both the raylib shader and preprocessed sources.
-load_shader_with_includes :: proc(vertex_path, fragment_path: string) -> (
+shader_program_load_with_includes :: proc(vertex_path, fragment_path: string) -> (
     shader: rl.Shader,
     preprocessed_program: Preprocessed_Shader_Program_Source,
     loaded: bool,
@@ -165,9 +165,9 @@ load_shader_with_includes :: proc(vertex_path, fragment_path: string) -> (
     // Preprocess both shader stages inline at this sole program-load site.
     vertex_preprocess_succeeded, fragment_preprocess_succeeded: bool
     preprocessed_program.vertex, vertex_preprocess_succeeded =
-        preprocess_shader_file(vertex_path)
+        shader_file_preprocess(vertex_path)
     preprocessed_program.fragment, fragment_preprocess_succeeded =
-        preprocess_shader_file(fragment_path)
+        shader_file_preprocess(fragment_path)
     preprocess_succeeded := vertex_preprocess_succeeded &&
                             fragment_preprocess_succeeded
     if !preprocess_succeeded {
@@ -186,22 +186,30 @@ load_shader_with_includes :: proc(vertex_path, fragment_path: string) -> (
     return shader, preprocessed_program, rl.IsShaderValid(shader)
 }
 
-// reload_fragment_shader_with_includes recompiles only after a dependency
+// Shader_Reload_Result distinguishes an idle hot-reload check from a successful
+// replacement and a failed attempt that kept the previous shader active.
+Shader_Reload_Result :: enum {
+    UNCHANGED,
+    RELOADED,
+    FAILED,
+}
+
+// shader_fragment_reload_with_includes recompiles only after a dependency
 // snapshot changes. A failed replacement is unloaded and the working shader is
 // retained, while dependency state advances to prevent retrying every frame.
-reload_fragment_shader_with_includes :: proc(
+shader_fragment_reload_with_includes :: proc(
     fragment_path: string,
     shader: ^rl.Shader,
     preprocessed_source: ^Preprocessed_Shader_Source,
-) -> bool {
-    if !shader_source_dependencies_changed(preprocessed_source) {
-        return false
+) -> Shader_Reload_Result {
+    if !shader_source_has_dependency_changes(preprocessed_source) {
+        return .UNCHANGED
     }
 
     log.info("Shader dependency changed; reloading %s", fragment_path)
     replacement_shader, replacement_source, reload_succeeded :=
-        load_fragment_shader_with_includes(fragment_path)
-    destroy_preprocessed_shader_source(preprocessed_source)
+        shader_fragment_load_with_includes(fragment_path)
+    shader_preprocessed_source_destroy(preprocessed_source)
     preprocessed_source^ = replacement_source
 
     if !reload_succeeded {
@@ -209,27 +217,27 @@ reload_fragment_shader_with_includes :: proc(
         if rl.IsShaderValid(replacement_shader) {
             rl.UnloadShader(replacement_shader)
         }
-        return false
+        return .FAILED
     }
 
     rl.UnloadShader(shader^)
     shader^ = replacement_shader
-    return true
+    return .RELOADED
 }
 
-// reload_shader_with_includes applies the same safe replacement policy to a
+// shader_program_reload_with_includes applies the same safe replacement policy to a
 // vertex/fragment program and transfers ownership of the new dependency state.
-reload_shader_with_includes :: proc(
+shader_program_reload_with_includes :: proc(
     vertex_path, fragment_path: string,
     shader: ^rl.Shader,
     preprocessed_program: ^Preprocessed_Shader_Program_Source,
-) -> bool {
+) -> Shader_Reload_Result {
     // Check both stage dependency sets inline before attempting a reload.
     dependencies_changed :=
-        shader_source_dependencies_changed(&preprocessed_program.vertex) ||
-        shader_source_dependencies_changed(&preprocessed_program.fragment)
+        shader_source_has_dependency_changes(&preprocessed_program.vertex) ||
+        shader_source_has_dependency_changes(&preprocessed_program.fragment)
     if !dependencies_changed {
-        return false
+        return .UNCHANGED
     }
 
     log.info(
@@ -237,11 +245,11 @@ reload_shader_with_includes :: proc(
         vertex_path,
         fragment_path,
     )
-    replacement_shader, replacement_program, reload_succeeded := load_shader_with_includes(
+    replacement_shader, replacement_program, reload_succeeded := shader_program_load_with_includes(
         vertex_path,
         fragment_path,
     )
-    destroy_preprocessed_shader_program_source(preprocessed_program)
+    shader_preprocessed_program_source_destroy(preprocessed_program)
     preprocessed_program^ = replacement_program
 
     if !reload_succeeded {
@@ -249,16 +257,16 @@ reload_shader_with_includes :: proc(
         if rl.IsShaderValid(replacement_shader) {
             rl.UnloadShader(replacement_shader)
         }
-        return false
+        return .FAILED
     }
 
     rl.UnloadShader(shader^)
     shader^ = replacement_shader
-    return true
+    return .RELOADED
 }
 
-// destroy_model_assets frees every cloned path/label and all parallel arrays.
-destroy_model_assets :: proc(assets: ^Model_Assets) {
+// model_assets_destroy frees every cloned path/label and all parallel arrays.
+model_assets_destroy :: proc(assets: ^Model_Assets) {
     for asset_path in assets.paths do delete(asset_path)
     for asset_label in assets.labels do delete(asset_label)
     delete(assets.paths)
@@ -266,16 +274,16 @@ destroy_model_assets :: proc(assets: ^Model_Assets) {
     delete(assets.kinds)
 }
 
-// ascii_search_lower provides allocation-free case folding for asset filenames.
-ascii_search_lower :: proc(value: u8) -> u8 {
+// ascii_byte_to_lower provides allocation-free case folding for asset filenames.
+ascii_byte_to_lower :: proc(value: u8) -> u8 {
     if value >= 'A' && value <= 'Z' {
         return value + ('a' - 'A')
     }
     return value
 }
 
-// is_model_search_separator defines optional query delimiters and word boundaries.
-is_model_search_separator :: proc(value: u8) -> bool {
+// model_search_byte_is_separator defines optional query delimiters and word boundaries.
+model_search_byte_is_separator :: proc(value: u8) -> bool {
     switch value {
     case ' ', '\t', '_', '-', '/', '\\', '.', ':':
         return true
@@ -283,10 +291,10 @@ is_model_search_separator :: proc(value: u8) -> bool {
     return false
 }
 
-// fuzzy_model_score matches query characters in order, rewarding consecutive
+// model_search_fuzzy_score matches query characters in order, rewarding consecutive
 // matches, exact case, and word boundaries while penalizing gaps. Query
 // separators are optional, so "female run" matches underscore-delimited names.
-fuzzy_model_score :: proc(query, candidate: string) -> (
+model_search_fuzzy_score :: proc(query, candidate: string) -> (
     score: int,
     matched: bool,
 ) {
@@ -297,7 +305,7 @@ fuzzy_model_score :: proc(query, candidate: string) -> (
 
     for query_index := 0; query_index < len(query); query_index += 1 {
         query_character := query[query_index]
-        if is_model_search_separator(query_character) {
+        if model_search_byte_is_separator(query_character) {
             continue
         }
 
@@ -305,8 +313,8 @@ fuzzy_model_score :: proc(query, candidate: string) -> (
         for candidate_index := candidate_cursor;
             candidate_index < len(candidate);
             candidate_index += 1 {
-            if ascii_search_lower(candidate[candidate_index]) ==
-               ascii_search_lower(query_character) {
+            if ascii_byte_to_lower(candidate[candidate_index]) ==
+               ascii_byte_to_lower(query_character) {
                 match_index = candidate_index
                 break
             }
@@ -325,7 +333,7 @@ fuzzy_model_score :: proc(query, candidate: string) -> (
         }
         // Reward a boundary directly where the fuzzy score consumes it.
         match_is_boundary := match_index == 0 ||
-                             is_model_search_separator(candidate[match_index - 1])
+                             model_search_byte_is_separator(candidate[match_index - 1])
         if match_is_boundary {
             score += 24
         }
@@ -347,9 +355,9 @@ fuzzy_model_score :: proc(query, candidate: string) -> (
     return score, true
 }
 
-// rebuild_model_search_results scores both full paths and display labels, keeps
+// model_search_results_rebuild scores both full paths and display labels, keeps
 // the better score, sorts deterministically, and resets list navigation state.
-rebuild_model_search_results :: proc(
+model_search_results_rebuild :: proc(
     model_assets: ^Model_Assets,
     browser: ^Model_Browser_State,
 ) {
@@ -358,8 +366,8 @@ rebuild_model_search_results :: proc(
 
     search_query := string(cstring(&browser.search_text[0]))
     for model_path, source_index in model_assets.paths {
-        path_score, path_matches := fuzzy_model_score(search_query, model_path)
-        label_score, label_matches := fuzzy_model_score(
+        path_score, path_matches := model_search_fuzzy_score(search_query, model_path)
+        label_score, label_matches := model_search_fuzzy_score(
             search_query,
             string(model_assets.labels[source_index]),
         )
@@ -403,15 +411,15 @@ rebuild_model_search_results :: proc(
     }
 }
 
-// destroy_model_browser_state frees result arrays; labels remain asset-owned.
-destroy_model_browser_state :: proc(browser: ^Model_Browser_State) {
+// model_browser_state_destroy frees result arrays; labels remain asset-owned.
+model_browser_state_destroy :: proc(browser: ^Model_Browser_State) {
     delete(browser.results)
     delete(browser.result_labels)
 }
 
-// set_model_browser_active_source maps a canonical source index back into the
+// model_browser_active_source_set maps a canonical source index back into the
 // current filtered list, or clears selection when the source is filtered out.
-set_model_browser_active_source :: proc(
+model_browser_active_source_set :: proc(
     browser: ^Model_Browser_State,
     source_index: c.int,
 ) {
@@ -424,9 +432,9 @@ set_model_browser_active_source :: proc(
     browser.active_index = -1
 }
 
-// load_model_source dispatches disk loading or procedural mesh generation from
+// model_source_load dispatches disk loading or procedural mesh generation from
 // one canonical source index. The caller owns and must unload a valid model.
-load_model_source :: proc(model_assets: ^Model_Assets, source_index: int) -> rl.Model {
+model_source_load :: proc(model_assets: ^Model_Assets, source_index: int) -> rl.Model {
     switch model_assets.kinds[source_index] {
     case .ASSET:
         return rl.LoadModel(
@@ -447,25 +455,25 @@ load_model_source :: proc(model_assets: ^Model_Assets, source_index: int) -> rl.
     return {}
 }
 
-// is_model_loaded accepts drawable geometry even when raylib rejects a model for
+// model_is_loaded accepts drawable geometry even when raylib rejects a model for
 // a missing material texture; texture warnings are validated separately.
-is_model_loaded :: proc(model: rl.Model) -> bool {
+model_is_loaded :: proc(model: rl.Model) -> bool {
     // IsModelValid() also fails when an otherwise usable model has a missing
     // or unsupported material texture. The browser only needs drawable meshes.
     return model.meshCount > 0 && model.meshes != nil
 }
 
-// has_playable_animations checks both raylib storage and the compatible clip list.
-has_playable_animations :: proc(playback: ^Animation_Playback) -> bool {
+// animation_playback_has_playable_animations checks both raylib storage and the compatible clip list.
+animation_playback_has_playable_animations :: proc(playback: ^Animation_Playback) -> bool {
     return playback.animations != nil && len(playback.valid_indices) > 0
 }
 
-// get_active_animation validates both filtered and raw indices before returning
+// animation_playback_find_active_animation validates both filtered and raw indices before returning
 // a raylib animation value, protecting UI/capture code from stale selection.
-get_active_animation :: proc(
+animation_playback_find_active_animation :: proc(
     playback: ^Animation_Playback,
 ) -> (animation: rl.ModelAnimation, animation_found: bool) {
-    if !has_playable_animations(playback) ||
+    if !animation_playback_has_playable_animations(playback) ||
        playback.active_index < 0 ||
        int(playback.active_index) >= len(playback.valid_indices) {
         return {}, false
@@ -478,9 +486,9 @@ get_active_animation :: proc(
     return playback.animations[animation_index], true
 }
 
-// destroy_animation_playback unloads raylib animations, owned option text, and
+// animation_playback_destroy unloads raylib animations, owned option text, and
 // dynamic indices, then clears the complete playback state.
-destroy_animation_playback :: proc(playback: ^Animation_Playback) {
+animation_playback_destroy :: proc(playback: ^Animation_Playback) {
     if playback.animations != nil {
         rl.UnloadModelAnimations(playback.animations, playback.animation_count)
     }
@@ -491,10 +499,10 @@ destroy_animation_playback :: proc(playback: ^Animation_Playback) {
     playback^ = {}
 }
 
-// get_pure_uniform_scale_from_matrix accepts only positive, origin-centered,
+// matrix_find_pure_uniform_scale accepts only positive, origin-centered,
 // axis-aligned uniform scales. Any translation, rotation, shear, or non-uniform
 // component is rejected because the later correction handles scale alone.
-get_pure_uniform_scale_from_matrix :: proc(
+matrix_find_pure_uniform_scale :: proc(
     transform: [16]f32,
 ) -> (scale: f32, valid: bool) {
     // glTF matrices are column-major. Only compensate transforms that are a
@@ -536,10 +544,10 @@ GLTF_Skin_Metadata :: struct {
     nodes: []GLTF_Skin_Node_Metadata,
 }
 
-// get_gltf_skinned_mesh_uniform_scale parses GLB/GLTF metadata without loading a
+// gltf_find_skinned_mesh_uniform_scale parses GLB/GLTF metadata without loading a
 // second raylib model. It requires every skinned mesh to share one pure ancestor
 // scale so a model-wide skeleton translation correction is mathematically valid.
-get_gltf_skinned_mesh_uniform_scale :: proc(
+gltf_find_skinned_mesh_uniform_scale :: proc(
     model_path: string,
 ) -> (scale: f32, found: bool) {
     is_gltf := strings.has_suffix(model_path, ".glb") ||
@@ -649,7 +657,7 @@ get_gltf_skinned_mesh_uniform_scale :: proc(
                     local_valid = false
                 } else {
                     local_scale, local_valid =
-                        get_pure_uniform_scale_from_matrix(ancestor_matrix)
+                        matrix_find_pure_uniform_scale(ancestor_matrix)
                 }
             } else {
                 if translation, translation_present := ancestor.translation.?;
@@ -702,10 +710,10 @@ get_gltf_skinned_mesh_uniform_scale :: proc(
     return uniform_scale, scale_found
 }
 
-// load_animation_playback loads all clips, filters empty/incompatible entries,
+// animation_playback_load loads all clips, filters empty/incompatible entries,
 // builds raygui option text, applies the glTF scale correction, and initializes
 // the model to the first valid pose. Non-asset primitives return empty playback.
-load_animation_playback :: proc(
+animation_playback_load :: proc(
     model: rl.Model,
     model_path: string,
     source_kind: Model_Source_Kind,
@@ -772,7 +780,7 @@ load_animation_playback :: proc(
     }
 
     if len(playback.valid_indices) == 0 {
-        destroy_animation_playback(&playback)
+        animation_playback_destroy(&playback)
         return {}
     }
 
@@ -789,7 +797,7 @@ load_animation_playback :: proc(
        model.skeleton.bindPose != nil &&
        playback.animations != nil {
         uniform_scale, scale_found :=
-            get_gltf_skinned_mesh_uniform_scale(model_path)
+            gltf_find_skinned_mesh_uniform_scale(model_path)
         if scale_found &&
            math.abs(uniform_scale - 1) > GLTF_SKIN_SCALE_EPSILON {
             // raylib bakes this node scale into mesh vertices but leaves absolute
@@ -821,7 +829,7 @@ load_animation_playback :: proc(
         }
     }
 
-    animation, animation_found := get_active_animation(&playback)
+    animation, animation_found := animation_playback_find_active_animation(&playback)
     if animation_found {
         rl.UpdateModelAnimation(model, animation, playback.current_frame)
         playback.pose_dirty = false
@@ -835,17 +843,17 @@ load_animation_playback :: proc(
     return playback
 }
 
-// get_max_sample_count excludes the duplicate terminal loop keyframe while
+// animation_sample_count_max excludes the duplicate terminal loop keyframe while
 // retaining a minimum of one sample for degenerate clips.
-get_max_sample_count :: proc(animation: rl.ModelAnimation) -> c.int {
+animation_sample_count_max :: proc(animation: rl.ModelAnimation) -> c.int {
     // The terminal keyframe marks the end of the loop, so a 120-frame cycle
     // exposes the distinct frames 0...119 for sampled playback.
     return max(animation.keyframeCount - 1, 1)
 }
 
-// get_sampled_frame_at_index maps an evenly spaced sample slot to a keyframe,
+// animation_sampled_frame_at_index maps an evenly spaced sample slot to a keyframe,
 // clamping both count and index to the distinct loop-frame range.
-get_sampled_frame_at_index :: proc(
+animation_sampled_frame_at_index :: proc(
     animation: rl.ModelAnimation,
     sample_count, sample_index: c.int,
 ) -> f32 {
@@ -854,16 +862,16 @@ get_sampled_frame_at_index :: proc(
         return 0
     }
 
-    clamped_count := clamp(sample_count, 1, get_max_sample_count(animation))
+    clamped_count := clamp(sample_count, 1, animation_sample_count_max(animation))
     clamped_index := clamp(sample_index, 0, clamped_count - 1)
     return f32(c.int(
         f32(clamped_index) * last_frame / f32(clamped_count),
     ))
 }
 
-// get_sample_index_for_frame finds the nearest sampled slot for a continuous
+// animation_sample_index_for_frame finds the nearest sampled slot for a continuous
 // frame so toggling sampled playback does not produce a surprising large jump.
-get_sample_index_for_frame :: proc(
+animation_sample_index_for_frame :: proc(
     animation: rl.ModelAnimation,
     sample_count: c.int,
     frame: f32,
@@ -873,15 +881,15 @@ get_sample_index_for_frame :: proc(
         return 0
     }
 
-    clamped_count := clamp(sample_count, 1, get_max_sample_count(animation))
+    clamped_count := clamp(sample_count, 1, animation_sample_count_max(animation))
     clamped_frame := clamp(frame, 0, last_frame)
     sample_index := c.int(clamped_frame / last_frame * f32(clamped_count))
     return clamp(sample_index, 0, clamped_count - 1)
 }
 
-// get_animation_pose_frame resolves the actual frame displayed by the model,
+// animation_playback_pose_frame resolves the actual frame displayed by the model,
 // applying sample quantization only when sampled playback is enabled.
-get_animation_pose_frame :: proc(
+animation_playback_pose_frame :: proc(
     playback: ^Animation_Playback,
     animation: rl.ModelAnimation,
 ) -> f32 {
@@ -890,42 +898,42 @@ get_animation_pose_frame :: proc(
         return clamp(playback.current_frame, 0, last_frame)
     }
 
-    sample_index := get_sample_index_for_frame(
+    sample_index := animation_sample_index_for_frame(
         animation,
         playback.sample_count,
         playback.current_frame,
     )
-    return get_sampled_frame_at_index(
+    return animation_sampled_frame_at_index(
         animation,
         playback.sample_count,
         sample_index,
     )
 }
 
-// animation_reset_to_first_frame stops playback and marks frame zero for upload.
-animation_reset_to_first_frame :: proc(playback: ^Animation_Playback) {
+// animation_playback_reset_to_first_frame stops playback and marks frame zero for upload.
+animation_playback_reset_to_first_frame :: proc(playback: ^Animation_Playback) {
     playback.current_frame = 0
     playback.is_playing = false
     playback.pose_dirty = true
 }
 
-// animation_step_frame advances either one keyframe or one sample slot. It wraps
+// animation_playback_step_frame advances either one keyframe or one sample slot. It wraps
 // only when looping is enabled and always pauses continuous playback.
-animation_step_frame :: proc(
+animation_playback_step_frame :: proc(
     playback: ^Animation_Playback,
     direction: int,
 ) -> bool {
-    animation, animation_found := get_active_animation(playback)
+    animation, animation_found := animation_playback_find_active_animation(playback)
     if !animation_found || direction == 0 {
         return false
     }
     if playback.sampled_playback {
-        sample_index := get_sample_index_for_frame(
+        sample_index := animation_sample_index_for_frame(
             animation,
             playback.sample_count,
             playback.current_frame,
         )
-        playback.current_frame = get_sampled_frame_at_index(
+        playback.current_frame = animation_sampled_frame_at_index(
             animation,
             playback.sample_count,
             sample_index + c.int(direction),
@@ -943,9 +951,9 @@ animation_step_frame :: proc(
     return true
 }
 
-// animation_cycle_clip selects the previous/next compatible clip with wrapping,
+// animation_playback_cycle_clip selects the previous/next compatible clip with wrapping,
 // resets timeline state, and marks the new first pose dirty.
-animation_cycle_clip :: proc(
+animation_playback_cycle_clip :: proc(
     playback: ^Animation_Playback,
     direction: int,
 ) -> bool {
@@ -964,14 +972,14 @@ animation_cycle_clip :: proc(
     return true
 }
 
-// update_animation_playback advances by caller-supplied time, applies loop/end
+// animation_playback_update advances by caller-supplied time, applies loop/end
 // rules, quantizes the pose, and updates raylib only when that pose changed.
-update_animation_playback :: proc(
+animation_playback_update :: proc(
     playback: ^Animation_Playback,
     model: rl.Model,
     delta_seconds: f32,
 ) {
-    animation, animation_found := get_active_animation(playback)
+    animation, animation_found := animation_playback_find_active_animation(playback)
     if !animation_found {
         return
     }
@@ -980,7 +988,7 @@ update_animation_playback :: proc(
     playback.sample_count = clamp(
         playback.sample_count,
         1,
-        get_max_sample_count(animation),
+        animation_sample_count_max(animation),
     )
     if playback.is_playing {
         if last_frame <= 0 {
@@ -991,7 +999,7 @@ update_animation_playback :: proc(
                                       f32(ANIMATION_SAMPLE_FPS) *
                                       playback.speed
             if playback.sampled_playback && !playback.loop {
-                final_sample_frame := get_sampled_frame_at_index(
+                final_sample_frame := animation_sampled_frame_at_index(
                     animation,
                     playback.sample_count,
                     playback.sample_count - 1,
@@ -1015,7 +1023,7 @@ update_animation_playback :: proc(
     }
 
     playback.current_frame = clamp(playback.current_frame, 0, last_frame)
-    pose_frame := get_animation_pose_frame(playback, animation)
+    pose_frame := animation_playback_pose_frame(playback, animation)
     if playback.pose_dirty || pose_frame != playback.applied_frame {
         rl.UpdateModelAnimation(model, animation, pose_frame)
         playback.applied_frame = pose_frame
