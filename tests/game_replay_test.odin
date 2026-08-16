@@ -159,17 +159,22 @@ game_pixel_snap_replay_keeps_fixed_pose_subjects_on_parallel_lanes :: proc(
     testing.expect_value(t, state.current_room, Game_Room_ID.TEST_PIXEL_SNAP)
     testing.expect_value(t, state.tick, u64(240))
     testing.expect_value(t, state.dash_count, 0)
+    quarter_pixel := GAME_CAMERA_FOVY / f32(GAME_PIXEL_HEIGHT) / 4
+    travel := f32(replay.total_ticks) * quarter_pixel
+    expected_player_x := game_room(.TEST_PIXEL_SNAP).spawn.x + travel
+    expected_zombie_x := GAME_ZOMBIE_SPAWNS[zombie_index].position.x - travel
     testing.expectf(
         t,
-        state.player.position.x > -2.67 && state.player.position.x < -2.66,
-        "player should finish its fixed-pose lane near -2.667, got %.6f",
+        math.abs(state.player.position.x - expected_player_x) < 0.0001,
+        "player should finish its fixed-pose lane near %.6f, got %.6f",
+        expected_player_x,
         state.player.position.x,
     )
     testing.expectf(
         t,
-        state.zombies[zombie_index].position.x > 2.66 &&
-            state.zombies[zombie_index].position.x < 2.67,
-        "zombie should finish its fixed-pose lane near 2.667, got %.6f",
+        math.abs(state.zombies[zombie_index].position.x - expected_zombie_x) < 0.0001,
+        "zombie should finish its fixed-pose lane near %.6f, got %.6f",
+        expected_zombie_x,
         state.zombies[zombie_index].position.x,
     )
 }

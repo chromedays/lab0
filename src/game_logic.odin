@@ -43,9 +43,10 @@ GAME_ZOMBIE_REENGAGE_RADIUS :: f32(6.5)
 GAME_ZOMBIE_REENGAGE_DELAY  :: f32(0.75)
 GAME_ZOMBIE_RETURN_RADIUS   :: f32(0.12)
 GAME_HIT_FEEDBACK_TIME      :: f32(0.55)
-// The T01 diagnostic moves both subjects by exactly one quarter of a 256x144
-// render pixel per fixed tick: (8 world units / 144 pixels) * 60 Hz / 4.
-GAME_PIXEL_SNAP_TEST_SPEED :: f32(5.0 / 6.0)
+// Derive the T01 diagnostic speed from the active logical render resolution so
+// both subjects move by exactly one quarter pixel per fixed simulation tick.
+GAME_PIXEL_SNAP_TEST_SPEED :: (GAME_CAMERA_FOVY / f32(GAME_PIXEL_HEIGHT)) /
+                              (GAME_FIXED_DT * 4)
 
 // Player modes are mutually exclusive fixed-update phases. DASHING and
 // ROOM_TRANSITION return early from game_fixed_update so grounded acceleration

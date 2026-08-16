@@ -254,7 +254,7 @@ edge-boundary sweep.
 Use isolated `T01` to evaluate translation without animation noise. The camera,
 player pose, zombie pose, facings, floor grid, and lighting stay fixed. The
 player and zombie move in opposite horizontal lanes at one quarter of a
-256×144 render pixel per 60 Hz tick, so a correctly snapped result should hold
+logical render pixel per 60 Hz tick, so a correctly snapped result should hold
 for multiple ticks and then advance by exactly one whole pixel:
 
 Game rendering keeps simulation positions continuous, quantizes each moving
