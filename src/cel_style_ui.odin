@@ -67,6 +67,7 @@ Inspector_UI_State :: struct {
     scrollbar_dragging:    bool,
     scrollbar_drag_offset: f32,
     model_open:            bool,
+    lens_open:             bool,
     camera_open:           bool,
     background_open:       bool,
 }

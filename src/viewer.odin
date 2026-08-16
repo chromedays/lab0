@@ -41,10 +41,14 @@ LENS_WIDTH              :: 400
 LENS_HEIGHT             :: 400
 DEFAULT_COLOR_CLUSTER_THRESHOLD :: 0.10
 MODEL_SEARCH_TEXT_CAPACITY :: 128
-INSPECTOR_CAMERA_EXPANDED_HEIGHT :: f32(278)
+INSPECTOR_LENS_EXPANDED_HEIGHT :: f32(116)
+INSPECTOR_CAMERA_EXPANDED_HEIGHT :: f32(174)
 ANIMATION_TIMELINE_HEIGHT :: f32(90)
 ANIMATION_TIMELINE_BOTTOM_MARGIN :: f32(10)
 ANIMATION_CLIP_POPUP_ROW_HEIGHT :: f32(32)
+LENS_CONTROL_BAR_HEIGHT :: f32(32)
+LENS_CONTROL_BAR_GAP    :: f32(8)
+LENS_UI_OPACITY         :: f32(0.8)
 
 MAGNIFIER_SAMPLE_SIZE  :: 16
 MAGNIFIER_DISPLAY_SCALE :: 8
@@ -195,11 +199,26 @@ inspector_section_height :: proc(expanded: bool, expanded_height: f32) -> f32 {
     return INSPECTOR_SECTION_HEADER_HEIGHT
 }
 
-// inspector_cel_section_offset computes the cel editor's scroll-space Y offset
-// from the expansion state of the preceding model and camera sections.
-inspector_cel_section_offset :: proc(state: ^Inspector_UI_State) -> f32 {
+// inspector_lens_section_offset returns the Lens section's scroll-space Y.
+inspector_lens_section_offset :: proc(state: ^Inspector_UI_State) -> f32 {
     return inspector_section_height(state.model_open, 310) +
-           INSPECTOR_SECTION_GAP +
+           INSPECTOR_SECTION_GAP
+}
+
+// inspector_camera_section_offset returns the Camera section's scroll-space Y.
+inspector_camera_section_offset :: proc(state: ^Inspector_UI_State) -> f32 {
+    return inspector_lens_section_offset(state) +
+           inspector_section_height(
+               state.lens_open,
+               INSPECTOR_LENS_EXPANDED_HEIGHT,
+           ) +
+           INSPECTOR_SECTION_GAP
+}
+
+// inspector_cel_section_offset computes the cel editor's scroll-space Y offset
+// from the expansion state of the preceding model, lens, and camera sections.
+inspector_cel_section_offset :: proc(state: ^Inspector_UI_State) -> f32 {
+    return inspector_camera_section_offset(state) +
            inspector_section_height(
                state.camera_open,
                INSPECTOR_CAMERA_EXPANDED_HEIGHT,
@@ -367,10 +386,9 @@ execute_ui_command :: proc(
         command_context.inspector.camera_open =
             !command_context.inspector.camera_open
         if command_context.inspector.camera_open {
-            command_context.inspector.scroll_y = inspector_section_height(
-                command_context.inspector.model_open,
-                310,
-            ) + INSPECTOR_SECTION_GAP
+            command_context.inspector.scroll_y = inspector_camera_section_offset(
+                command_context.inspector,
+            )
         }
     case .TOGGLE_CEL_SECTION:
         command_context.cel_ui.open = !command_context.cel_ui.open
@@ -1144,6 +1162,7 @@ run_viewer_mode :: proc(arguments: []string) -> int {
         }
         inspector_ui := Inspector_UI_State{
             model_open = true,
+            lens_open = true,
             camera_open = true,
         }
         ui_keyboard: shared.UI_Keyboard_State
@@ -1330,8 +1349,8 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             case .ANIMATION_FIRST_FRAME:
                 #partial switch focused_id {
                 case .ANIMATION_TIMELINE, .ANIMATION_SPEED,
-                     .ANIMATION_SAMPLE_COUNT, .MODEL_LIST, .CAMERA_DOWNSCALE,
-                     .CAMERA_EDGE_AA,
+                     .ANIMATION_SAMPLE_COUNT, .MODEL_LIST, .LENS_DOWNSCALE,
+                     .LENS_EDGE_AA,
                      .CEL_PRESET, .CEL_LIGHT_SPACE, .CEL_LIGHT_AZIMUTH,
                      .CEL_LIGHT_ELEVATION, .CEL_LIGHT_WRAP, .CEL_BAND_SELECT,
                      .CEL_BAND_UPPER_BOUND, .CEL_BAND_BRIGHTNESS,
@@ -1403,19 +1422,29 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                 LENS_WIDTH,
                 LENS_HEIGHT,
             }
-            mouse_over_export_button := rl.CheckCollisionPointRec(
+            input_lens_mode_bar_bounds := rl.Rectangle{
+                input_lens_bounds.x,
+                input_lens_bounds.y - LENS_CONTROL_BAR_HEIGHT - LENS_CONTROL_BAR_GAP,
+                input_lens_bounds.width,
+                LENS_CONTROL_BAR_HEIGHT,
+            }
+            input_lens_footer_bounds := rl.Rectangle{
+                input_lens_bounds.x,
+                input_lens_bounds.y + input_lens_bounds.height + LENS_CONTROL_BAR_GAP,
+                input_lens_bounds.width,
+                LENS_CONTROL_BAR_HEIGHT,
+            }
+            mouse_over_lens_controls := rl.CheckCollisionPointRec(
                 ui_mouse_position,
-                {
-                    input_lens_bounds.x + (input_lens_bounds.width - 300) / 2,
-                    input_lens_bounds.y + input_lens_bounds.height + 10,
-                    300,
-                    28,
-                },
+                input_lens_mode_bar_bounds,
+            ) || rl.CheckCollisionPointRec(
+                ui_mouse_position,
+                input_lens_footer_bounds,
             )
             mouse_over_ui := mouse_over_inspector ||
                              mouse_over_background_picker ||
                              mouse_over_animation_timeline ||
-                             mouse_over_export_button
+                             mouse_over_lens_controls
             ui_captures_camera_input := shortcuts_help_open ||
                                         background_picker_open ||
                                         animation_playback.dropdown_open ||
@@ -2238,7 +2267,7 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                     snapped_plane_x := snapped_grid_x * world_units_per_pixel
                     snapped_plane_y := snapped_grid_y * world_units_per_pixel
 
-                    panel_height: f32 = 150
+                    panel_height: f32 = 128
                     if lens_mode == .COVERAGE_MASK {
                         panel_height += 22
                     }
@@ -2269,17 +2298,6 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                     rl.GuiLabel(
                         {label_x, label_y, label_width, label_height},
                         rl.TextFormat("snap plane: (%.6f, %.6f)", snapped_plane_x, snapped_plane_y),
-                    )
-                    label_y += line_height
-                    lens_mode_text: cstring = "PIXELATED [1]"
-                    if lens_mode == .BLENDED {
-                        lens_mode_text = "BLENDED 50/50 [2]"
-                    } else if lens_mode == .COVERAGE_MASK {
-                        lens_mode_text = "COVERAGE MASK [3]"
-                    }
-                    rl.GuiLabel(
-                        {label_x, label_y, label_width, label_height},
-                        rl.TextFormat("lens mode: %s", lens_mode_text),
                     )
                     if lens_mode == .COVERAGE_MASK {
                         label_y += line_height
@@ -2334,25 +2352,149 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                 }
                 rl.DrawRectangleLinesEx(lens_bounds, 2, rl.WHITE)
 
+                // Keep the three available modes visible and directly attached
+                // to the preview instead of hiding them in shortcut help.
+                lens_mode_bar_bounds := rl.Rectangle{
+                    lens_bounds.x,
+                    lens_bounds.y - LENS_CONTROL_BAR_HEIGHT - LENS_CONTROL_BAR_GAP,
+                    lens_bounds.width,
+                    LENS_CONTROL_BAR_HEIGHT,
+                }
+                rl.GuiSetAlpha(LENS_UI_OPACITY)
+                rl.GuiPanel(lens_mode_bar_bounds, nil)
+                lens_mode_content_x := lens_mode_bar_bounds.x + 4
+                lens_mode_content_y := lens_mode_bar_bounds.y + 4
+                lens_mode_label_width: f32 = 52
+                lens_mode_button_gap: f32 = 4
+                lens_mode_buttons_x := lens_mode_content_x + lens_mode_label_width +
+                                       lens_mode_button_gap
+                lens_mode_buttons_width := lens_mode_bar_bounds.width -
+                                           lens_mode_label_width -
+                                           lens_mode_button_gap - 8
+                lens_mode_button_width := (
+                    lens_mode_buttons_width - lens_mode_button_gap * 2
+                ) / 3
+                rl.GuiLabel(
+                    {
+                        lens_mode_content_x + 4,
+                        lens_mode_content_y,
+                        lens_mode_label_width - 4,
+                        24,
+                    },
+                    "LENS",
+                )
+
+                pixelated_active := lens_mode == .PIXELATED
+                if shared.ui_gui_toggle(
+                    &ui_keyboard,
+                    .LENS_PIXELATED,
+                    {
+                        lens_mode_buttons_x,
+                        lens_mode_content_y,
+                        lens_mode_button_width,
+                        24,
+                    },
+                    "1  PIXELATED",
+                    &pixelated_active,
+                ) && pixelated_active {
+                    lens_mode = .PIXELATED
+                    log.info("Lens mode: pixelated")
+                }
+                blended_active := lens_mode == .BLENDED
+                if shared.ui_gui_toggle(
+                    &ui_keyboard,
+                    .LENS_BLENDED,
+                    {
+                        lens_mode_buttons_x + lens_mode_button_width + lens_mode_button_gap,
+                        lens_mode_content_y,
+                        lens_mode_button_width,
+                        24,
+                    },
+                    "2  BLENDED",
+                    &blended_active,
+                ) && blended_active {
+                    lens_mode = .BLENDED
+                    log.info("Lens mode: blended 50/50")
+                }
+                coverage_active := lens_mode == .COVERAGE_MASK
+                if shared.ui_gui_toggle(
+                    &ui_keyboard,
+                    .LENS_COVERAGE,
+                    {
+                        lens_mode_buttons_x +
+                            (lens_mode_button_width + lens_mode_button_gap) * 2,
+                        lens_mode_content_y,
+                        lens_mode_button_width,
+                        24,
+                    },
+                    "3  COVERAGE",
+                    &coverage_active,
+                ) && coverage_active {
+                    lens_mode = .COVERAGE_MASK
+                    log.info("Lens mode: 16-sample coverage mask")
+                }
+
+                lens_footer_bounds := rl.Rectangle{
+                    lens_bounds.x,
+                    lens_bounds.y + lens_bounds.height + LENS_CONTROL_BAR_GAP,
+                    lens_bounds.width,
+                    LENS_CONTROL_BAR_HEIGHT,
+                }
+                rl.GuiPanel(lens_footer_bounds, nil)
+                lens_footer_content_x := lens_footer_bounds.x + 4
+                lens_footer_content_y := lens_footer_bounds.y + 4
+                grid_button_bounds := rl.Rectangle{
+                    lens_footer_content_x,
+                    lens_footer_content_y,
+                    96,
+                    24,
+                }
+                grid_active := lens_grid_visible
+                if shared.ui_gui_toggle(
+                    &ui_keyboard,
+                    .LENS_GRID,
+                    grid_button_bounds,
+                    "GRID [G]",
+                    &grid_active,
+                ) {
+                    lens_grid_visible = grid_active
+                    if lens_grid_visible {
+                        log.info("Lens grid: on")
+                    } else {
+                        log.info("Lens grid: off")
+                    }
+                }
+                lens_export_width := c.int(math.round(
+                    LENS_WIDTH / f32(applied_downscale_level),
+                ))
+                lens_export_height := c.int(math.round(
+                    LENS_HEIGHT / f32(applied_downscale_level),
+                ))
+                rl.GuiLabel(
+                    {
+                        lens_footer_content_x + 104,
+                        lens_footer_content_y,
+                        116,
+                        24,
+                    },
+                    rl.TextFormat(
+                        "%d x %d @ %dx",
+                        lens_export_width,
+                        lens_export_height,
+                        applied_downscale_level,
+                    ),
+                )
                 export_button_bounds := rl.Rectangle{
-                    lens_bounds.x + (lens_bounds.width - 300) / 2,
-                    lens_bounds.y + lens_bounds.height + 10,
-                    300,
-                    28,
+                    lens_footer_content_x + 224,
+                    lens_footer_content_y,
+                    lens_footer_bounds.width - 232,
+                    24,
                 }
                 if shared.ui_gui_button(
                     &ui_keyboard,
                     .EXPORT_PNG,
                     export_button_bounds,
-                    rl.TextFormat(
-                        "EXPORT %d x %d TRANSPARENT PNG [P]",
-                        c.int(math.round(
-                            LENS_WIDTH / f32(applied_downscale_level),
-                        )),
-                        c.int(math.round(
-                            LENS_HEIGHT / f32(applied_downscale_level),
-                        )),
-                    ),
+                    "EXPORT PNG [P]",
                 ) {
                     export_requested = true
                 }
@@ -2368,13 +2510,14 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                     rl.GuiLabel(
                         {
                             lens_bounds.x,
-                            export_button_bounds.y + export_button_bounds.height + 2,
+                            lens_footer_bounds.y + lens_footer_bounds.height + 2,
                             lens_bounds.width,
                             18,
                         },
                         export_status,
                     )
                 }
+                rl.GuiSetAlpha(1.0)
                 // Render animation controls inline in their only composite UI location.
                 for {
                     bounds := animation_timeline_bounds
@@ -3034,6 +3177,86 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                     }
                     content_y += model_height + INSPECTOR_SECTION_GAP
 
+                    lens_height := inspector_section_height(
+                        state.lens_open,
+                        INSPECTOR_LENS_EXPANDED_HEIGHT,
+                    )
+                    // Keep render-resolution controls in their own Lens section;
+                    // camera navigation remains a separate mental model below.
+                    for {
+                        bounds := rl.Rectangle{view.x, content_y, content_width, lens_height}
+                        expanded := &state.lens_open
+                        rl.GuiSetAlpha(LENS_UI_OPACITY)
+                        rl.GuiPanel(bounds, nil)
+                        draw_collapsible_header(
+                            &ui_keyboard,
+                            .LENS_HEADER,
+                            {bounds.x, bounds.y, bounds.width, INSPECTOR_SECTION_HEADER_HEIGHT},
+                            "LENS",
+                            expanded,
+                        )
+                        if !expanded^ {
+                            rl.GuiSetAlpha(1.0)
+                            break
+                        }
+
+                        content_x := bounds.x + 12
+                        content_y := bounds.y + 34
+                        content_width := bounds.width - 24
+
+                        rl.GuiLabel({content_x, content_y, 104, 22}, "Downscale level")
+                        _ = shared.ui_gui_spinner(
+                            &ui_keyboard,
+                            .LENS_DOWNSCALE,
+                            {content_x + 108, content_y, content_width - 108, 22},
+                            nil,
+                            downscale_level_ptr,
+                            MIN_DOWNSCALE_LEVEL,
+                            MAX_DOWNSCALE_LEVEL,
+                            1,
+                            4,
+                            false,
+                        )
+                        downscale_level_ptr^ = clamp(
+                            downscale_level_ptr^,
+                            MIN_DOWNSCALE_LEVEL,
+                            MAX_DOWNSCALE_LEVEL,
+                        )
+                        content_y += 24
+                        rl.GuiLabel(
+                            {content_x, content_y, content_width, 18},
+                            rl.TextFormat(
+                                "Output grid: %d x %d",
+                                downsample_width,
+                                downsample_height,
+                            ),
+                        )
+                        content_y += 20
+
+                        rl.GuiLabel({content_x, content_y, 104, 22}, "Edge AA")
+                        edge_aa_mode_index := c.int(edge_aa_mode_ptr^)
+                        previous_edge_aa_mode := edge_aa_mode_index
+                        _ = shared.ui_gui_combo_box(
+                            &ui_keyboard,
+                            .LENS_EDGE_AA,
+                            {content_x + 108, content_y, content_width - 108, 22},
+                            "Hard;Coverage",
+                            &edge_aa_mode_index,
+                            2,
+                        )
+                        if edge_aa_mode_index != previous_edge_aa_mode {
+                            edge_aa_mode_ptr^ = shared.Edge_AA_Mode(edge_aa_mode_index)
+                            if edge_aa_mode_ptr^ == .COVERAGE {
+                                log.info("Edge AA: coverage")
+                            } else {
+                                log.info("Edge AA: hard")
+                            }
+                        }
+                        rl.GuiSetAlpha(1.0)
+                        break
+                    }
+                    content_y += lens_height + INSPECTOR_SECTION_GAP
+
                     camera_height := inspector_section_height(
                         state.camera_open,
                         INSPECTOR_CAMERA_EXPANDED_HEIGHT,
@@ -3136,70 +3359,11 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                         }
                         content_y += 30
 
-                        rl.GuiLabel({content_x, content_y, 104, 22}, "Downscale level")
-                        _ = shared.ui_gui_spinner(
-                            &ui_keyboard,
-                            .CAMERA_DOWNSCALE,
-                            {content_x + 108, content_y, content_width - 108, 22},
-                            nil,
-                            downscale_level_ptr,
-                            MIN_DOWNSCALE_LEVEL,
-                            MAX_DOWNSCALE_LEVEL,
-                            1,
-                            4,
-                            false,
-                        )
-                        downscale_level_ptr^ = clamp(
-                            downscale_level_ptr^,
-                            MIN_DOWNSCALE_LEVEL,
-                            MAX_DOWNSCALE_LEVEL,
-                        )
-                        content_y += 24
-                        rl.GuiLabel(
-                            {content_x, content_y, content_width, 18},
-                            rl.TextFormat(
-                                "Output grid: %d x %d",
-                                downsample_width,
-                                downsample_height,
-                            ),
-                        )
-                        content_y += line_height
-
-                        rl.GuiLabel({content_x, content_y, 104, 22}, "Edge AA")
-                        edge_aa_mode_index := c.int(edge_aa_mode_ptr^)
-                        previous_edge_aa_mode := edge_aa_mode_index
-                        _ = shared.ui_gui_combo_box(
-                            &ui_keyboard,
-                            .CAMERA_EDGE_AA,
-                            {content_x + 108, content_y, content_width - 108, 22},
-                            "Hard;Coverage",
-                            &edge_aa_mode_index,
-                            2,
-                        )
-                        if edge_aa_mode_index != previous_edge_aa_mode {
-                            edge_aa_mode_ptr^ = shared.Edge_AA_Mode(edge_aa_mode_index)
-                            if edge_aa_mode_ptr^ == .COVERAGE {
-                                log.info("Edge AA: coverage")
-                            } else {
-                                log.info("Edge AA: hard")
-                            }
-                        }
-                        content_y += 28
-
                         rl.GuiLabel({content_x, content_y, content_width, 18}, "LMB orbit | MMB drag pan")
                         content_y += line_height
                         rl.GuiLabel({content_x, content_y, content_width, 18}, "WASD / Arrows pan | Q / E zoom")
                         content_y += line_height
                         rl.GuiLabel({content_x, content_y, content_width, 18}, "Wheel zoom | Shift faster")
-                        content_y += line_height
-                        lens_grid_status: cstring = "OFF"
-                        if lens_grid_visible {
-                            lens_grid_status = "ON"
-                        }
-                        rl.GuiLabel(
-                            {content_x, content_y, content_width, 18},
-                            rl.TextFormat("1/2/3 Lens | G Grid:%s | F1 Help", lens_grid_status),
-                        )
                         break
                     }
                     content_y += camera_height + INSPECTOR_SECTION_GAP

@@ -93,13 +93,13 @@ hidden_controls_fall_back_to_their_section_header :: proc(t: ^testing.T) {
     )
     testing.expect_value(
         t,
-        ui_focus_fallback(.CAMERA_DOWNSCALE),
-        UI_Focus_ID.CAMERA_HEADER,
+        ui_focus_fallback(.LENS_DOWNSCALE),
+        UI_Focus_ID.LENS_HEADER,
     )
     testing.expect_value(
         t,
-        ui_focus_fallback(.CAMERA_EDGE_AA),
-        UI_Focus_ID.CAMERA_HEADER,
+        ui_focus_fallback(.LENS_EDGE_AA),
+        UI_Focus_ID.LENS_HEADER,
     )
 }
 

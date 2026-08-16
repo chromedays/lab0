@@ -118,6 +118,10 @@ UI_SHORTCUT_BINDINGS :: [?]UI_Shortcut_Binding{
 // frames, even when scrolling or collapsed sections change registration order.
 UI_Focus_ID :: enum {
     NONE,
+    LENS_PIXELATED,
+    LENS_BLENDED,
+    LENS_COVERAGE,
+    LENS_GRID,
     EXPORT_PNG,
     ANIMATION_PREVIOUS_CLIP,
     ANIMATION_CLIP,
@@ -135,13 +139,14 @@ UI_Focus_ID :: enum {
     MODEL_SEARCH,
     MODEL_CLEAR,
     MODEL_LIST,
+    LENS_HEADER,
+    LENS_DOWNSCALE,
+    LENS_EDGE_AA,
     CAMERA_HEADER,
     CAMERA_X,
     CAMERA_Y,
     CAMERA_Z,
     CAMERA_ISOMETRIC,
-    CAMERA_DOWNSCALE,
-    CAMERA_EDGE_AA,
     CEL_HEADER,
     CEL_PRESET,
     CEL_RELOAD,
@@ -249,8 +254,9 @@ ui_focus_fallback :: proc(focused: UI_Focus_ID) -> UI_Focus_ID {
         return .ANIMATION_CLIP
     case .MODEL_SEARCH, .MODEL_CLEAR, .MODEL_LIST:
         return .MODEL_HEADER
-    case .CAMERA_X, .CAMERA_Y, .CAMERA_Z, .CAMERA_ISOMETRIC,
-         .CAMERA_DOWNSCALE, .CAMERA_EDGE_AA:
+    case .LENS_DOWNSCALE, .LENS_EDGE_AA:
+        return .LENS_HEADER
+    case .CAMERA_X, .CAMERA_Y, .CAMERA_Z, .CAMERA_ISOMETRIC:
         return .CAMERA_HEADER
     case .CEL_PRESET, .CEL_RELOAD, .CEL_SAVE, .CEL_RESET,
          .CEL_LIGHT_HEADER, .CEL_BANDS_HEADER, .CEL_ACCENTS_HEADER,
@@ -445,6 +451,26 @@ ui_gui_button :: proc(
                  (focused && ui_activation_is_pressed())
     ui_focus_draw(bounds, focused)
     return activated
+}
+
+// ui_gui_toggle adds keyboard focus and activation to a persistent raygui
+// toggle. Callers can compose multiple toggles into a radio-style mode picker
+// while retaining a distinct Tab stop and visible selected state for each item.
+ui_gui_toggle :: proc(
+    keyboard: ^UI_Keyboard_State,
+    id: UI_Focus_ID,
+    bounds: rl.Rectangle,
+    text: cstring,
+    active: ^bool,
+) -> bool {
+    focused := ui_control_register(keyboard, id, bounds)
+    previous := active^
+    _ = rl.GuiToggle(bounds, text, active)
+    if focused && ui_activation_is_pressed() {
+        active^ = !active^
+    }
+    ui_focus_draw(bounds, focused)
+    return active^ != previous
 }
 
 // ui_gui_check_box supports Space toggling and returns an actual value change,

@@ -54,12 +54,19 @@ Live shortcuts are disabled in non-interactive capture mode. Modified commands
 are consumed before camera input, so combinations such as `Cmd/Ctrl+S` never
 leak into WASD camera movement.
 
-Press `G` to toggle the pixel grid over the lens. The camera controls panel
-shows whether the grid is currently on or off.
+The toolbar attached to the lens keeps all three display modes visible and
+clickable: **Pixelated**, **Blended**, and **Coverage**. Their `1`/`2`/`3`
+shortcuts remain available, and the selected mode stays visibly pressed. Press
+`G` or use the toolbar's **Grid** toggle to show or hide the pixel grid. The
+footer also reports the current lens crop dimensions and provides the PNG
+export action. The attached controls and dedicated Inspector section render at
+80% opacity so the scene remains visible behind the Lens UI.
 
-Use the **Downscale level** spinner in **Camera Controls** to adjust the pixel
-downscale from 1× through 32×. The output-grid readout updates to show the
-active render-target resolution; the default remains 10× (128×72).
+Use the **Downscale level** spinner in the Inspector's dedicated **Lens**
+section to adjust the pixel downscale from 1× through 32×. The output-grid
+readout updates to show the active render-target resolution; the default
+remains 10× (128×72). **Camera Controls** now contains only view reset and
+navigation guidance.
 
 The **Edge AA** selector beside it switches the low-resolution silhouette
 resolve between **Hard** and **Coverage**. Hard preserves the original binary
