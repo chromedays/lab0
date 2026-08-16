@@ -62,10 +62,11 @@ footer also reports the current lens crop dimensions and provides the PNG
 export action. The attached controls and dedicated Inspector section render at
 80% opacity so the scene remains visible behind the Lens UI.
 
-Use the **Downscale level** spinner in the Inspector's dedicated **Lens**
-section to adjust the pixel downscale from 1× through 32×. The output-grid
-readout updates to show the active render-target resolution; the default
-remains 10× (128×72). **Camera Controls** now contains only view reset and
+Drag the **Downscale level** slider in the Inspector's dedicated **Lens**
+section to adjust the pixel downscale from 1× through 32×. The slider snaps
+to integer levels, and the
+output-grid readout updates to show the active render-target resolution; the
+default remains 10× (128×72). **Camera Controls** contains only view reset and
 navigation guidance.
 
 The **Edge AA** selector beside it switches the low-resolution silhouette

@@ -5,6 +5,7 @@ package shared
 // share one state machine instead of each panel implementing its own rules.
 
 import "core:c"
+import "core:math"
 import rl "vendor:raylib"
 
 UI_MOD_SHIFT   :: u8(1 << 0)
@@ -527,6 +528,44 @@ ui_gui_slider_bar :: proc(
         value^ = clamp(value^, minimum, maximum)
     }
     ui_focus_draw(bounds, focused)
+    return value^ != previous
+}
+
+// ui_int_slider_quantize snaps the continuous raygui slider value to a bounded
+// integer. Keeping this conversion separate makes mouse-driven stepping
+// deterministic and lets callers share the same rounding behavior.
+ui_int_slider_quantize :: proc(
+    value: f32,
+    minimum, maximum: c.int,
+) -> c.int {
+    return clamp(c.int(math.round(value)), minimum, maximum)
+}
+
+// ui_gui_int_slider_bar presents an integer value through raygui's draggable
+// slider while retaining the shared keyboard step and coarse-step behavior.
+ui_gui_int_slider_bar :: proc(
+    keyboard: ^UI_Keyboard_State,
+    id: UI_Focus_ID,
+    bounds: rl.Rectangle,
+    left_text, right_text: cstring,
+    value: ^c.int,
+    minimum, maximum, step, coarse_step: c.int,
+) -> bool {
+    previous := value^
+    slider_value := f32(value^)
+    _ = ui_gui_slider_bar(
+        keyboard,
+        id,
+        bounds,
+        left_text,
+        right_text,
+        &slider_value,
+        f32(minimum),
+        f32(maximum),
+        f32(step),
+        f32(coarse_step),
+    )
+    value^ = ui_int_slider_quantize(slider_value, minimum, maximum)
     return value^ != previous
 }
 

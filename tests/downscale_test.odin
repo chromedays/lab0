@@ -20,3 +20,12 @@ downsample_dimension_never_reaches_zero :: proc(t: ^testing.T) {
     testing.expect_value(t, render_downsample_dimension(16, 32), 1)
     testing.expect_value(t, render_downsample_dimension(16, 0), 16)
 }
+
+// Opaque lens modes replace the full-resolution scene; only the comparison mode
+// deliberately keeps it as an underlay.
+@test
+pixelated_lens_does_not_preserve_the_full_resolution_scene :: proc(t: ^testing.T) {
+    testing.expect(t, lens_mode_replaces_scene(.PIXELATED))
+    testing.expect(t, !lens_mode_replaces_scene(.BLENDED))
+    testing.expect(t, lens_mode_replaces_scene(.COVERAGE_MASK))
+}

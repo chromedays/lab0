@@ -73,6 +73,7 @@ Game_Zombie_Mode :: app.Game_Zombie_Mode
 INSPECTOR_SECTION_HEADER_HEIGHT :: app.INSPECTOR_SECTION_HEADER_HEIGHT
 Inspector_UI_State :: app.Inspector_UI_State
 Lens_Mode :: shared.Lens_Mode
+lens_mode_replaces_scene :: app.lens_mode_replaces_scene
 MAX_CEL_BANDS :: shared.MAX_CEL_BANDS
 MAX_DOWNSCALE_LEVEL :: app.MAX_DOWNSCALE_LEVEL
 MIN_DOWNSCALE_LEVEL :: app.MIN_DOWNSCALE_LEVEL
@@ -191,6 +192,7 @@ scene_video_orbit_camera :: app.scene_video_orbit_camera
 scene_video_orbit_degrees :: app.scene_video_orbit_degrees
 cli_help_is_requested :: shared.cli_help_is_requested
 ui_focus_fallback :: shared.ui_focus_fallback
+ui_int_slider_quantize :: shared.ui_int_slider_quantize
 ui_shortcut_modifiers_match :: shared.ui_shortcut_modifiers_match
 cel_style_validate :: shared.cel_style_validate
 game_video_options_validate :: shared.game_video_options_validate

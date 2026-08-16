@@ -73,6 +73,15 @@ shortcut_registry_has_no_conflicting_bindings :: proc(t: ^testing.T) {
     }
 }
 
+// Integer sliders round mouse positions to the nearest step and clamp both ends.
+@(test)
+integer_slider_quantization_is_rounded_and_bounded :: proc(t: ^testing.T) {
+    testing.expect_value(t, ui_int_slider_quantize(0.4, 1, 32), c.int(1))
+    testing.expect_value(t, ui_int_slider_quantize(9.49, 1, 32), c.int(9))
+    testing.expect_value(t, ui_int_slider_quantize(9.5, 1, 32), c.int(10))
+    testing.expect_value(t, ui_int_slider_quantize(40, 1, 32), c.int(32))
+}
+
 // Focus from a hidden child resolves to the nearest still-visible section header.
 @(test)
 hidden_controls_fall_back_to_their_section_header :: proc(t: ^testing.T) {

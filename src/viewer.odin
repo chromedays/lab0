@@ -62,6 +62,13 @@ SUPPORTED_MODEL_EXTENSIONS := [?]string{
     ".m3d",
 }
 
+// lens_mode_replaces_scene reports whether the lens should hide the full-resolution
+// scene beneath its transparent low-resolution texture. Only Blended intentionally
+// preserves the scene as a comparison layer.
+lens_mode_replaces_scene :: proc(lens_mode: shared.Lens_Mode) -> bool {
+    return lens_mode != .BLENDED
+}
+
 // shared.Lens_Mode selects how the low-resolution render is composited into the 400px
 // lens: nearest pixels, a 50/50 blend, or raw subpixel coverage visualization.
 get_model_center :: proc(model: rl.Model) -> rl.Vector3 {
@@ -2140,8 +2147,10 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                 if lens_mode == .COVERAGE_MASK {
                     active_lens_texture = coverage_mask_render_target.texture
                 }
-                if lens_mode == .COVERAGE_MASK {
+                if lens_mode_replaces_scene(lens_mode) {
                     rl.DrawRectangleRec(lens_bounds, scene_background_color)
+                }
+                if lens_mode == .COVERAGE_MASK {
                     rl.BeginBlendMode(.ALPHA_PREMULTIPLY)
                         rl.DrawTexturePro(
                             active_lens_texture,
@@ -3204,23 +3213,43 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                         content_y := bounds.y + 34
                         content_width := bounds.width - 24
 
-                        rl.GuiLabel({content_x, content_y, 104, 22}, "Downscale level")
-                        _ = shared.ui_gui_spinner(
+                        downscale_label_width: f32 = 104
+                        downscale_value_width: f32 = 40
+                        downscale_slider_x := content_x + downscale_label_width + 4
+                        downscale_slider_width := max(
+                            content_width - downscale_label_width -
+                                downscale_value_width - 12,
+                            f32(24),
+                        )
+                        rl.GuiLabel(
+                            {content_x, content_y, downscale_label_width, 22},
+                            "Downscale level",
+                        )
+                        _ = shared.ui_gui_int_slider_bar(
                             &ui_keyboard,
                             .LENS_DOWNSCALE,
-                            {content_x + 108, content_y, content_width - 108, 22},
+                            {
+                                downscale_slider_x,
+                                content_y + 2,
+                                downscale_slider_width,
+                                18,
+                            },
+                            nil,
                             nil,
                             downscale_level_ptr,
                             MIN_DOWNSCALE_LEVEL,
                             MAX_DOWNSCALE_LEVEL,
                             1,
                             4,
-                            false,
                         )
-                        downscale_level_ptr^ = clamp(
-                            downscale_level_ptr^,
-                            MIN_DOWNSCALE_LEVEL,
-                            MAX_DOWNSCALE_LEVEL,
+                        rl.GuiLabel(
+                            {
+                                content_x + content_width - downscale_value_width,
+                                content_y,
+                                downscale_value_width,
+                                22,
+                            },
+                            rl.TextFormat("%dx", downscale_level_ptr^),
                         )
                         content_y += 24
                         rl.GuiLabel(
