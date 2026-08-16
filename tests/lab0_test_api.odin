@@ -18,6 +18,7 @@ Cel_Style :: shared.Cel_Style
 Cel_Style_Error :: shared.Cel_Style_Error
 Cel_Style_UI_State :: app.Cel_Style_UI_State
 DEFAULT_DOWNSCALE_LEVEL :: app.DEFAULT_DOWNSCALE_LEVEL
+DEFAULT_LENS_SIZE :: app.DEFAULT_LENS_SIZE
 Edge_AA_Mode :: shared.Edge_AA_Mode
 GAME_CAMERA_FOVY :: app.GAME_CAMERA_FOVY
 GAME_CAMERA_LOOK_AHEAD :: app.GAME_CAMERA_LOOK_AHEAD
@@ -77,6 +78,7 @@ lens_mode_replaces_scene :: app.lens_mode_replaces_scene
 MAX_CEL_BANDS :: shared.MAX_CEL_BANDS
 MAX_DOWNSCALE_LEVEL :: app.MAX_DOWNSCALE_LEVEL
 MIN_DOWNSCALE_LEVEL :: app.MIN_DOWNSCALE_LEVEL
+MIN_LENS_SIZE :: app.MIN_LENS_SIZE
 Model_Assets :: shared.Model_Assets
 Model_Browser_State :: shared.Model_Browser_State
 Model_Source_Kind :: shared.Model_Source_Kind
@@ -108,6 +110,7 @@ add_cel_band_after :: app.add_cel_band_after
 cel_ramp_pixels_build :: shared.cel_ramp_pixels_build
 camera_input_permissions :: app.camera_input_permissions
 camera_mouse_drag_for_frame :: app.camera_mouse_drag_for_frame
+centered_lens_bounds :: app.centered_lens_bounds
 cel_diffuse_to_band_index :: shared.cel_diffuse_to_band_index
 cel_f32_is_finite :: shared.cel_f32_is_finite
 cel_style_move_assign :: shared.cel_style_move_assign
@@ -139,6 +142,10 @@ game_fixed_update :: app.game_fixed_update
 game_mode_requested :: app.game_mode_requested
 game_normalize_input :: app.game_normalize_input
 game_pixel_snap_offset :: app.game_pixel_snap_offset
+lens_layout_max_size :: app.lens_layout_max_size
+lens_resize_drag_for_frame :: app.lens_resize_drag_for_frame
+lens_resize_handle_bounds :: app.lens_resize_handle_bounds
+lens_resize_size_for_pointer :: app.lens_resize_size_for_pointer
 game_position_hits_hazard :: app.game_position_hits_hazard
 game_position_hits_obstacle :: app.game_position_hits_obstacle
 game_position_inside_room :: app.game_position_inside_room

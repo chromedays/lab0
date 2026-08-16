@@ -62,6 +62,10 @@ footer also reports the current lens crop dimensions and provides the PNG
 export action. The attached controls and dedicated Inspector section render at
 80% opacity so the scene remains visible behind the Lens UI.
 
+Drag the square handle at the lens's lower-right corner to resize the lens. The
+lens remains centered and square, snaps its size to the active downscale level,
+and starts each Viewer session at 400×400 pixels.
+
 Drag the **Downscale level** slider in the Inspector's dedicated **Lens**
 section to adjust the pixel downscale from 1× through 32×. The slider snaps
 to integer levels, and the
