@@ -546,14 +546,13 @@ cli_help_is_requested :: proc(arguments: []string) -> bool {
            cli_argument_is_present(arguments, "-h")
 }
 
-// cli_viewer_usage_print is the top-level help shown for the default Viewer mode.
-// It advertises the alternate modes before appending the complete capture CLI.
+// cli_viewer_usage_print is the top-level help and Viewer-mode reference.
+// Every runtime mode is selected explicitly before its options are accepted.
 cli_viewer_usage_print :: proc() {
     fmt.println("Lab0 model viewer")
     fmt.println("")
     fmt.println("Usage:")
-    fmt.println("  lab0                              Open the interactive Viewer")
-    fmt.println("  lab0 [capture options]            Run a deterministic Viewer capture")
+    fmt.println("  lab0 --mode viewer [options]")
     fmt.println("  lab0 --mode scene-editor [options]")
     fmt.println("  lab0 --mode game [options]")
     fmt.println("")
@@ -570,6 +569,9 @@ cli_viewer_usage_print :: proc() {
 // raylib, which keeps --capture-help usable in non-graphical environments.
 cli_capture_usage_print :: proc() {
     fmt.println("Non-interactive capture mode")
+    fmt.println("")
+    fmt.println("Usage:")
+    fmt.println("  lab0 --mode viewer --capture-case <name> [capture options]")
     fmt.println("")
     fmt.println("  --capture-case <name>          Enable capture mode and name the case")
     fmt.println("  --capture-output <path.png>    Output path or sequence template")

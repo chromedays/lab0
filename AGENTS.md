@@ -36,6 +36,7 @@ Basic graphics and capture smoke test:
 
 ```sh
 /tmp/lab0-capture-worker-a \
+  --mode viewer \
   --capture-case cube-smoke \
   --capture-model builtin:cube \
   --capture-view isometric \
@@ -48,6 +49,7 @@ Fixed animation pose:
 
 ```sh
 /tmp/lab0-capture-worker-a \
+  --mode viewer \
   --capture-case runner-frame-24 \
   --capture-model assets/CesiumMan.glb \
   --capture-frame 24 \
@@ -60,6 +62,7 @@ Style preset capture:
 
 ```sh
 /tmp/lab0-capture-worker-a \
+  --mode viewer \
   --capture-case anime-sphere \
   --capture-model builtin:sphere \
   --capture-style styles/anime.json \
@@ -82,6 +85,7 @@ reachable by the step, and defaults to a step of 1.
 
 ```sh
 /tmp/lab0-capture-worker-a \
+  --mode viewer \
   --capture-case cesium-walk \
   --capture-model assets/CesiumMan.glb \
   --capture-frame-range 0:24:4 \
@@ -219,8 +223,8 @@ as regression truth.
 ## Game-mode validation
 
 The traversal prototype is a separate runtime path selected with `--mode game`.
-The viewer remains the default, and its established capture outputs must remain
-byte-identical when game code changes.
+Viewer execution is selected with `--mode viewer`; its established capture
+outputs must remain byte-identical when game code changes.
 
 Use `--game-room R00` through `R06` to start from a deterministic room spawn.
 Game captures reuse the normal capture case, output, style, warmup, window, and

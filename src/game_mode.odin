@@ -1,7 +1,7 @@
 package main
 
-// Game mode is an isolated traversal prototype. The existing viewer remains
-// the default entry path; `--mode game` selects this loop before viewer setup.
+// Game mode is an isolated traversal prototype. `--mode game` selects this
+// loop before any Viewer setup.
 
 import "core:fmt"
 import "core:c"

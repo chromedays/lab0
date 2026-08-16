@@ -9,7 +9,7 @@ asset paths continue to resolve correctly.
 ## Run interactively
 
 ```sh
-odin run src
+odin run src -- --mode viewer
 ```
 
 Model and shader paths are relative to the working directory.
@@ -21,11 +21,13 @@ window. Help follows the selected mode:
 
 ```sh
 odin run src -- --help
+odin run src -- --mode viewer --help
 odin run src -- --mode scene-editor --help
 odin run src -- --mode game --help
 ```
 
-The existing focused flags remain available as `--capture-help` and
+Running without arguments prints this help instead of opening a window. The
+existing focused flags remain available as `--capture-help` and
 `--scene-help`; Game mode also provides `--game-help`. Focused help flags do
 not require a matching `--mode` argument.
 
@@ -167,8 +169,7 @@ contract are in
 
 ## Traversal prototype
 
-The existing model viewer remains the default application. Start the separate
-room-based traversal prototype with:
+Start the separate room-based traversal prototype with:
 
 ```sh
 odin run src -- --mode game
@@ -417,6 +418,7 @@ Capture mode initializes a hidden graphics window, fixes the requested render st
 
 ```sh
 odin run src -- \
+  --mode viewer \
   --capture-case cube-isometric \
   --capture-model builtin:cube \
   --capture-view isometric \
@@ -428,6 +430,7 @@ The default output is `captures/<case-name>.png`. Give every concurrent worker a
 
 ```sh
 odin run src -- \
+  --mode viewer \
   --capture-case runner-frame-24 \
   --capture-model assets/CesiumMan.glb \
   --capture-style styles/anime.json \
@@ -444,6 +447,7 @@ process. The output template must contain exactly one `%d` or zero-padded
 
 ```sh
 odin run src -- \
+  --mode viewer \
   --capture-case cesium-walk \
   --capture-model assets/CesiumMan.glb \
   --capture-frame-range 0:24:2 \
@@ -466,6 +470,7 @@ is created.
 
 ```sh
 odin run src -- \
+  --mode viewer \
   --capture-case cesium-viewer-video \
   --capture-model assets/CesiumMan.glb \
   --capture-style styles/anime.json \

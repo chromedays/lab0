@@ -295,6 +295,7 @@ Viewer는 Game의 `Video_Stream_Encoder` 전송 계층을 공유한다. Game의
 
 ```sh
 /tmp/lab0-viewer-video \
+  --mode viewer \
   --capture-case cesium-viewer-video \
   --capture-model assets/CesiumMan.glb \
   --capture-style styles/anime.json \

@@ -70,6 +70,7 @@ odin build src -out:"$binary"
 
 echo "[3/4] Repeated animation capture at frame $determinism_frame"
 "$binary" \
+    --mode viewer \
     --capture-case viewer-frame-${determinism_frame}-a \
     --capture-model "$model_path" \
     --capture-style "$style_path" \
@@ -80,6 +81,7 @@ echo "[3/4] Repeated animation capture at frame $determinism_frame"
     --capture-target composite \
     --capture-output "$capture_a" >"$log_a" 2>&1
 "$binary" \
+    --mode viewer \
     --capture-case viewer-frame-${determinism_frame}-b \
     --capture-model "$model_path" \
     --capture-style "$style_path" \
@@ -126,6 +128,7 @@ if [ "$video_report" = true ]; then
 
     echo "[video 1/3] Stream the deterministic Viewer pose range to FFmpeg"
     if "$binary" \
+        --mode viewer \
         --capture-case viewer-video-report \
         --capture-model "$model_path" \
         --capture-style "$style_path" \

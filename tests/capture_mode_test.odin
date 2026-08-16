@@ -28,6 +28,15 @@ standard_help_aliases_are_recognized :: proc(t: ^testing.T) {
     testing.expect(t, cli_argument_is_present({"--game-help"}, "--game-help"))
 }
 
+// Viewer execution, like the other application modes, requires an explicit mode.
+@test
+viewer_mode_requires_the_explicit_viewer_value :: proc(t: ^testing.T) {
+    testing.expect(t, viewer_mode_requested({"--mode", "viewer"}))
+    testing.expect(t, !viewer_mode_requested({}))
+    testing.expect(t, !viewer_mode_requested({"--capture-case", "smoke"}))
+    testing.expect(t, !viewer_mode_requested({"--mode", "game"}))
+}
+
 // A case without an explicit output receives a stable single-frame PNG path.
 @test
 capture_options_build_a_deterministic_default_output :: proc(t: ^testing.T) {

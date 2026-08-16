@@ -197,6 +197,7 @@ scene_validate :: shared.scene_validate
 validate_scene_capture_options :: app.validate_scene_capture_options
 validate_scene_video_options :: app.validate_scene_video_options
 validate_viewer_video_options :: app.validate_viewer_video_options
+viewer_mode_requested :: app.viewer_mode_requested
 video_stream_ffmpeg_command_build :: shared.video_stream_ffmpeg_command_build
 video_stream_frame_byte_count :: shared.video_stream_frame_byte_count
 video_stream_temporary_output_path :: shared.video_stream_temporary_output_path
