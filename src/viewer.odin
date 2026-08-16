@@ -106,12 +106,62 @@ reset_camera_to_axis_view :: proc(
     camera.up = up
 }
 
-// frame_camera_to_model computes model bounds, chooses an orthographic camera,
-// and returns the largest model dimension used as the scene movement scale.
-// Built-ins receive lens-aware front/top framing; assets use an isometric view.
+// viewer_isometric_camera_frame builds the shared initial Viewer camera and
+// sizes its orthographic projection from the model's screen-space AABB extent.
+// The +X/+Y/+Z direction gives each world axis equal weight in the first view.
+viewer_isometric_camera_frame :: proc(
+    model_center: rl.Vector3,
+    model_dimensions: rl.Vector3,
+    scene_size: f32,
+    screen_height: f32,
+) -> (camera: rl.Camera3D, projected_width, projected_height: f32) {
+    isometric_axis := rl.Vector3Normalize(rl.Vector3{1, 1, 1})
+    camera = rl.Camera3D{
+        target     = model_center,
+        position   = model_center + isometric_axis * max(scene_size * 3, 1),
+        up         = {0, 1, 0},
+        projection = .ORTHOGRAPHIC,
+    }
+
+    // Project all eight AABB corners without enumerating them. For a centered
+    // box, its interval length along a unit axis is sum(abs(axis) * dimension).
+    camera_forward := rl.GetCameraForward(&camera)
+    camera_right := rl.GetCameraRight(&camera)
+    camera_screen_up := rl.Vector3Normalize(
+        rl.Vector3CrossProduct(camera_right, camera_forward),
+    )
+    projected_width =
+        math.abs(camera_right.x) * model_dimensions.x +
+        math.abs(camera_right.y) * model_dimensions.y +
+        math.abs(camera_right.z) * model_dimensions.z
+    projected_height =
+        math.abs(camera_screen_up.x) * model_dimensions.x +
+        math.abs(camera_screen_up.y) * model_dimensions.y +
+        math.abs(camera_screen_up.z) * model_dimensions.z
+
+    if projected_width <= 0 {
+        projected_width = scene_size
+    }
+    if projected_height <= 0 {
+        projected_height = scene_size
+    }
+
+    // raylib's orthographic fovy is the full screen height in world units.
+    // Fit the projected model into the 400x400 lens with 10% padding per side.
+    lens_fill: f32 = 0.8
+    safe_screen_height := max(screen_height, 1)
+    fovy_for_width :=
+        projected_width * safe_screen_height / f32(LENS_WIDTH) / lens_fill
+    fovy_for_height :=
+        projected_height * safe_screen_height / f32(LENS_HEIGHT) / lens_fill
+    camera.fovy = max(fovy_for_width, fovy_for_height)
+    return
+}
+
+// frame_camera_to_model computes model bounds, chooses a lens-aware isometric
+// camera, and returns the largest model dimension used as the movement scale.
 frame_camera_to_model :: proc(
     model: rl.Model,
-    source_kind: shared.Model_Source_Kind,
     camera: ^rl.Camera3D,
 ) -> f32 {
     model_bounds := rl.GetModelBoundingBox(model)
@@ -133,63 +183,20 @@ frame_camera_to_model :: proc(
         scene_size = 1
     }
 
-    if source_kind == .CUBE ||
-       source_kind == .SPHERE ||
-       source_kind == .TRIANGLE {
-        projected_width := model_dimensions.x
-        projected_height := model_dimensions.y
-        camera_position := rl.Vector3{
-            model_center.x,
-            model_center.y,
-            model_center.z + scene_size * 3,
-        }
-        camera_up := rl.Vector3{0, 1, 0}
-
-        if source_kind == .TRIANGLE {
-            // GenMeshPoly() lies on the XZ plane, so view it from above.
-            projected_height = model_dimensions.z
-            camera_position = {
-                model_center.x,
-                model_center.y + scene_size * 3,
-                model_center.z,
-            }
-            camera_up = {0, 0, 1}
-        }
-
-        // raylib's orthographic fovy is the full screen height in world units.
-        // Fit the projected model into the narrower 200x400 lens, not merely
-        // into the 800x600 window, and retain 10% padding on every side.
-        lens_fill: f32 = 0.8
-        screen_height := f32(rl.GetScreenHeight())
-        fovy_for_width := projected_width * screen_height / f32(LENS_WIDTH) / lens_fill
-        fovy_for_height := projected_height * screen_height / f32(LENS_HEIGHT) / lens_fill
-
-        camera^ = rl.Camera3D{
-            target     = model_center,
-            position   = camera_position,
-            up         = camera_up,
-            fovy       = max(fovy_for_width, fovy_for_height),
-            projection = .ORTHOGRAPHIC,
-        }
-        log.infof(
-            "Built-in lens framing: projected(%f, %f), ortho fovy=%f",
-            projected_width,
-            projected_height,
-            camera.fovy,
+    projected_width, projected_height: f32
+    camera^, projected_width, projected_height =
+        viewer_isometric_camera_frame(
+            model_center,
+            model_dimensions,
+            scene_size,
+            f32(rl.GetScreenHeight()),
         )
-    } else {
-        camera^ = rl.Camera3D{
-            target     = model_center,
-            position   = {
-                model_center.x + scene_size * 1.5,
-                model_center.y + scene_size * 0.7,
-                model_center.z + scene_size * 1.5,
-            },
-            up         = {0, 1, 0},
-            fovy       = scene_size * 2.5,
-            projection = .ORTHOGRAPHIC,
-        }
-    }
+    log.infof(
+        "Isometric lens framing: projected(%f, %f), ortho fovy=%f",
+        projected_width,
+        projected_height,
+        camera.fovy,
+    )
 
     log.infof(
         "Model bounding box: min(%f, %f, %f), max(%f, %f, %f)",
@@ -1043,13 +1050,14 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                 )
                 scene_size = frame_camera_to_model(
                     active_model,
-                    model_assets.kinds[initial_model_index],
                     &render_camera,
                 )
                 if capture_options.enabled {
                     // Apply the requested fixed capture view at its only setup site.
                     switch capture_options.view {
-                    case .DEFAULT:
+                    // The initial camera is already isometric. Keep both
+                    // spellings bit-identical instead of normalizing it again.
+                    case .DEFAULT, .ISOMETRIC:
                     case .X:
                         reset_camera_to_axis_view(
                             &render_camera,
@@ -1071,14 +1079,6 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                             &render_camera,
                             model_center,
                             {0, 0, 1},
-                            {0, 1, 0},
-                            scene_size,
-                        )
-                    case .ISOMETRIC:
-                        reset_camera_to_axis_view(
-                            &render_camera,
-                            model_center,
-                            rl.Vector3Normalize({1, 1, 1}),
                             {0, 1, 0},
                             scene_size,
                         )
@@ -4948,7 +4948,6 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                     )
                     scene_size = frame_camera_to_model(
                         active_model,
-                        model_assets.kinds[requested_model_index],
                         &render_camera,
                     )
                     control_camera = render_camera

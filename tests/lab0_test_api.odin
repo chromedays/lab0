@@ -112,6 +112,7 @@ add_cel_band_after :: app.add_cel_band_after
 cel_ramp_pixels_build :: shared.cel_ramp_pixels_build
 camera_input_permissions :: app.camera_input_permissions
 camera_mouse_drag_for_frame :: app.camera_mouse_drag_for_frame
+viewer_isometric_camera_frame :: app.viewer_isometric_camera_frame
 centered_lens_bounds :: app.centered_lens_bounds
 cel_diffuse_to_band_index :: shared.cel_diffuse_to_band_index
 cel_f32_is_finite :: shared.cel_f32_is_finite
