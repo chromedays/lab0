@@ -78,6 +78,11 @@ shortcut_registry_has_no_conflicting_bindings :: proc(t: ^testing.T) {
 hidden_controls_fall_back_to_their_section_header :: proc(t: ^testing.T) {
     testing.expect_value(
         t,
+        ui_focus_fallback(.ANIMATION_NEXT_CLIP),
+        UI_Focus_ID.ANIMATION_CLIP,
+    )
+    testing.expect_value(
+        t,
         ui_focus_fallback(.CEL_BAND_BRIGHTNESS),
         UI_Focus_ID.CEL_BANDS_HEADER,
     )
