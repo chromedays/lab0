@@ -119,7 +119,9 @@ UI_SHORTCUT_BINDINGS :: [?]UI_Shortcut_Binding{
 UI_Focus_ID :: enum {
     NONE,
     EXPORT_PNG,
+    ANIMATION_PREVIOUS_CLIP,
     ANIMATION_CLIP,
+    ANIMATION_NEXT_CLIP,
     ANIMATION_FIRST,
     ANIMATION_PREVIOUS,
     ANIMATION_PLAY,
@@ -243,6 +245,8 @@ ui_find_focus_index :: proc(
 // header after a picker closes or a subsection collapses.
 ui_focus_fallback :: proc(focused: UI_Focus_ID) -> UI_Focus_ID {
     #partial switch focused {
+    case .ANIMATION_PREVIOUS_CLIP, .ANIMATION_NEXT_CLIP:
+        return .ANIMATION_CLIP
     case .MODEL_SEARCH, .MODEL_CLEAR, .MODEL_LIST:
         return .MODEL_HEADER
     case .CAMERA_X, .CAMERA_Y, .CAMERA_Z, .CAMERA_ISOMETRIC,

@@ -139,7 +139,7 @@ Animation_Playback :: struct {
     animations:      [^]rl.ModelAnimation,
     animation_count: c.int,
     valid_indices:   [dynamic]c.int,
-    clip_options:    cstring,
+    clip_labels:     [dynamic]cstring,
     active_index:    c.int,
     current_frame:   f32,
     applied_frame:   f32,
@@ -149,6 +149,8 @@ Animation_Playback :: struct {
     sampled_playback: bool,
     sample_count:    c.int,
     dropdown_open:   bool,
+    dropdown_scroll_index: c.int,
+    dropdown_focus_index:  c.int,
     pose_dirty:      bool,
 }
 
@@ -570,16 +572,17 @@ animation_playback_find_active_animation :: proc(
     return playback.animations[animation_index], true
 }
 
-// animation_playback_destroy unloads raylib animations, owned option text, and
+// animation_playback_destroy unloads raylib animations, owned clip labels, and
 // dynamic indices, then clears the complete playback state.
 animation_playback_destroy :: proc(playback: ^Animation_Playback) {
     if playback.animations != nil {
         rl.UnloadModelAnimations(playback.animations, playback.animation_count)
     }
     delete(playback.valid_indices)
-    if playback.clip_options != nil {
-        delete(playback.clip_options)
+    for clip_label in playback.clip_labels {
+        delete(clip_label)
     }
+    delete(playback.clip_labels)
     playback^ = {}
 }
 
@@ -811,6 +814,7 @@ animation_playback_load :: proc(
         speed = 1.0,
         loop = true,
         sample_count = 4,
+        dropdown_focus_index = -1,
     }
     model_path_cstr := strings.clone_to_cstring(
         model_path,
@@ -823,9 +827,6 @@ animation_playback_load :: proc(
     if playback.animations == nil || playback.animation_count <= 0 {
         return {playback, .NO_ANIMATIONS}
     }
-
-    clip_options_builder := strings.builder_make()
-    defer strings.builder_destroy(&clip_options_builder)
 
     for animation_index := 0;
         animation_index < int(playback.animation_count);
@@ -848,18 +849,20 @@ animation_playback_load :: proc(
             continue
         }
 
-        if len(playback.valid_indices) > 0 {
-            strings.write_byte(&clip_options_builder, ';')
-        }
         append(&playback.valid_indices, c.int(animation_index))
 
         animation_name := string(cstring(&animation.name[0]))
         if len(animation_name) > 0 {
-            strings.write_string(&clip_options_builder, animation_name)
+            append(
+                &playback.clip_labels,
+                strings.clone_to_cstring(animation_name),
+            )
         } else {
-            strings.write_string(
-                &clip_options_builder,
-                fmt.tprintf("Animation %d", animation_index + 1),
+            append(
+                &playback.clip_labels,
+                strings.clone_to_cstring(
+                    fmt.tprintf("Animation %d", animation_index + 1),
+                ),
             )
         }
     }
@@ -869,9 +872,6 @@ animation_playback_load :: proc(
         return {{}, .NO_COMPATIBLE_ANIMATIONS}
     }
 
-    playback.clip_options = strings.clone_to_cstring(
-        strings.to_string(clip_options_builder),
-    )
     playback.active_index = 0
     playback.current_frame = 0
     playback.applied_frame = 0
@@ -1002,6 +1002,24 @@ animation_playback_reset_to_first_frame :: proc(playback: ^Animation_Playback) {
     playback.pose_dirty = true
 }
 
+// animation_playback_select_clip centralizes direct and shortcut-driven clip
+// changes so every UI path stops playback and uploads the new first pose.
+animation_playback_select_clip :: proc(
+    playback: ^Animation_Playback,
+    active_index: c.int,
+) -> bool {
+    clip_count := c.int(len(playback.valid_indices))
+    if active_index < 0 || active_index >= clip_count ||
+       active_index == playback.active_index {
+        return false
+    }
+    playback.active_index = active_index
+    playback.current_frame = 0
+    playback.is_playing = false
+    playback.pose_dirty = true
+    return true
+}
+
 // animation_playback_step_frame advances either one keyframe or one sample slot. It wraps
 // only when looping is enabled and always pauses continuous playback.
 animation_playback_step_frame :: proc(
@@ -1046,15 +1064,12 @@ animation_playback_cycle_clip :: proc(
     if clip_count <= 1 || direction == 0 {
         return false
     }
-    playback.active_index = clamp(
+    next_index := clamp(
         playback.active_index + c.int(direction),
         c.int(0),
         clip_count - 1,
     )
-    playback.current_frame = 0
-    playback.is_playing = false
-    playback.pose_dirty = true
-    return true
+    return animation_playback_select_clip(playback, next_index)
 }
 
 // animation_playback_update advances by caller-supplied time, applies loop/end

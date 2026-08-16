@@ -160,6 +160,7 @@ game_zombie_patrol_anchor :: app.game_zombie_patrol_anchor
 game_zombie_position_blocked :: app.game_zombie_position_blocked
 game_zombie_walk_towards :: app.game_zombie_walk_towards
 animation_playback_pose_frame :: shared.animation_playback_pose_frame
+animation_playback_select_clip :: shared.animation_playback_select_clip
 render_downsample_dimension :: shared.render_downsample_dimension
 gltf_find_skinned_mesh_uniform_scale :: shared.gltf_find_skinned_mesh_uniform_scale
 matrix_find_pure_uniform_scale :: shared.matrix_find_pure_uniform_scale

@@ -42,6 +42,9 @@ LENS_HEIGHT             :: 400
 DEFAULT_COLOR_CLUSTER_THRESHOLD :: 0.10
 MODEL_SEARCH_TEXT_CAPACITY :: 128
 INSPECTOR_CAMERA_EXPANDED_HEIGHT :: f32(278)
+ANIMATION_TIMELINE_HEIGHT :: f32(90)
+ANIMATION_TIMELINE_BOTTOM_MARGIN :: f32(10)
+ANIMATION_CLIP_POPUP_ROW_HEIGHT :: f32(32)
 
 MAGNIFIER_SAMPLE_SIZE  :: 16
 MAGNIFIER_DISPLAY_SCALE :: 8
@@ -1145,7 +1148,13 @@ run_viewer_mode :: proc(arguments: []string) -> int {
         }
         ui_keyboard: shared.UI_Keyboard_State
         cel_style_ui: Cel_Style_UI_State
-        animation_controls_bounds := rl.Rectangle{10, 190, 280, 190}
+        animation_timeline_bounds := rl.Rectangle{
+            10,
+            f32(screen_height) - ANIMATION_TIMELINE_HEIGHT -
+                ANIMATION_TIMELINE_BOTTOM_MARGIN,
+            inspector_bounds.x - 20,
+            ANIMATION_TIMELINE_HEIGHT,
+        }
         magnifier_bounds := rl.Rectangle{10, f32(screen_height) - 194, 148, 184}
         coverage_alpha: f32 = -1
         next_export_index := 1
@@ -1382,11 +1391,11 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             )
             mouse_over_background_picker := background_picker_open &&
                 rl.CheckCollisionPointRec(ui_mouse_position, background_picker_bounds)
-            mouse_over_animation_controls := shared.animation_playback_has_playable_animations(
+            mouse_over_animation_timeline := shared.animation_playback_has_playable_animations(
                 &animation_playback,
             ) && rl.CheckCollisionPointRec(
                 ui_mouse_position,
-                animation_controls_bounds,
+                animation_timeline_bounds,
             )
             input_lens_bounds := rl.Rectangle{
                 (f32(screen_width) - LENS_WIDTH) / 2,
@@ -1405,7 +1414,7 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             )
             mouse_over_ui := mouse_over_inspector ||
                              mouse_over_background_picker ||
-                             mouse_over_animation_controls ||
+                             mouse_over_animation_timeline ||
                              mouse_over_export_button
             ui_captures_camera_input := shortcuts_help_open ||
                                         background_picker_open ||
@@ -2368,63 +2377,202 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                 }
                 // Render animation controls inline in their only composite UI location.
                 for {
-                    bounds := animation_controls_bounds
+                    bounds := animation_timeline_bounds
                     playback := &animation_playback
                     animation, animation_found := shared.animation_playback_find_active_animation(playback)
                     if !animation_found {
                         break
                     }
 
-                    rl.GuiPanel(bounds, "MODEL ANIMATION")
+                    rl.GuiPanel(bounds, nil)
 
-                    content_x := bounds.x + 12
-                    content_width := bounds.width - 24
-                    clip_bounds := rl.Rectangle{
-                        content_x + 42,
-                        bounds.y + 28,
-                        content_width - 42,
+                    content_x := bounds.x + 10
+                    content_width := bounds.width - 20
+                    controls_y := bounds.y + 8
+                    clip_region_width: f32 = 224
+                    clip_label_width: f32 = 56
+                    clip_label_gap: f32 = 4
+                    clip_label_bounds := rl.Rectangle{
+                        content_x,
+                        controls_y,
+                        clip_label_width,
                         24,
                     }
-                    rl.GuiLabel({content_x, bounds.y + 31, 38, 18}, "Clip")
+                    clip_group_bounds := rl.Rectangle{
+                        clip_label_bounds.x + clip_label_bounds.width + clip_label_gap,
+                        controls_y,
+                        clip_region_width - clip_label_width - clip_label_gap,
+                        24,
+                    }
+                    clip_step_width: f32 = 28
+                    clip_previous_bounds := rl.Rectangle{
+                        clip_group_bounds.x,
+                        clip_group_bounds.y,
+                        clip_step_width,
+                        clip_group_bounds.height,
+                    }
+                    clip_selector_bounds := rl.Rectangle{
+                        clip_previous_bounds.x + clip_previous_bounds.width,
+                        clip_group_bounds.y,
+                        clip_group_bounds.width - clip_step_width * 2,
+                        clip_group_bounds.height,
+                    }
+                    clip_next_bounds := rl.Rectangle{
+                        clip_selector_bounds.x + clip_selector_bounds.width,
+                        clip_group_bounds.y,
+                        clip_step_width,
+                        clip_group_bounds.height,
+                    }
+                    transport_x := content_x + clip_region_width + 8
+                    transport_width: f32 = 180
+                    frame_x := transport_x + transport_width + 8
+                    frame_width: f32 = 64
+                    speed_x := frame_x + frame_width + 8
+                    speed_width: f32 = 132
+                    loop_x := speed_x + speed_width + 8
+                    loop_width: f32 = 56
+                    sampled_x := loop_x + loop_width + 8
+                    sampled_width: f32 = 76
+                    count_x := sampled_x + sampled_width + 8
+                    count_width := content_x + content_width - count_x
+
+                    clip_item_count := min(
+                        c.int(len(playback.valid_indices)),
+                        c.int(len(playback.clip_labels)),
+                    )
+                    active_clip_label: cstring = "Animation"
+                    if playback.active_index >= 0 &&
+                       playback.active_index < clip_item_count {
+                        active_clip_label = playback.clip_labels[playback.active_index]
+                    }
+                    rl.GuiLabel(
+                        clip_label_bounds,
+                        rl.TextFormat(
+                            "CLIP %d/%d",
+                            playback.active_index + 1,
+                            clip_item_count,
+                        ),
+                    )
+
+                    clip_changed := false
+                    can_select_previous_clip := playback.active_index > 0
+                    if can_select_previous_clip {
+                        if shared.ui_gui_button(
+                            &ui_keyboard,
+                            .ANIMATION_PREVIOUS_CLIP,
+                            clip_previous_bounds,
+                            "<",
+                        ) {
+                            clip_changed = shared.animation_playback_select_clip(
+                                playback,
+                                playback.active_index - 1,
+                            )
+                        }
+                    } else {
+                        rl.GuiDisable()
+                        _ = rl.GuiButton(clip_previous_bounds, "<")
+                        rl.GuiEnable()
+                    }
+                    if clip_changed && playback.active_index >= 0 &&
+                       playback.active_index < clip_item_count {
+                        active_clip_label = playback.clip_labels[playback.active_index]
+                    }
+
+                    clip_focused := shared.ui_control_register(
+                        &ui_keyboard,
+                        .ANIMATION_CLIP,
+                        clip_selector_bounds,
+                    )
+                    clip_opened_this_frame := false
+                    clip_selector_text := rl.TextFormat(
+                        "%.12s",
+                        active_clip_label,
+                    )
+                    clip_toggled := rl.GuiButton(
+                        clip_selector_bounds,
+                        clip_selector_text,
+                    )
+                    if clip_focused && shared.ui_activation_is_pressed() {
+                        clip_toggled = true
+                    }
+                    if clip_toggled {
+                        playback.dropdown_open = !playback.dropdown_open
+                        if playback.dropdown_open {
+                            playback.dropdown_scroll_index = 0
+                            playback.dropdown_focus_index = -1
+                            clip_opened_this_frame = true
+                            shared.ui_keyboard_focus_set(
+                                &ui_keyboard,
+                                .ANIMATION_CLIP,
+                            )
+                        }
+                    }
+                    shared.ui_focus_draw(clip_selector_bounds, clip_focused)
+
+                    can_select_next_clip := playback.active_index >= 0 &&
+                        playback.active_index < clip_item_count - 1
+                    if can_select_next_clip {
+                        if shared.ui_gui_button(
+                            &ui_keyboard,
+                            .ANIMATION_NEXT_CLIP,
+                            clip_next_bounds,
+                            ">",
+                        ) {
+                            clip_changed = shared.animation_playback_select_clip(
+                                playback,
+                                playback.active_index + 1,
+                            ) || clip_changed
+                        }
+                    } else {
+                        rl.GuiDisable()
+                        _ = rl.GuiButton(clip_next_bounds, ">")
+                        rl.GuiEnable()
+                    }
+                    if clip_changed {
+                        playback.dropdown_open = false
+                        log.infof(
+                            "Selected animation clip %d",
+                            playback.active_index + 1,
+                        )
+                    }
 
                     lock_transport_controls := playback.dropdown_open && !rl.GuiIsLocked()
                     if lock_transport_controls {
                         rl.GuiLock()
                     }
 
-                    transport_y := bounds.y + 58
                     button_gap: f32 = 4
-                    reset_width: f32 = 44
-                    step_width: f32 = 40
-                    play_width := content_width - reset_width - step_width * 2 - button_gap * 3
+                    reset_width: f32 = 32
+                    step_width: f32 = 32
+                    play_width: f32 = 72
 
                     if shared.ui_gui_button(
                         &ui_keyboard,
                         .ANIMATION_FIRST,
-                        {content_x, transport_y, reset_width, 24},
+                        {transport_x, controls_y, reset_width, 24},
                         "|<",
                     ) {
                         shared.animation_playback_reset_to_first_frame(playback)
                     }
-                    previous_button_x := content_x + reset_width + button_gap
+                    previous_button_x := transport_x + reset_width + button_gap
                     if shared.ui_gui_button(
                         &ui_keyboard,
                         .ANIMATION_PREVIOUS,
-                        {previous_button_x, transport_y, step_width, 24},
+                        {previous_button_x, controls_y, step_width, 24},
                         "<",
                     ) {
                         _ = shared.animation_playback_step_frame(playback, -1)
                     }
 
                     play_button_x := previous_button_x + step_width + button_gap
-                    play_label: cstring = "Play [Space]"
+                    play_label: cstring = "Play"
                     if playback.is_playing {
-                        play_label = "Pause [Space]"
+                        play_label = "Pause"
                     }
                     if shared.ui_gui_button(
                         &ui_keyboard,
                         .ANIMATION_PLAY,
-                        {play_button_x, transport_y, play_width, 24},
+                        {play_button_x, controls_y, play_width, 24},
                         play_label,
                     ) {
                         playback.is_playing = !playback.is_playing
@@ -2435,52 +2583,26 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                     if shared.ui_gui_button(
                         &ui_keyboard,
                         .ANIMATION_NEXT,
-                        {next_button_x, transport_y, step_width, 24},
+                        {next_button_x, controls_y, step_width, 24},
                         ">",
                     ) {
                         _ = shared.animation_playback_step_frame(playback, 1)
                     }
 
-                    timeline_label_y := bounds.y + 88
                     display_frame := shared.animation_playback_pose_frame(playback, animation)
                     rl.GuiLabel(
-                        {content_x, timeline_label_y, content_width, 18},
+                        {frame_x, controls_y, frame_width, 24},
                         rl.TextFormat(
-                            "Frame %d / %d",
+                            "%d / %d",
                             c.int(math.round(display_frame)),
                             animation.keyframeCount - 1,
                         ),
                     )
-                    previous_frame := playback.current_frame
-                    _ = shared.ui_gui_slider_bar(
-                        &ui_keyboard,
-                        .ANIMATION_TIMELINE,
-                        {content_x, bounds.y + 108, content_width, 18},
-                        nil,
-                        nil,
-                        &playback.current_frame,
-                        0,
-                        last_frame,
-                        1,
-                        10,
-                    )
-                    if playback.current_frame != previous_frame {
-                        if playback.sampled_playback {
-                            playback.current_frame = shared.animation_playback_pose_frame(
-                                playback,
-                                animation,
-                            )
-                        }
-                        playback.is_playing = false
-                        playback.pose_dirty = true
-                    }
-
-                    options_y := bounds.y + 136
-                    rl.GuiLabel({content_x, options_y, 40, 18}, "Speed")
+                    rl.GuiLabel({speed_x, controls_y, 34, 24}, "Speed")
                     _ = shared.ui_gui_slider_bar(
                         &ui_keyboard,
                         .ANIMATION_SPEED,
-                        {content_x + 42, options_y, 105, 18},
+                        {speed_x + 36, controls_y + 3, 56, 18},
                         nil,
                         nil,
                         &playback.speed,
@@ -2490,34 +2612,33 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                         0.25,
                     )
                     rl.GuiLabel(
-                        {content_x + 152, options_y, 48, 18},
+                        {speed_x + 96, controls_y, 36, 24},
                         rl.TextFormat("%.2fx", playback.speed),
                     )
                     _ = shared.ui_gui_check_box(
                         &ui_keyboard,
                         .ANIMATION_LOOP,
-                        {content_x + 202, options_y + 1, 16, 16},
+                        {loop_x, controls_y + 4, 16, 16},
                         nil,
                         &playback.loop,
                     )
-                    rl.GuiLabel({content_x + 222, options_y, 36, 18}, "Loop")
+                    rl.GuiLabel({loop_x + 20, controls_y, 36, 24}, "Loop")
 
-                    sample_options_y := bounds.y + 162
                     previous_sampled_playback := playback.sampled_playback
                     _ = shared.ui_gui_check_box(
                         &ui_keyboard,
                         .ANIMATION_SAMPLED,
-                        {content_x, sample_options_y + 1, 16, 16},
+                        {sampled_x, controls_y + 4, 16, 16},
                         nil,
                         &playback.sampled_playback,
                     )
-                    rl.GuiLabel({content_x + 20, sample_options_y, 66, 18}, "Sampled")
-                    rl.GuiLabel({content_x + 91, sample_options_y, 42, 18}, "Count")
+                    rl.GuiLabel({sampled_x + 20, controls_y, 56, 24}, "Sampled")
+                    rl.GuiLabel({count_x, controls_y, 38, 24}, "Count")
                     previous_sample_count := playback.sample_count
                     _ = shared.ui_gui_spinner(
                         &ui_keyboard,
                         .ANIMATION_SAMPLE_COUNT,
-                        {content_x + 136, sample_options_y - 2, content_width - 136, 22},
+                        {count_x + 40, controls_y + 1, count_width - 40, 22},
                         nil,
                         &playback.sample_count,
                         1,
@@ -2542,55 +2663,120 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                         playback.pose_dirty = true
                     }
 
+                    timeline_bounds := rl.Rectangle{
+                        content_x,
+                        bounds.y + 44,
+                        content_width,
+                        18,
+                    }
+                    previous_frame := playback.current_frame
+                    _ = shared.ui_gui_slider_bar(
+                        &ui_keyboard,
+                        .ANIMATION_TIMELINE,
+                        timeline_bounds,
+                        nil,
+                        nil,
+                        &playback.current_frame,
+                        0,
+                        last_frame,
+                        1,
+                        10,
+                    )
+                    if playback.current_frame != previous_frame {
+                        if playback.sampled_playback {
+                            playback.current_frame = shared.animation_playback_pose_frame(
+                                playback,
+                                animation,
+                            )
+                        }
+                        playback.is_playing = false
+                        playback.pose_dirty = true
+                    }
+                    rl.GuiLabel(
+                        {content_x, bounds.y + 66, 48, 18},
+                        "0",
+                    )
+                    end_frame_label := rl.TextFormat(
+                        "%d",
+                        animation.keyframeCount - 1,
+                    )
+                    end_frame_label_width := f32(rl.MeasureText(end_frame_label, 10))
+                    rl.GuiLabel(
+                        {
+                            content_x + content_width - end_frame_label_width,
+                            bounds.y + 66,
+                            end_frame_label_width,
+                            18,
+                        },
+                        end_frame_label,
+                    )
+
                     if lock_transport_controls {
                         rl.GuiUnlock()
                     }
 
-                    if len(playback.valid_indices) == 1 {
-                        rl.GuiLabel(clip_bounds, playback.clip_options)
-                    } else {
-                        previous_active_index := playback.active_index
-                        // Run the focus-aware dropdown inline in its sole clip selector.
-                        clip_focused := shared.ui_control_register(
-                            &ui_keyboard,
-                            .ANIMATION_CLIP,
-                            clip_bounds,
+                    if playback.dropdown_open && clip_item_count > 0 {
+                        popup_height := f32(clip_item_count) *
+                            ANIMATION_CLIP_POPUP_ROW_HEIGHT + 4
+                        popup_bounds := rl.Rectangle{
+                            clip_group_bounds.x,
+                            bounds.y - popup_height - 4,
+                            clip_region_width,
+                            popup_height,
+                        }
+                        candidate_active_index := playback.active_index
+                        _ = rl.GuiListViewEx(
+                            popup_bounds,
+                            raw_data(playback.clip_labels[:]),
+                            clip_item_count,
+                            &playback.dropdown_scroll_index,
+                            &candidate_active_index,
+                            &playback.dropdown_focus_index,
                         )
-                        clip_toggled := rl.GuiDropdownBox(
-                            clip_bounds,
-                            playback.clip_options,
-                            &playback.active_index,
-                            playback.dropdown_open,
-                        )
-                        if clip_focused && playback.dropdown_open &&
-                           !shared.ui_primary_modifier_is_down() &&
+                        playback.dropdown_scroll_index = 0
+                        if clip_focused && !shared.ui_primary_modifier_is_down() &&
                            !(rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)) {
                             _ = shared.ui_int_adjust(
-                                &playback.active_index,
+                                &candidate_active_index,
                                 0,
-                                max(c.int(len(playback.valid_indices)) - 1, 0),
+                                clip_item_count - 1,
                                 1,
                                 1,
                             )
                         }
-                        if clip_focused && shared.ui_activation_is_pressed() {
-                            clip_toggled = true
-                        }
-                        shared.ui_focus_draw(clip_bounds, clip_focused)
-                        if clip_toggled {
-                            playback.dropdown_open = !playback.dropdown_open
-                            if playback.dropdown_open {
-                                shared.ui_keyboard_focus_set(&ui_keyboard, .ANIMATION_CLIP)
-                            }
-                        }
-                        if playback.active_index != previous_active_index {
-                            playback.current_frame = 0
-                            playback.pose_dirty = true
+                        if shared.animation_playback_select_clip(
+                            playback,
+                            candidate_active_index,
+                        ) {
                             log.infof(
                                 "Selected animation clip %d",
                                 playback.active_index + 1,
                             )
                         }
+
+                        popup_clicked := !rl.GuiIsLocked() &&
+                            rl.CheckCollisionPointRec(rl.GetMousePosition(), popup_bounds) &&
+                            rl.IsMouseButtonReleased(.LEFT) &&
+                            playback.dropdown_focus_index >= 0
+                        keyboard_confirmed := !clip_opened_this_frame && clip_focused &&
+                            shared.ui_activation_is_pressed()
+                        clicked_outside := !rl.GuiIsLocked() &&
+                            rl.IsMouseButtonReleased(.LEFT) &&
+                            !rl.CheckCollisionPointRec(rl.GetMousePosition(), popup_bounds) &&
+                            !rl.CheckCollisionPointRec(rl.GetMousePosition(), clip_group_bounds)
+                        if popup_clicked || keyboard_confirmed || clicked_outside {
+                            playback.dropdown_open = false
+                            shared.ui_keyboard_focus_set(
+                                &ui_keyboard,
+                                .ANIMATION_CLIP,
+                            )
+                        }
+                    }
+                    if playback.active_index >= clip_item_count {
+                        playback.active_index = max(clip_item_count - 1, c.int(0))
+                        playback.current_frame = 0
+                        playback.is_playing = false
+                        playback.pose_dirty = true
                     }
                     break
                 }
