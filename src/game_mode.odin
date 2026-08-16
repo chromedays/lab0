@@ -3025,7 +3025,8 @@ run_game_mode :: proc(arguments: []string) -> int {
         return 2
     }
     capture := &capture_result.options
-    if len(capture.video_output) > 0 || capture.video_frame_count > 0 {
+    if len(capture.video_output) > 0 || capture.video_frame_count > 0 ||
+       capture.render_debug_video {
         log.error("Viewer video options are available only in Viewer mode")
         return 2
     }

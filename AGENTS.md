@@ -120,6 +120,13 @@ the regression truth. The default runner uses distinct source range 0:119
 streamed frames at 60 fps, without wrapping to frame zero. Inspect and link all
 three report artifacts by absolute local path.
 
+Use `scripts/test-viewer.sh --render-pass-debug --video-report
+artifacts/<unique-report-name>` when the F2 render-pass debugger itself must be
+visible in the MP4. This keeps the normal composite capture contract unchanged,
+renders the debugger through a dedicated 1280×720 RenderTexture, and auto-cycles
+Scene Color, Cel Bands, Raw Downsample, Coverage, Outlined, and Composite in six
+equal 50-frame segments.
+
 ## Capture targets and expected dimensions
 
 | Target | Expected output |

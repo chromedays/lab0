@@ -13,6 +13,7 @@ VIEWER_VIDEO_FRAMES_PER_SECOND :: 60
 Viewer_Video_Options_Error :: enum {
     NONE,
     DURATION_WITHOUT_OUTPUT,
+    DEBUG_WITHOUT_OUTPUT,
     INVALID_OUTPUT,
     MISSING_FRAME_RANGE,
     INVALID_TARGET,
@@ -25,6 +26,9 @@ validate_viewer_video_options :: proc(
     if len(capture.video_output) == 0 {
         if capture.video_frame_count > 0 {
             return .DURATION_WITHOUT_OUTPUT
+        }
+        if capture.render_debug_video {
+            return .DEBUG_WITHOUT_OUTPUT
         }
         return .NONE
     }
@@ -51,6 +55,8 @@ viewer_video_options_error_message :: proc(
         return "no error"
     case .DURATION_WITHOUT_OUTPUT:
         return "--viewer-video-duration requires --viewer-video-output"
+    case .DEBUG_WITHOUT_OUTPUT:
+        return "--viewer-debug-video requires --viewer-video-output"
     case .INVALID_OUTPUT:
         return "--viewer-video-output requires a non-empty .mp4 path"
     case .MISSING_FRAME_RANGE:

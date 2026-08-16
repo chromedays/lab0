@@ -146,6 +146,7 @@ validate_scene_capture_options :: proc(
        len(capture.style_path) > 0 ||
        len(capture.video_output) > 0 ||
        capture.video_frame_count > 0 ||
+       capture.render_debug_video ||
         shared.cli_argument_is_present(arguments, "--capture-edge-aa") {
         return false
     }

@@ -49,6 +49,12 @@ viewer_video_options_reject_invalid_and_conflicting_requests :: proc(t: ^testing
         validate_viewer_video_options(&duration_only),
         Viewer_Video_Options_Error.DURATION_WITHOUT_OUTPUT,
     )
+    debug_only := Capture_Options{render_debug_video = true}
+    testing.expect_value(
+        t,
+        validate_viewer_video_options(&debug_only),
+        Viewer_Video_Options_Error.DEBUG_WITHOUT_OUTPUT,
+    )
     testing.expect_value(
         t,
         validate_viewer_video_options(&capture),
@@ -88,6 +94,7 @@ capture_parser_accepts_viewer_video_output :: proc(t: ^testing.T) {
         "--capture-frame-range", "0:119",
         "--viewer-video-output", "artifacts/report/viewer-test.mp4",
         "--viewer-video-duration", "5",
+        "--viewer-debug-video",
     })
     defer capture_options_destroy(&result.options)
 
@@ -98,6 +105,7 @@ capture_parser_accepts_viewer_video_output :: proc(t: ^testing.T) {
         "artifacts/report/viewer-test.mp4",
     )
     testing.expect_value(t, result.options.output_path, "")
+    testing.expect(t, result.options.render_debug_video)
     testing.expect_value(
         t,
         viewer_video_expected_frame_count(&result.options),

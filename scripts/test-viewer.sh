@@ -1,8 +1,9 @@
 #!/bin/sh
 
 # Run from the repository root. The report path streams the deterministic
-# Viewer animation range directly from the composite RenderTexture to FFmpeg;
-# it never materializes a PNG sequence.
+# Viewer animation range directly from a RenderTexture to FFmpeg. The optional
+# render-pass report records the F2 debugger from its dedicated GPU target;
+# neither path materializes a PNG sequence.
 set -eu
 
 model_path="assets/CesiumMan.glb"
@@ -18,6 +19,7 @@ if [ ! -f src/main.odin ] || [ ! -f "$model_path" ] || [ ! -f "$style_path" ]; t
 fi
 
 video_report=false
+render_pass_debug=false
 report_dir=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -31,8 +33,12 @@ while [ "$#" -gt 0 ]; do
                 esac
             fi
             ;;
+        --render-pass-debug)
+            render_pass_debug=true
+            shift
+            ;;
         *)
-            echo "usage: scripts/test-viewer.sh [--video-report [output-directory]]" >&2
+            echo "usage: scripts/test-viewer.sh [--render-pass-debug] [--video-report [output-directory]]" >&2
             exit 2
             ;;
     esac
@@ -127,6 +133,10 @@ if [ "$video_report" = true ]; then
     mkdir -p "$report_dir"
 
     echo "[video 1/3] Stream the deterministic Viewer pose range to FFmpeg"
+    render_debug_argument=""
+    if [ "$render_pass_debug" = true ]; then
+        render_debug_argument="--viewer-debug-video"
+    fi
     if "$binary" \
         --mode viewer \
         --capture-case viewer-video-report \
@@ -138,7 +148,8 @@ if [ "$video_report" = true ]; then
         --capture-edge-aa coverage \
         --capture-target composite \
         --viewer-video-output "$video_path" \
-        --viewer-video-duration "$video_duration_seconds" >"$recording_log" 2>&1; then
+        --viewer-video-duration "$video_duration_seconds" \
+        ${render_debug_argument:+"$render_debug_argument"} >"$recording_log" 2>&1; then
         :
     else
         sed -n '1,240p' "$recording_log" >&2
@@ -157,7 +168,7 @@ if [ "$video_report" = true ]; then
         echo "error: streaming video report left an incomplete MP4" >&2
         exit 1
     fi
-    streamed_frame_count=$(rg -o "Streamed [0-9]+ animation frames" "$recording_log" | tail -n 1 | rg -o '[0-9]+' || true)
+    streamed_frame_count=$(rg -o "across [0-9]+ output frames" "$recording_log" | tail -n 1 | rg -o '[0-9]+' || true)
     case "$streamed_frame_count" in
         ''|*[!0-9]*) echo "error: recording log has no streamed animation frame count" >&2; exit 1 ;;
     esac
@@ -167,6 +178,11 @@ if [ "$video_report" = true ]; then
     fi
     if ! rg -q "Streamed Viewer source frames 0.000 through 119.000 exactly once across 300 output frames" "$recording_log"; then
         echo "error: recording did not confirm one-pass 0:119 source progression" >&2
+        exit 1
+    fi
+    if [ "$render_pass_debug" = true ] &&
+       ! rg -q "Streamed Viewer render-pass debugger across 6 passes and 300 output frames" "$recording_log"; then
+        echo "error: recording did not confirm the six-pass debugger progression" >&2
         exit 1
     fi
 
@@ -202,19 +218,35 @@ if [ "$video_report" = true ]; then
     fi
 
     echo "[video 2/3] Build visual summary"
-    sample_1=$((frame_count / 3))
-    sample_2=$((frame_count * 2 / 3))
-    sample_3=$((frame_count - 1))
-    ffmpeg -hide_banner -loglevel error -y \
-        -i "$video_path" \
-        -vf "select='eq(n,0)+eq(n,${sample_1})+eq(n,${sample_2})+eq(n,${sample_3})',scale=360:-1,tile=4x1:padding=4:margin=4:color=202020" \
-        -frames:v 1 \
-        "$contact_sheet"
+    if [ "$render_pass_debug" = true ]; then
+        ffmpeg -hide_banner -loglevel error -y \
+            -i "$video_path" \
+            -vf "select='eq(n,25)+eq(n,75)+eq(n,125)+eq(n,175)+eq(n,225)+eq(n,275)',scale=400:-1,tile=3x2:padding=4:margin=4:color=202020" \
+            -frames:v 1 \
+            "$contact_sheet"
+    else
+        sample_1=$((frame_count / 3))
+        sample_2=$((frame_count * 2 / 3))
+        sample_3=$((frame_count - 1))
+        ffmpeg -hide_banner -loglevel error -y \
+            -i "$video_path" \
+            -vf "select='eq(n,0)+eq(n,${sample_1})+eq(n,${sample_2})+eq(n,${sample_3})',scale=360:-1,tile=4x1:padding=4:margin=4:color=202020" \
+            -frames:v 1 \
+            "$contact_sheet"
+    fi
 
     video_sha_line=$(shasum -a 256 "$video_path")
     video_sha=${video_sha_line%% *}
     test_summary=$(rg "Finished [0-9]+ tests" "$unit_log" | tail -n 1)
     generated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    report_title="Lab0 automated Viewer-test report"
+    debugger_summary="disabled; normal composite video"
+    contact_sheet_alt="Animation contact sheet"
+    if [ "$render_pass_debug" = true ]; then
+        report_title="Lab0 Viewer render-pass debugger report"
+        debugger_summary="enabled; six passes auto-cycled in 50-frame segments"
+        contact_sheet_alt="Render-pass debugger contact sheet"
+    fi
 
     cp "$unit_log" "${report_dir}/odin-test.log"
     cp "$log_a" "${report_dir}/determinism-a.log"
@@ -222,7 +254,7 @@ if [ "$video_report" = true ]; then
     cp "$capture_a" "${report_dir}/animation-frame-${determinism_frame}.png"
 
     {
-        printf '# Lab0 automated Viewer-test report\n\n'
+        printf '# %s\n\n' "$report_title"
         printf -- '- Result: **PASS**\n'
         printf -- '- Generated: `%s`\n' "$generated_at"
         printf -- '- Unit suite: `%s`\n' "$test_summary"
@@ -231,6 +263,7 @@ if [ "$video_report" = true ]; then
         printf -- '- Animation frame range: `%s` (inclusive)\n' "$frame_range"
         printf -- '- Animation range playback: `retimed once to %s seconds; no loop`\n' "$video_duration_seconds"
         printf -- '- Edge AA: `coverage`\n'
+        printf -- '- Render-pass debugger: `%s`\n' "$debugger_summary"
         printf -- '- Video encoding: `raw RGBA streamed through FFmpeg stdin`\n'
         printf -- '- Video: `%s` H.264, `%s seconds`, `%s frames at 60 fps`\n' "$video_dimensions" "$video_duration" "$frame_count"
         printf -- '- MP4 SHA-256: `%s`\n' "$video_sha"
@@ -238,7 +271,7 @@ if [ "$video_report" = true ]; then
         printf -- '- Intermediate PNG sequence: **not created**\n'
         printf -- '- Asset image warnings: **none**\n\n'
         printf '[Open MP4](./viewer-test.mp4)\n\n'
-        printf '![Animation contact sheet](./contact-sheet.png)\n\n'
+        printf '![%s](./contact-sheet.png)\n\n' "$contact_sheet_alt"
         printf 'Detailed logs: [Odin tests](./odin-test.log), [recording](./recording.log), [capture A](./determinism-a.log), [capture B](./determinism-b.log).\n'
     } >"$report_path"
 

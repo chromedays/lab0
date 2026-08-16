@@ -106,6 +106,8 @@ UI_MOD_SHIFT :: shared.UI_MOD_SHIFT
 UI_SHORTCUT_BINDINGS := shared.UI_SHORTCUT_BINDINGS
 UI_Shortcut_Binding :: shared.UI_Shortcut_Binding
 Viewer_Video_Options_Error :: app.Viewer_Video_Options_Error
+Viewer_Render_Debug_Pass :: app.Viewer_Render_Debug_Pass
+Viewer_Render_Debug_State :: app.Viewer_Render_Debug_State
 add_cel_band_after :: app.add_cel_band_after
 cel_ramp_pixels_build :: shared.cel_ramp_pixels_build
 camera_input_permissions :: app.camera_input_permissions
@@ -208,6 +210,13 @@ validate_scene_capture_options :: app.validate_scene_capture_options
 validate_scene_video_options :: app.validate_scene_video_options
 validate_viewer_video_options :: app.validate_viewer_video_options
 viewer_mode_requested :: app.viewer_mode_requested
+viewer_render_debug_close :: app.viewer_render_debug_close
+viewer_render_debug_cycle_pass :: app.viewer_render_debug_cycle_pass
+viewer_render_debug_freeze_toggle :: app.viewer_render_debug_freeze_toggle
+viewer_render_debug_preview_bounds :: app.viewer_render_debug_preview_bounds
+viewer_render_debug_preview_pixel :: app.viewer_render_debug_preview_pixel
+viewer_render_debug_state_make :: app.viewer_render_debug_state_make
+viewer_render_debug_video_pass :: app.viewer_render_debug_video_pass
 video_stream_ffmpeg_command_build :: shared.video_stream_ffmpeg_command_build
 video_stream_frame_byte_count :: shared.video_stream_frame_byte_count
 video_stream_temporary_output_path :: shared.video_stream_temporary_output_path

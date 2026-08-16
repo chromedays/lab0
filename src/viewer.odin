@@ -440,6 +440,7 @@ App_UI_Command_Context :: struct {
     keyboard:                ^shared.UI_Keyboard_State,
     quit_requested:          ^bool,
     shortcuts_help_open:     ^bool,
+    render_debug:            ^Viewer_Render_Debug_State,
     export_requested:        ^bool,
     lens_mode:               ^shared.Lens_Mode,
     lens_grid_visible:       ^bool,
@@ -471,6 +472,22 @@ execute_ui_command :: proc(
         if command_context.shortcuts_help_open^ {
             shared.ui_keyboard_focus_set(command_context.keyboard, .HELP_CLOSE)
         } else {
+            shared.ui_keyboard_focus_clear(command_context.keyboard)
+        }
+    case .TOGGLE_RENDER_DEBUG:
+        if command_context.render_debug.open {
+            viewer_render_debug_close(
+                command_context.render_debug,
+                command_context.animation,
+            )
+        } else {
+            command_context.render_debug.open = true
+            command_context.render_debug.sample_valid = false
+            command_context.shortcuts_help_open^ = false
+            command_context.background_picker_open^ = false
+            command_context.animation.dropdown_open = false
+            command_context.model_browser.search_editing = false
+            command_context.cel_ui.color_target = .NONE
             shared.ui_keyboard_focus_clear(command_context.keyboard)
         }
     case .QUIT:
@@ -916,6 +933,22 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             break application_scope
         }
 
+        render_debug_shader_load := shared.shader_fragment_load_with_includes(
+            VIEWER_DEBUG_FS_PATH,
+        )
+        render_debug_shader := render_debug_shader_load.shader
+        render_debug_shader_source := render_debug_shader_load.source
+        defer rl.UnloadShader(render_debug_shader)
+        defer shared.shader_preprocessed_source_destroy(&render_debug_shader_source)
+        if render_debug_shader_load.error != .NONE {
+            log.errorf(
+                "Failed to load Viewer render-debug shader: %s",
+                shared.shader_load_error_message(render_debug_shader_load.error),
+            )
+            exit_code = 1
+            break application_scope
+        }
+
         // Build the ramp texture inline at its only creation site.
         cel_ramp_pixels := shared.cel_ramp_pixels_build(&cel_style)
         cel_ramp_image := rl.Image{
@@ -1162,6 +1195,24 @@ run_viewer_mode :: proc(arguments: []string) -> int {
         composite_render_target := rl.LoadRenderTexture(screen_width, screen_height)
         defer rl.UnloadRenderTexture(composite_render_target)
         rl.SetTextureFilter(composite_render_target.texture, .POINT)
+        render_debug_video_target: rl.RenderTexture2D
+        defer {
+            if rl.IsRenderTextureValid(render_debug_video_target) {
+                rl.UnloadRenderTexture(render_debug_video_target)
+            }
+        }
+        if capture_options.render_debug_video {
+            render_debug_video_target = rl.LoadRenderTexture(
+                VIEWER_VIDEO_WIDTH,
+                VIEWER_VIDEO_HEIGHT,
+            )
+            if !rl.IsRenderTextureValid(render_debug_video_target) {
+                log.error("Failed to create Viewer render-debug video target")
+                exit_code = 1
+                break application_scope
+            }
+            rl.SetTextureFilter(render_debug_video_target.texture, .POINT)
+        }
         if viewer_video_enabled {
             video_start_error := shared.video_stream_encoder_start(
                 &viewer_video_encoder,
@@ -1250,6 +1301,10 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             outline_shader,
             "u_edge_aa_mode",
         )
+        render_debug_display_mode_location := rl.GetShaderLocation(
+            render_debug_shader,
+            "u_display_mode",
+        )
 
         lens_mode := shared.Lens_Mode.PIXELATED
         edge_aa_mode := shared.Edge_AA_Mode.HARD
@@ -1307,6 +1362,9 @@ run_viewer_mode :: proc(arguments: []string) -> int {
         lens_resize_dragging := false
         quit_requested := false
         shortcuts_help_open := false
+        render_debug := viewer_render_debug_state_make()
+        render_debug_video := viewer_render_debug_state_make()
+        render_debug_video.open = capture_options.render_debug_video
 
         for !rl.WindowShouldClose() && !capture_complete && !quit_requested {
             frame_delta_seconds := rl.GetFrameTime()
@@ -1396,7 +1454,8 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             }
 
             export_requested := false
-            active_modal := shortcuts_help_open || background_picker_open ||
+            active_modal := render_debug.open || shortcuts_help_open ||
+                            background_picker_open ||
                             animation_playback.dropdown_open ||
                             model_browser.search_editing ||
                             cel_style_ui.color_target != .NONE
@@ -1405,7 +1464,9 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                 window_focused,
                 active_modal,
             )
-            if shortcuts_help_open {
+            if render_debug.open {
+                shared.ui_keyboard_focus_clear(&ui_keyboard)
+            } else if shortcuts_help_open {
                 shared.ui_keyboard_focus_set(&ui_keyboard, .HELP_CLOSE)
             } else if model_browser.search_editing {
                 shared.ui_keyboard_focus_set(&ui_keyboard, .MODEL_SEARCH)
@@ -1424,7 +1485,9 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             }
 
             if window_focused && rl.IsKeyPressed(.ESCAPE) {
-                if shortcuts_help_open {
+                if render_debug.open {
+                    viewer_render_debug_close(&render_debug, &animation_playback)
+                } else if shortcuts_help_open {
                     shortcuts_help_open = false
                     shared.ui_keyboard_focus_clear(&ui_keyboard)
                 } else if animation_playback.dropdown_open {
@@ -1486,7 +1549,12 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             if shared.ui_keyboard_has_focus(&ui_keyboard) && shortcut_conflicts_with_focus {
                 shortcut_command = .NONE
             }
-            if active_modal && shortcut_command != .TOGGLE_HELP &&
+            if render_debug.open &&
+               shortcut_command != .TOGGLE_RENDER_DEBUG &&
+               shortcut_command != .QUIT {
+                shortcut_command = .NONE
+            } else if active_modal && shortcut_command != .TOGGLE_HELP &&
+               shortcut_command != .TOGGLE_RENDER_DEBUG &&
                shortcut_command != .QUIT {
                 shortcut_command = .NONE
             }
@@ -1499,6 +1567,7 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                 keyboard = &ui_keyboard,
                 quit_requested = &quit_requested,
                 shortcuts_help_open = &shortcuts_help_open,
+                render_debug = &render_debug,
                 export_requested = &export_requested,
                 lens_mode = &lens_mode,
                 lens_grid_visible = &lens_grid_visible,
@@ -1539,6 +1608,7 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             )
             lens_resize_hit_bounds := lens_resize_handle_bounds(lens_bounds)
             mouse_over_lens_resize_handle := !capture_options.enabled &&
+                !render_debug.open &&
                 rl.CheckCollisionPointRec(
                     ui_mouse_position,
                     lens_resize_hit_bounds,
@@ -1568,7 +1638,8 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                              mouse_over_animation_timeline ||
                              mouse_over_lens_resize_handle ||
                              mouse_over_lens_controls
-            ui_captures_camera_input := shortcuts_help_open ||
+            ui_captures_camera_input := render_debug.open ||
+                                        shortcuts_help_open ||
                                         background_picker_open ||
                                         animation_playback.dropdown_open ||
                                         model_browser.search_editing ||
@@ -1981,6 +2052,23 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                         "u_edge_aa_mode",
                     )
                 }
+
+                render_debug_reload := shared.shader_fragment_reload_with_includes(
+                    VIEWER_DEBUG_FS_PATH,
+                    &render_debug_shader,
+                    &render_debug_shader_source,
+                )
+                if render_debug_reload.status == .FAILED {
+                    log.errorf(
+                        "Failed to reload Viewer render-debug shader: %s",
+                        shared.shader_load_error_message(render_debug_reload.error),
+                    )
+                } else if render_debug_reload.status == .RELOADED {
+                    render_debug_display_mode_location = rl.GetShaderLocation(
+                        render_debug_shader,
+                        "u_display_mode",
+                    )
+                }
             }
 
             if cel_style.revision != applied_cel_ramp_revision {
@@ -2231,7 +2319,8 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             rl.EndTextureMode()
 
             rl.BeginTextureMode(composite_render_target)
-                composite_locks_gui := camera_drag_for_frame != .NONE ||
+                composite_locks_gui := render_debug.open ||
+                                       camera_drag_for_frame != .NONE ||
                                        lens_resize_for_frame ||
                                        shortcuts_help_open
                 if composite_locks_gui {
@@ -4406,6 +4495,48 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                 shared.ui_keyboard_end_frame(&ui_keyboard)
             rl.EndTextureMode()
 
+            if viewer_video_enabled && capture_options.render_debug_video {
+                expected_video_frames := viewer_video_expected_frame_count(
+                    capture_options,
+                )
+                debug_pass := viewer_render_debug_video_pass(
+                    u64(captured_sequence_frames),
+                    expected_video_frames,
+                )
+                render_debug_frame := Viewer_Render_Debug_Frame{
+                    scene_color = scene_render_target.texture,
+                    cel_bands = cel_band_render_target.texture,
+                    raw_downsample = downsample_render_target.texture,
+                    coverage = coverage_mask_render_target.texture,
+                    outlined = outlined_render_target.texture,
+                    composite = composite_render_target.texture,
+                }
+                if render_debug_video.selected != debug_pass ||
+                   !render_debug_video.sample_valid {
+                    render_debug_video.selected = debug_pass
+                    debug_texture, _ := viewer_render_debug_pass_texture(
+                        &render_debug_frame,
+                        debug_pass,
+                    )
+                    viewer_render_debug_sample(
+                        &render_debug_video,
+                        debug_texture,
+                        debug_texture.width / 2,
+                        debug_texture.height / 2,
+                    )
+                }
+                rl.BeginTextureMode(render_debug_video_target)
+                    viewer_render_debug_draw(
+                        &render_debug_video,
+                        &render_debug_frame,
+                        render_debug_shader,
+                        render_debug_display_mode_location,
+                        &animation_playback,
+                        false,
+                    )
+                rl.EndTextureMode()
+            }
+
             if export_requested {
                 if len(last_export_path) > 0 {
                     delete(last_export_path)
@@ -4505,14 +4636,33 @@ run_viewer_mode :: proc(arguments: []string) -> int {
 
             rl.BeginDrawing()
                 rl.ClearBackground(scene_background_color)
-                rl.DrawTexturePro(
-                    composite_render_target.texture,
-                    flipped_scene_source_bounds,
-                    {0, 0, f32(screen_width), f32(screen_height)},
-                    {},
-                    0,
-                    rl.WHITE,
-                )
+                if render_debug.open && !capture_options.enabled {
+                    render_debug_frame := Viewer_Render_Debug_Frame{
+                        scene_color = scene_render_target.texture,
+                        cel_bands = cel_band_render_target.texture,
+                        raw_downsample = downsample_render_target.texture,
+                        coverage = coverage_mask_render_target.texture,
+                        outlined = outlined_render_target.texture,
+                        composite = composite_render_target.texture,
+                    }
+                    viewer_render_debug_draw(
+                        &render_debug,
+                        &render_debug_frame,
+                        render_debug_shader,
+                        render_debug_display_mode_location,
+                        &animation_playback,
+                        true,
+                    )
+                } else {
+                    rl.DrawTexturePro(
+                        composite_render_target.texture,
+                        flipped_scene_source_bounds,
+                        {0, 0, f32(screen_width), f32(screen_height)},
+                        {},
+                        0,
+                        rl.WHITE,
+                    )
+                }
                 // Draw the cursor magnifier inline at its only screen pass.
                 // {
                 //     bounds := magnifier_bounds
@@ -4609,9 +4759,13 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                 rendered_capture_frames += 1
                 if rendered_capture_frames >= capture_options.warmup_frames {
                     if viewer_video_enabled {
+                        video_texture := composite_render_target.texture
+                        if capture_options.render_debug_video {
+                            video_texture = render_debug_video_target.texture
+                        }
                         frame_stream_error := shared.video_stream_encoder_write_render_texture(
                             &viewer_video_encoder,
-                            composite_render_target.texture,
+                            video_texture,
                         )
                         if frame_stream_error != .NONE {
                             log.errorf(
@@ -4655,6 +4809,13 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                                         ),
                                         int(expected_video_frames),
                                     )
+                                    if capture_options.render_debug_video {
+                                        log.infof(
+                                            "Streamed Viewer render-pass debugger across %d passes and %d output frames",
+                                            len(VIEWER_RENDER_DEBUG_PASSES),
+                                            int(expected_video_frames),
+                                        )
+                                    }
                                 }
                             } else {
                                 animation_playback.current_frame =

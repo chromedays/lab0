@@ -147,6 +147,7 @@ Capture_Options :: struct {
     style_path:          string,
     video_output:        string,
     video_frame_count:   u64,
+    render_debug_video:  bool,
     lens_mode:           Lens_Mode,
     edge_aa_mode:        Edge_AA_Mode,
     view:                Capture_View,
@@ -224,13 +225,18 @@ capture_options_parse :: proc(arguments: []string) -> Capture_Parse_Result {
         }
         if !strings.has_prefix(argument, "--capture-") &&
            argument != "--viewer-video-output" &&
-           argument != "--viewer-video-duration" {
+           argument != "--viewer-video-duration" &&
+           argument != "--viewer-debug-video" {
             continue
         }
 
         capture_argument_seen = true
         if argument == "--capture-show-window" {
             result.options.hide_window = false
+            continue
+        }
+        if argument == "--viewer-debug-video" {
+            result.options.render_debug_video = true
             continue
         }
 
@@ -579,6 +585,7 @@ cli_capture_usage_print :: proc() {
     fmt.println("  --capture-style <path.json>    Cel style preset (default: built-in Classic)")
     fmt.println("  --viewer-video-output <mp4>    Stream a Viewer frame range through FFmpeg")
     fmt.println("  --viewer-video-duration <sec>  Retime the range once to an exact duration")
+    fmt.println("  --viewer-debug-video           Auto-cycle the F2 pass debugger in the MP4")
     fmt.println("  --capture-view <view>          default|x|y|z|isometric")
     fmt.println("  --capture-mode <mode>          pixelated|blended|coverage-mask")
     fmt.println("  --capture-edge-aa <mode>       hard|coverage (default: hard)")

@@ -33,7 +33,8 @@ not require a matching `--mode` argument.
 
 ### Keyboard shortcuts
 
-Press `F1` or `?` for the complete in-app shortcut reference. `Tab` and
+Press `F1` or `?` for the complete in-app shortcut reference. Press `F2` to
+open the render-pass debugger. `Tab` and
 `Shift+Tab` move keyboard focus through every visible interactive control;
 focused buttons and checkboxes use `Enter`/`Space`, while sliders, spinners,
 combos, lists, and color channels use the arrow keys. Hold `Shift` for coarse
@@ -44,6 +45,7 @@ Global accelerators include:
 
 | Area | Shortcuts |
 | --- | --- |
+| Render debugging | `F2` open/close; `Left/Right` select pass; `Space` freeze/resume |
 | Model and inspector | `Cmd/Ctrl+F` search; `Cmd/Ctrl+1..4` toggle inspector sections; `PageUp/PageDown` scroll |
 | Lens and camera | `1/2/3` lens modes; `G` grid; `P` export; `X/Y/Z/I` views; `-`/`=` downscale |
 | Animation | `Space` play/pause; `Home` first frame; `,/.` step; `[/]` clip; `L` loop; `K` sampled playback |
@@ -53,6 +55,19 @@ Global accelerators include:
 Live shortcuts are disabled in non-interactive capture mode. Modified commands
 are consumed before camera input, so combinations such as `Cmd/Ctrl+S` never
 leak into WASD camera movement.
+
+The render-pass debugger presents **Scene Color**, **Cel Bands**, **Raw
+Downsample**, **Coverage**, **Outlined**, and **Composite** without changing the
+underlying pass graph. Cel metadata is decoded into a stable color palette,
+coverage is shown as an opaque grayscale mask, and transparent RGBA targets are
+shown over a checkerboard. Low-resolution targets can display their logical
+pixel grid. Hover for logical coordinates, or right-click a pixel to retain its
+raw RGBA and decoded band, accent, or coverage value. **Freeze** pauses the
+current animation pose and restores its previous playback state when resumed or
+when the debugger closes. The debugger is drawn only to the interactive window
+during normal use, so it is excluded from deterministic PNG and normal Viewer
+video captures. The explicit `--viewer-debug-video` report mode renders the
+same debugger into a dedicated GPU target for remote review.
 
 The toolbar attached to the lens keeps all three display modes visible and
 clickable: **Pixelated**, **Blended**, and **Coverage**. Their `1`/`2`/`3`
@@ -506,6 +521,16 @@ checks, a contact sheet, and Markdown report, use a new output directory:
 scripts/test-viewer.sh --video-report artifacts/viewer-test-report-demo
 ```
 
+Add `--render-pass-debug` to record the F2 debugger itself. The five-second
+report divides its 300 frames into six equal segments, selects every pass once,
+and retains a deterministic center-pixel sample in the panel:
+
+```sh
+scripts/test-viewer.sh \
+  --render-pass-debug \
+  --video-report artifacts/viewer-render-pass-report-demo
+```
+
 Available options:
 
 ```text
@@ -515,6 +540,7 @@ Available options:
 --capture-style <path.json>    Cel style preset (default: built-in Classic)
 --viewer-video-output <mp4>    Stream a Viewer frame range through FFmpeg
 --viewer-video-duration <sec>  Retime the range once to an exact duration
+--viewer-debug-video           Auto-cycle the F2 pass debugger in the MP4
 --capture-view <view>          default|x|y|z|isometric
 --capture-mode <mode>          pixelated|blended|coverage-mask
 --capture-edge-aa <mode>       hard|coverage (default: hard)

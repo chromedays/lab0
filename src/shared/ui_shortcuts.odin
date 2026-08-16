@@ -19,6 +19,7 @@ UI_MAX_FOCUSABLE_CONTROLS :: 128
 UI_Command :: enum {
     NONE,
     TOGGLE_HELP,
+    TOGGLE_RENDER_DEBUG,
     QUIT,
     FOCUS_MODEL_SEARCH,
     TOGGLE_MODEL_SECTION,
@@ -70,6 +71,7 @@ UI_Shortcut_Binding :: struct {
 UI_SHORTCUT_BINDINGS :: [?]UI_Shortcut_Binding{
     {.TOGGLE_HELP,                 .F1,            0},
     {.TOGGLE_HELP,                 .SLASH,         UI_MOD_SHIFT},
+    {.TOGGLE_RENDER_DEBUG,         .F2,            0},
     {.QUIT,                        .Q,             UI_MOD_PRIMARY},
     {.FOCUS_MODEL_SEARCH,          .F,             UI_MOD_PRIMARY},
     {.TOGGLE_MODEL_SECTION,        .ONE,           UI_MOD_PRIMARY},
@@ -731,6 +733,7 @@ ui_shortcut_modifiers_match :: proc(
 UI_SHORTCUT_HELP_LEFT :: [?]cstring{
     "GENERAL",
     "F1 / ?       Shortcut help",
+    "F2           Render pass debugger",
     "Tab          Next control",
     "Shift+Tab    Previous control",
     "Esc          Close active editor",
