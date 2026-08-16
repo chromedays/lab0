@@ -39,6 +39,11 @@ MIN_DOWNSCALE_LEVEL     :: 1
 MAX_DOWNSCALE_LEVEL     :: 32
 LENS_WIDTH              :: 400
 LENS_HEIGHT             :: 400
+DEFAULT_LENS_SIZE       :: f32(400)
+MIN_LENS_SIZE           :: f32(320)
+LENS_RESIZE_HANDLE_SIZE :: f32(10)
+LENS_RESIZE_HIT_SIZE    :: f32(18)
+LENS_LAYOUT_GAP         :: f32(10)
 DEFAULT_COLOR_CLUSTER_THRESHOLD :: 0.10
 MODEL_SEARCH_TEXT_CAPACITY :: 128
 INSPECTOR_LENS_EXPANDED_HEIGHT :: f32(116)
@@ -69,8 +74,8 @@ lens_mode_replaces_scene :: proc(lens_mode: shared.Lens_Mode) -> bool {
     return lens_mode != .BLENDED
 }
 
-// shared.Lens_Mode selects how the low-resolution render is composited into the 400px
-// lens: nearest pixels, a 50/50 blend, or raw subpixel coverage visualization.
+// shared.Lens_Mode selects how the low-resolution render is composited into the
+// square lens: nearest pixels, a 50/50 blend, or raw subpixel coverage visualization.
 get_model_center :: proc(model: rl.Model) -> rl.Vector3 {
     model_bounds := rl.GetModelBoundingBox(model)
     return {
@@ -258,6 +263,106 @@ Camera_Mouse_Drag :: enum {
     NONE,
     ORBIT,
     PAN,
+}
+
+// centered_lens_bounds preserves the Viewer's established screen-centered lens
+// while allowing its one square dimension to change independently each frame.
+centered_lens_bounds :: proc(
+    screen_width, screen_height: c.int,
+    size: f32,
+) -> rl.Rectangle {
+    return {
+        (f32(screen_width) - size) * 0.5,
+        (f32(screen_height) - size) * 0.5,
+        size,
+        size,
+    }
+}
+
+// lens_layout_max_size keeps the centered lens handle clear of the inspector
+// and the animation timeline (when present). The caller supplies the bottom UI
+// boundary so non-animated models can use the additional vertical space.
+lens_layout_max_size :: proc(
+    screen_width, screen_height: c.int,
+    inspector_left, lower_ui_top: f32,
+) -> f32 {
+    center_x := f32(screen_width) * 0.5
+    center_y := f32(screen_height) * 0.5
+    horizontal_size := 2 * (inspector_left - LENS_LAYOUT_GAP - center_x)
+    vertical_size := 2 * (lower_ui_top - LENS_LAYOUT_GAP - center_y)
+    return max(min(horizontal_size, vertical_size), MIN_LENS_SIZE)
+}
+
+// lens_resize_handle_bounds returns the generous hit region centered on the
+// visible lower-right corner handle.
+lens_resize_handle_bounds :: proc(lens_bounds: rl.Rectangle) -> rl.Rectangle {
+    return {
+        lens_bounds.x + lens_bounds.width - LENS_RESIZE_HIT_SIZE * 0.5,
+        lens_bounds.y + lens_bounds.height - LENS_RESIZE_HIT_SIZE * 0.5,
+        LENS_RESIZE_HIT_SIZE,
+        LENS_RESIZE_HIT_SIZE,
+    }
+}
+
+// lens_control_bar_bounds attaches the mode bar above the lens and its footer
+// below it. A large lens moves the translucent footer just inside the crop
+// before it can overlap lower UI such as the animation timeline.
+lens_control_bar_bounds :: proc(
+    lens_bounds: rl.Rectangle,
+    lower_ui_top: f32,
+) -> (mode_bar, footer: rl.Rectangle) {
+    mode_bar = {
+        lens_bounds.x,
+        lens_bounds.y - LENS_CONTROL_BAR_HEIGHT - LENS_CONTROL_BAR_GAP,
+        lens_bounds.width,
+        LENS_CONTROL_BAR_HEIGHT,
+    }
+    footer = {
+        lens_bounds.x,
+        lens_bounds.y + lens_bounds.height + LENS_CONTROL_BAR_GAP,
+        lens_bounds.width,
+        LENS_CONTROL_BAR_HEIGHT,
+    }
+    if footer.y + footer.height > lower_ui_top - LENS_LAYOUT_GAP {
+        footer.y = lens_bounds.y + lens_bounds.height - footer.height -
+                   LENS_CONTROL_BAR_GAP
+    }
+    return
+}
+
+// lens_resize_size_for_pointer converts a corner position into a centered
+// square size. Snapping to the current downscale level avoids changing size by
+// fractions of a displayed low-resolution pixel.
+lens_resize_size_for_pointer :: proc(
+    pointer_x, pointer_y, center_x, center_y: f32,
+    minimum_size, maximum_size, snap_step: f32,
+) -> f32 {
+    requested_size := 2 * max(pointer_x - center_x, pointer_y - center_y)
+    result := clamp(requested_size, minimum_size, maximum_size)
+    if snap_step > 0 {
+        result = math.round(result / snap_step) * snap_step
+        result = clamp(result, minimum_size, maximum_size)
+    }
+    return result
+}
+
+// lens_resize_drag_for_frame gives a handle-originated left drag stable
+// ownership through its release frame, mirroring the camera drag contract.
+lens_resize_drag_for_frame :: proc(
+    previous_drag, window_focused, input_blocked, mouse_over_handle,
+    left_pressed, left_down: bool,
+) -> (frame_drag, next_drag: bool) {
+    if !window_focused {
+        return false, false
+    }
+
+    frame_drag = previous_drag
+    if !frame_drag && !input_blocked && mouse_over_handle && left_pressed {
+        frame_drag = true
+    }
+
+    next_drag = frame_drag && left_down
+    return
 }
 
 // camera_mouse_drag_for_frame chooses drag ownership on the press frame and
@@ -1198,6 +1303,8 @@ run_viewer_mode :: proc(arguments: []string) -> int {
         capture_sequence_frame := capture_options.frame_range_start
         captured_sequence_frames := 0
         camera_mouse_drag := Camera_Mouse_Drag.NONE
+        lens_size := DEFAULT_LENS_SIZE
+        lens_resize_dragging := false
         quit_requested := false
         shortcuts_help_open := false
 
@@ -1411,36 +1518,44 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             execute_ui_command(shortcut_command, &command_context)
 
             ui_mouse_position := rl.GetMousePosition()
+            lens_has_animation := shared.animation_playback_has_playable_animations(
+                &animation_playback,
+            )
+            lens_lower_ui_top := f32(screen_height)
+            if lens_has_animation {
+                lens_lower_ui_top = animation_timeline_bounds.y
+            }
+            lens_max_size := lens_layout_max_size(
+                screen_width,
+                screen_height,
+                inspector_bounds.x,
+                lens_lower_ui_top,
+            )
+            lens_size = clamp(lens_size, MIN_LENS_SIZE, lens_max_size)
+            lens_bounds := centered_lens_bounds(
+                screen_width,
+                screen_height,
+                lens_size,
+            )
+            lens_resize_hit_bounds := lens_resize_handle_bounds(lens_bounds)
+            mouse_over_lens_resize_handle := !capture_options.enabled &&
+                rl.CheckCollisionPointRec(
+                    ui_mouse_position,
+                    lens_resize_hit_bounds,
+                )
             mouse_over_inspector := rl.CheckCollisionPointRec(
                 ui_mouse_position,
                 inspector_bounds,
             )
             mouse_over_background_picker := background_picker_open &&
                 rl.CheckCollisionPointRec(ui_mouse_position, background_picker_bounds)
-            mouse_over_animation_timeline := shared.animation_playback_has_playable_animations(
-                &animation_playback,
-            ) && rl.CheckCollisionPointRec(
+            mouse_over_animation_timeline := lens_has_animation &&
+                rl.CheckCollisionPointRec(
                 ui_mouse_position,
                 animation_timeline_bounds,
             )
-            input_lens_bounds := rl.Rectangle{
-                (f32(screen_width) - LENS_WIDTH) / 2,
-                (f32(screen_height) - LENS_HEIGHT) / 2,
-                LENS_WIDTH,
-                LENS_HEIGHT,
-            }
-            input_lens_mode_bar_bounds := rl.Rectangle{
-                input_lens_bounds.x,
-                input_lens_bounds.y - LENS_CONTROL_BAR_HEIGHT - LENS_CONTROL_BAR_GAP,
-                input_lens_bounds.width,
-                LENS_CONTROL_BAR_HEIGHT,
-            }
-            input_lens_footer_bounds := rl.Rectangle{
-                input_lens_bounds.x,
-                input_lens_bounds.y + input_lens_bounds.height + LENS_CONTROL_BAR_GAP,
-                input_lens_bounds.width,
-                LENS_CONTROL_BAR_HEIGHT,
-            }
+            input_lens_mode_bar_bounds, input_lens_footer_bounds :=
+                lens_control_bar_bounds(lens_bounds, lens_lower_ui_top)
             mouse_over_lens_controls := rl.CheckCollisionPointRec(
                 ui_mouse_position,
                 input_lens_mode_bar_bounds,
@@ -1451,21 +1566,60 @@ run_viewer_mode :: proc(arguments: []string) -> int {
             mouse_over_ui := mouse_over_inspector ||
                              mouse_over_background_picker ||
                              mouse_over_animation_timeline ||
+                             mouse_over_lens_resize_handle ||
                              mouse_over_lens_controls
             ui_captures_camera_input := shortcuts_help_open ||
                                         background_picker_open ||
                                         animation_playback.dropdown_open ||
                                         model_browser.search_editing ||
                                         cel_style_ui.color_target != .NONE
+            left_mouse_pressed := rl.IsMouseButtonPressed(.LEFT)
             left_mouse_down := rl.IsMouseButtonDown(.LEFT)
             middle_mouse_down := rl.IsMouseButtonDown(.MIDDLE)
+            lens_resize_for_frame, next_lens_resize_dragging :=
+                lens_resize_drag_for_frame(
+                    lens_resize_dragging,
+                    window_focused,
+                    ui_captures_camera_input || camera_mouse_drag != .NONE,
+                    mouse_over_lens_resize_handle,
+                    left_mouse_pressed,
+                    left_mouse_down,
+                )
+            lens_resize_dragging = next_lens_resize_dragging
+            if lens_resize_for_frame && left_mouse_down {
+                lens_size = lens_resize_size_for_pointer(
+                    ui_mouse_position.x,
+                    ui_mouse_position.y,
+                    f32(screen_width) * 0.5,
+                    f32(screen_height) * 0.5,
+                    MIN_LENS_SIZE,
+                    lens_max_size,
+                    f32(applied_downscale_level),
+                )
+                lens_bounds = centered_lens_bounds(
+                    screen_width,
+                    screen_height,
+                    lens_size,
+                )
+                mouse_over_ui = true
+            }
+            if !capture_options.enabled {
+                if lens_resize_for_frame ||
+                   (mouse_over_lens_resize_handle && !ui_captures_camera_input) {
+                    rl.SetMouseCursor(.RESIZE_NWSE)
+                } else {
+                    rl.SetMouseCursor(.DEFAULT)
+                }
+            }
+            ui_captures_camera_input = ui_captures_camera_input ||
+                                       lens_resize_for_frame
             camera_drag_for_frame, next_camera_mouse_drag :=
                 camera_mouse_drag_for_frame(
                     camera_mouse_drag,
                     window_focused,
                     ui_captures_camera_input,
                     mouse_over_ui,
-                    rl.IsMouseButtonPressed(.LEFT),
+                    left_mouse_pressed,
                     rl.IsMouseButtonPressed(.MIDDLE),
                     left_mouse_down,
                     middle_mouse_down,
@@ -2078,6 +2232,7 @@ run_viewer_mode :: proc(arguments: []string) -> int {
 
             rl.BeginTextureMode(composite_render_target)
                 composite_locks_gui := camera_drag_for_frame != .NONE ||
+                                       lens_resize_for_frame ||
                                        shortcuts_help_open
                 if composite_locks_gui {
                     rl.GuiLock()
@@ -2091,13 +2246,6 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                     0,
                     rl.WHITE,
                 )
-
-                lens_bounds := rl.Rectangle{
-                    x      = (f32(screen_width) - LENS_WIDTH) / 2,
-                    y      = (f32(screen_height) - LENS_HEIGHT) / 2,
-                    width  = LENS_WIDTH,
-                    height = LENS_HEIGHT,
-                }
 
                 lens_texture_source_bounds := rl.Rectangle{
                     x      = lens_bounds.x / f32(applied_downscale_level),
@@ -2363,12 +2511,8 @@ run_viewer_mode :: proc(arguments: []string) -> int {
 
                 // Keep the three available modes visible and directly attached
                 // to the preview instead of hiding them in shortcut help.
-                lens_mode_bar_bounds := rl.Rectangle{
-                    lens_bounds.x,
-                    lens_bounds.y - LENS_CONTROL_BAR_HEIGHT - LENS_CONTROL_BAR_GAP,
-                    lens_bounds.width,
-                    LENS_CONTROL_BAR_HEIGHT,
-                }
+                lens_mode_bar_bounds, lens_footer_bounds :=
+                    lens_control_bar_bounds(lens_bounds, lens_lower_ui_top)
                 rl.GuiSetAlpha(LENS_UI_OPACITY)
                 rl.GuiPanel(lens_mode_bar_bounds, nil)
                 lens_mode_content_x := lens_mode_bar_bounds.x + 4
@@ -2443,12 +2587,6 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                     log.info("Lens mode: 16-sample coverage mask")
                 }
 
-                lens_footer_bounds := rl.Rectangle{
-                    lens_bounds.x,
-                    lens_bounds.y + lens_bounds.height + LENS_CONTROL_BAR_GAP,
-                    lens_bounds.width,
-                    LENS_CONTROL_BAR_HEIGHT,
-                }
                 rl.GuiPanel(lens_footer_bounds, nil)
                 lens_footer_content_x := lens_footer_bounds.x + 4
                 lens_footer_content_y := lens_footer_bounds.y + 4
@@ -2474,10 +2612,10 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                     }
                 }
                 lens_export_width := c.int(math.round(
-                    LENS_WIDTH / f32(applied_downscale_level),
+                    lens_bounds.width / f32(applied_downscale_level),
                 ))
                 lens_export_height := c.int(math.round(
-                    LENS_HEIGHT / f32(applied_downscale_level),
+                    lens_bounds.height / f32(applied_downscale_level),
                 ))
                 rl.GuiLabel(
                     {
@@ -2516,10 +2654,15 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                         )
                         export_status = rl.TextFormat("Saved: %s", last_export_path_cstr)
                     }
+                    export_status_y := lens_footer_bounds.y +
+                                       lens_footer_bounds.height + 2
+                    if export_status_y + 18 > lens_lower_ui_top {
+                        export_status_y = lens_footer_bounds.y - 20
+                    }
                     rl.GuiLabel(
                         {
                             lens_bounds.x,
-                            lens_footer_bounds.y + lens_footer_bounds.height + 2,
+                            export_status_y,
                             lens_bounds.width,
                             18,
                         },
@@ -2527,6 +2670,29 @@ run_viewer_mode :: proc(arguments: []string) -> int {
                     )
                 }
                 rl.GuiSetAlpha(1.0)
+                if !capture_options.enabled {
+                    lens_resize_visual_bounds := rl.Rectangle{
+                        lens_bounds.x + lens_bounds.width -
+                            LENS_RESIZE_HANDLE_SIZE * 0.5,
+                        lens_bounds.y + lens_bounds.height -
+                            LENS_RESIZE_HANDLE_SIZE * 0.5,
+                        LENS_RESIZE_HANDLE_SIZE,
+                        LENS_RESIZE_HANDLE_SIZE,
+                    }
+                    lens_resize_handle_color := rl.WHITE
+                    if lens_resize_for_frame || mouse_over_lens_resize_handle {
+                        lens_resize_handle_color = rl.Color{255, 220, 70, 255}
+                    }
+                    rl.DrawRectangleRec(
+                        lens_resize_visual_bounds,
+                        lens_resize_handle_color,
+                    )
+                    rl.DrawRectangleLinesEx(
+                        lens_resize_visual_bounds,
+                        1,
+                        rl.BLACK,
+                    )
+                }
                 // Render animation controls inline in their only composite UI location.
                 for {
                     bounds := animation_timeline_bounds
